@@ -1,8 +1,48 @@
 # 3FS Day 1 Reading Guide Answers
 
-> 做完 [docs/day1-reading-guide.md](/data00/home/lujianhui.1/3FS/docs/day1-reading-guide.md:1) 里的练习题后再看这份参考答案。
+> 做完 [docs/day1-reading-guide.md](/data00/home/lujianhui.1/3FS/docs/day1-reading-guide.md:1) 里的阅读任务后再看这份参考产出。
 
-## 参考答案
+## 阶段产出
+
+### 第一阶段：一句话总结
+
+3FS 是面向 AI 训练和推理负载的高性能分布式文件系统，用 SSD 集群和 RDMA 网络提供强一致、高吞吐的共享存储。
+
+### 第二阶段：四个组件职责和系统关系图
+
+- `mgmtd`：控制面，维护 membership、配置、target 状态、chain table 和 routing info。
+- `meta`：元数据服务，负责 inode、目录项、文件布局、session 等文件系统语义，核心状态存放在 FoundationDB。
+- `storage`：数据面服务，保存 chunk 数据，通过 chain replication / CRAQ 提供一致性和恢复能力。
+- `fuse/client`：访问入口。FUSE client 暴露标准文件系统接口，native client 提供异步 zero-copy IO 路径。
+
+```mermaid
+flowchart LR
+  App["Application"] --> Fuse["FUSE client\nor native client"]
+  Fuse --> Meta["meta\nmetadata operations"]
+  Fuse --> Storage["storage\nchunk read/write"]
+  Meta --> FDB["FoundationDB\nmetadata KV"]
+  Meta --> Mgmtd["mgmtd\nrouting/config"]
+  Storage --> Mgmtd
+  Fuse --> Mgmtd
+  Mgmtd --> FDB
+```
+
+文件读请求通常不是每次都访问 `mgmtd`。客户端先通过 `meta` 拿到文件布局，再结合本地缓存的 routing info 计算 chunk 对应的 chain 和 storage target，然后直接访问 `storage`。
+
+### 第三阶段：最小集群启动顺序
+
+1. 检查二进制、FDB 工具、测试目录和网络地址。
+2. 生成 `mgmtd`、`meta`、`storage`、`fuse`、`admin_cli` 配置。
+3. 启动 FoundationDB，并执行 `configure new memory single`。
+4. 用 `admin_cli` 创建 root 用户和 token。
+5. 执行 `init-cluster`，把各服务配置初始化进集群。
+6. 启动 `mgmtd_main`。
+7. 启动 `storage_main` 和 `meta_main`。
+8. 创建 target，上传 chains 和 chain table。
+9. 创建测试目录和权限。
+10. 启动 `hf3fs_fuse_main`，等待 mountpoint 可用。
+
+## 练习题参考答案
 
 1. 3FS 的四个核心组件分别是什么，各自职责是什么？
    - `mgmtd`：负责整个集群的控制面，维护节点 membership、target 状态、chain table、routing info，以及配置分发。
@@ -46,3 +86,31 @@
 10. 如果 `meta` 全挂了，和如果 `storage` 全挂了，系统表现会有什么本质区别？
    - 如果 `meta` 全挂了，文件系统语义入口会大面积失效，例如 `lookup/open/create/rename/readdir/chmod` 这些操作都会受影响。不能简单说“还能正常读已有文件”，因为很多读之前也需要先经过 metadata 路径。
    - 如果 `storage` 全挂了，数据面会瘫痪，文件内容无法正常读写；但元数据层本身可能还活着，一些纯命名空间或权限相关操作理论上仍可能工作。两者的本质区别是：一个是语义层不可用，一个是数据面不可用。
+
+## Day 1 笔记模板补全
+
+```md
+# Day 1
+
+## 模块职责
+- mgmtd: 控制面，维护 membership、config、target 状态、chain table、routing info。
+- meta: 元数据服务，处理 inode、目录项、文件布局和 session，状态落在 FDB。
+- storage: 数据服务，保存 chunk，通过 chain replication/CRAQ 提供一致性和恢复。
+- fuse/client: 应用入口，FUSE 提供文件系统接口，native client 提供高性能 IO API。
+
+## 关键对象/概念
+- routing info: 客户端和服务使用的全局路由视图，包含节点、chain、target 状态等。
+- chain table: 文件布局选择 chain 的表，是数据放置的一部分。
+- inode: 文件系统对象的元数据载体，记录文件/目录属性和布局信息。
+- chunk: 文件数据切分后的存储单元，由 storage target 保存。
+- native client: 绕过 FUSE 路径的高性能客户端接口，支持异步 zero-copy IO。
+
+## 主调用链
+- 启动链路: FDB -> init-cluster -> mgmtd -> storage/meta -> targets/chains/chain table -> fuse。
+- 文件读请求链路: app -> fuse/client -> meta 获取布局 -> client 用 routing info 定位 storage -> storage 返回 chunk。
+
+## 还不清楚的问题
+- Q1: CRAQ 的 pending/committed version 如何在代码中落地？
+- Q2: client routing info 的刷新周期和失败重试在哪里实现？
+- Q3: 文件布局如何从 meta 写入并在读路径被 client 使用？
+```

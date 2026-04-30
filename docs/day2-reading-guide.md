@@ -92,18 +92,19 @@
 ## 今日练习题
 
 1. `TwoPhaseApplication` 解决了什么问题，为什么服务都复用它？
+    TwoPhaseApplication 解决的是“所有服务进程启动流程重复”的问题：解析三类配置参数、初始化 launcher、加载 AppInfo、加载并渲染服务配置、初始化公共组件、创建 server、setup、start、stop。服务复用它，是因为每个服务只需要提供Server::Config/CommonConfig/Launcher/... 这些类型和自身的 beforeStart 逻辑，公共启动骨架不用重复写
 2. `ServerLauncher` 负责的是服务生命周期的哪一段？
+    ServerLauncher 负责的是 server 真正启动前后的 bootstrap 阶段，不负责业务 RPC 的具体实现。它加载 app_cfg 和 launcher_cfg，启动 IBManager，创建 RemoteConfigFetcher，再通过 fetcher 获取配置模板、补全 AppInfo，最后调用 server.start(appInfo) 或 fetcher 自定义的 startServer。
 3. `app_cfg`、`launcher_cfg`、`cfg` 这几类配置，角色分别是什么？
+    app_cfg 是单进程自身身份配置，典型字段是 node_id，用于构造基础 AppInfo。launcher_cfg 是启动器配置，包含cluster_id、IB 设备、client、mgmtd client 等，用来连接管理面并拉取远端配置。cfg 是服务运行配置，也就是 TwoPhaseApplication::Config { common, server }，其中 common 管日志/监控/内存，server 管服务自己的 net::Server::Config 和业务配置；它可以来自本地文件、默认配置或 launcher 从 mgmtd 拉到的模板。
 4. `net::Server::Config` 中的 `groups` 是干什么的？
+    net::Server::Config::groups 是 service group 列表，每个 group 对应一套 ServiceGroup 配置：服务名集合、网络类型、listener、IOWorker、Processor，以及是否使用独立线程池。Server 构造时会按 groups_length() 创建多个 ServiceGroup，setup/start/stop 也都是逐 group 执行，所以它是 RPC 服务挂载、监听地址和线程资源隔离的基本单元。
 5. 为什么很多服务都把业务 RPC 和 `Core` service 分在两个 group 里？
+    业务 RPC 和 Core service 分 group，是为了把数据面和控制面隔开。业务服务通常走 RDMA 和主线程池，Core 默认走 TCP、独立线程池，用于 echo/getConfig/renderConfig/hotUpdateConfig/shutdown 等管理操作，避免业务流量拥塞时管理入口也被拖住。
 6. `serde::ServiceWrapper` 在这个项目中的作用是什么？
+    serde::ServiceWrapper 是服务实现类和 generated service 描述之间的桥。它把 Service<void>::kServiceName/kServiceID暴露给运行时，让 Server::addSerdeService 能按服务名找到 group，让 Services::addService 能按 service id 建dispatch 表。它还通过反射接口把 SERDE_SERVICE_METHOD 生成的 method 元信息交给 MethodExtractor，最终把 method id映射到具体 C++ 成员函数。
 7. 如果你新加一个服务，最小需要补哪些类型定义和入口？
-8. 为什么这一天不建议先深入 `common/utils/`？
-
-答题要求：
-
-- 每题至少写 2 句
-- 第 1、3、4、6 题要重点认真写
+    新加一个服务，最小需要补：请求/响应结构和 SERDE_SERVICE/SERDE_SERVICE_METHOD 定义，服务实现类继承serde::ServiceWrapper<Impl, ServiceBase>，并实现对应 RPC 方法。还需要一个派生自 net::Server 的 server 类型，定义kName/kNodeType/CommonConfig/AppConfig/LauncherConfig/RemoteConfigFetcher/Launcher/Config，在 beforeStart 里addSerdeService，再补一个 main 用 TwoPhaseApplication<YourServer>().run(argc, argv) 和对应 CMake 目标。
 
 ## 进入 Day 3 前的门槛
 
