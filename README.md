@@ -1,9 +1,20 @@
-#  Fire-Flyer File System
+# 3FS Cache
 
-[![Build](https://github.com/deepseek-ai/3fs/actions/workflows/build.yml/badge.svg)](https://github.com/deepseek-ai/3fs/actions/workflows/build.yml)
+[![Build](https://github.com/TrafalgarRicardoLu/3fs-cache/actions/workflows/build.yml/badge.svg)](https://github.com/TrafalgarRicardoLu/3fs-cache/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/LICENSE-MIT-blue.svg)](LICENSE)
 
-The Fire-Flyer File System (3FS) is a high-performance distributed file system designed to address the challenges of AI training and inference workloads. It leverages modern SSDs and RDMA networks to provide a shared storage layer that simplifies development of distributed applications. Key features and benefits of 3FS include:
+3FS Cache is an early-stage, independently maintained derivative of
+[DeepSeek 3FS](https://github.com/deepseek-ai/3FS). It is being adapted from a persistent distributed file system into a
+cache-semantic distributed storage system: cached data may be evicted and reconstructed from an underlying persistent
+storage system.
+
+The cache semantics described above are the project direction and are not yet fully implemented. Until the transition is
+complete, behavior may remain compatible with persistent 3FS semantics. This project is not affiliated with or endorsed by
+DeepSeek.
+
+The original Fire-Flyer File System (3FS) is a high-performance distributed file system designed to address the challenges
+of AI training and inference workloads. It leverages modern SSDs and RDMA networks to provide a shared storage layer that
+simplifies development of distributed applications. Key features and benefits inherited from 3FS include:
 
 - Performance and Usability
   - **Disaggregated Architecture** Combines the throughput of thousands of SSDs and the network bandwidth of hundreds of storage nodes, enabling applications to access storage resource in a locality-oblivious manner.
@@ -52,15 +63,15 @@ The top figure demonstrates the read throughput of all KVCache clients (1×400Gb
 
 ## Check out source code
 
-Clone 3FS repository from GitHub:
+Clone 3FS Cache from GitHub:
 
-	git clone https://github.com/deepseek-ai/3fs
+	git clone https://github.com/TrafalgarRicardoLu/3fs-cache
 
-When `deepseek-ai/3fs` has been cloned to a local file system, run the
+When `TrafalgarRicardoLu/3fs-cache` has been cloned to a local file system, run the
 following commands to check out the submodules:
 
 ```bash
-cd 3fs
+cd 3fs-cache
 git submodule update --init --recursive
 ./patches/apply.sh
 ```
@@ -126,4 +137,4 @@ Follow instructions in [setup guide](deploy/README.md) to run a test cluster.
 
 ## Report Issues
 
-Please visit https://github.com/deepseek-ai/3fs/issues to report issues.
+Please visit https://github.com/TrafalgarRicardoLu/3fs-cache/issues to report issues.
