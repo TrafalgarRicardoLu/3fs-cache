@@ -69,7 +69,7 @@ Origin Namespace 将显式指定的对象映射成具有普通文件路径语义
 ```cpp
 ImportOriginFile(path, origin, layout)
 BatchImportOriginFiles(files)
-RefreshOriginFile(path, expectedInode, newOrigin)
+RefreshOriginFile(requestId, path, expectedInode, newOrigin)
 ```
 
 导入前通过 ObjectStore HEAD 获取对象 size、ETag 和可选 VersionId。导入操作只创建 namespace，不主动下载对象。path 已存在普通文件时默认拒绝覆盖；已存在同版本 Origin 文件时幂等返回；不同版本必须通过 refresh 创建新 inode 并原子替换 dentry。
@@ -78,9 +78,13 @@ RefreshOriginFile(path, expectedInode, newOrigin)
 
 BatchImport 每次最多 1000 项，返回逐项结果，不保证跨项原子性。单项以规范 path 和对象版本保持幂等；同一请求出现重复 path 时，这些重复项返回 InvalidArgument。调用方可以只重试失败项。
 
-refresh 在替换 dentry 的同一 Metadata 事务中将旧 inode 标记为 `superseded/cacheAdmissionDisabled`。旧打开句柄继续引用旧 inode，且已有 READY block 仍可读取，但旧 inode 的 Enqueue、Acquire 和 Commit 必须拒绝；正在执行的旧 Loader 不能发布 READY。若 S3 支持旧 VersionId，旧句柄可以继续回源；若仅有 ETag 且对象已被覆盖，旧句柄读取返回版本冲突，不允许静默读取新版本。
+refresh 使用调用方生成的幂等 requestId。在替换 dentry 的同一 Metadata 事务中，它将旧 inode 标记为 `superseded/cacheAdmissionDisabled`，创建 `cleanupJobId`，并持久化 requestId → old/new inode、对象身份和 cleanupJobId 的成功结果。相同 requestId 重试始终返回原成功结果，即使 dentry 已指向新 inode；不同 requestId 携带过期 expectedInode 时才返回 Conflict。
 
-第一阶段禁止普通 unlink 和任何涉及 OriginFile 的 rename/rename-overwrite，统一要求 cache-admin 使用专用 refresh 或 cleanup 命令。Refresh 事务同时创建持久化 inode-cleanup record；Admin 命令随后调用 Cache Manager 附着该 cleanup。旧 inode 的 cache block 清理完成且最后一个 open session 关闭后，Metadata GC 才能删除 inode。GC 必须识别 OriginFile，只检查 cleanup 已完成，不能调用普通 FileOperation 在 Cache Metadata 背后直接删除 chunk。重复执行 refresh/cleanup 会返回并恢复同一个 cleanup 工作。
+旧打开句柄继续引用旧 inode，且已有 READY block 仍可读取，但旧 inode 的 Enqueue、Acquire 和 Commit 必须拒绝；正在执行的旧 Loader 不能发布 READY。若 S3 支持旧 VersionId，旧句柄可以继续回源；若仅有 ETag 且对象已被覆盖，旧句柄读取返回版本冲突，不允许静默读取新版本。
+
+第一阶段禁止普通 unlink 和任何涉及 OriginFile 的 rename/rename-overwrite，统一要求 cache-admin 使用专用 refresh 或 cleanup 命令。Refresh 创建的持久化 inode-cleanup job 保存分页 cursor、总 block 范围、每批结果和 `PENDING/RUNNING/COMPLETE` 状态，每批最多处理 1000 blocks；Admin 命令随后调用 Cache Manager 附着该 job。进程在 refresh commit 后、附着前退出时，以相同 requestId 重试即可得到原 cleanupJobId 并恢复。
+
+旧 inode 的 cache block 清理 job 达到 COMPLETE 且最后一个 open session 关闭后，Metadata GC 才能删除 inode。COMPLETE 的精确定义是 cursor 已越过最后 block、该 inode 无非 terminal cache record 且容量 charge 均已释放。GC 必须识别 OriginFile，只检查 cleanup 已完成，不能调用普通 FileOperation 在 Cache Metadata 背后直接删除 chunk。
 
 启用导入前，mgmtd feature gate 必须确认所有活跃 Metadata writer 都通过节点租约上报所需 cache schema version；Import/Refresh 在 gate 未开启时返回 FeatureDisabled。Client/FUSE/Admin 请求携带 cache protocol version，Metadata 对不兼容版本返回 UpgradeRequired；即使遗漏协商，未知 `OriginFile` variant 的反序列化也必须失败。激活后禁止回滚到不识别该 variant 的版本。兼容性测试必须覆盖旧客户端读取新 inode 失败，以及旧 Metadata writer 不能反序列化后重写并丢失 Origin 字段。
 
@@ -114,14 +118,14 @@ CLEANING → NONE/FAILED/QUEUED
 - NONE 不创建 FDB record。
 - 同一 block 同时只有一个有效 Loader。
 - 每次 Acquire 递增 `loadEpoch`。
-- Acquire 还生成全局唯一、不可复用的 `storageGeneration` UUID，并将其写入 LOADING record。
+- Acquire 还通过 FDB versionstamp 分配全局单调、不可复用的 `cacheGeneration`，并将其写入 LOADING record。generation 在同一 CacheBlockKey 的历次删除和重建间保持可排序。
 - Commit 和 Fail 都必须匹配 inode、loaderId、loadEpoch、LOADING 状态和 inode 未 superseded 条件；旧 epoch 的 Fail 返回 Conflict/no-op，不能释放当前 reservation。匹配的 Fail 总是先转 CLEANING，并设置 terminalState=FAILED，不直接释放 reservation。
 - READY 只在 Storage 写入成功并获得 checksum 后产生。
-- READY identity 由 `loadEpoch + storageGeneration + checksum + blockLength` 组成，并随 Read Plan 返回。
+- READY identity 由 `loadEpoch + cacheGeneration + checksum + blockLength` 组成，并随 Read Plan 返回。
 - ReportCacheBlockInvalid 必须携带观察到的 READY identity，使用 CAS 将匹配的 READY 转成 CLEANING；若已有新 READY，则 no-op。
 - Cache Block Key 使用 inode 与 blockIndex，对象更新由新 inode 隔离。
 
-容量由 Metadata 中的原子计数器权威管理：`used = READY/CLEANING bytes + reserved bytes`。NONE/FAILED 转 QUEUED 时，在同一 FDB 事务中按实际 blockLength 预留容量；若将超过 ceiling，拒绝该 block。预留贯穿 QUEUED 和 LOADING，并在 Commit 时从 reserved 原子转为 READY。任何匹配 Fail 和 READY 异常都先转 CLEANING并保留计费，即使尚未写入 Storage；条件删除返回成功或 NotFound 后，才进入指定 terminal state 并释放。可重试的 FAILED 再次 Enqueue 时重新申请容量。批量准入允许逐 block 结果，但任一事务内不得超配。
+容量由 Metadata 中的原子计数器权威管理。每个非 terminal block 恰好保存一份 `chargedBytes` 和 `chargeKind = RESERVED | COMMITTED`，全局 `used = sum(chargedBytes)`，不再分别相加状态计数。NONE/FAILED 转 QUEUED 时，在同一 FDB 事务中按实际 blockLength 建立 RESERVED charge；QUEUED、LOADING 以及由它们进入的 CLEANING 保持 RESERVED。Commit 只把 chargeKind 原子改成 COMMITTED；READY 以及由 READY 进入的 CLEANING 保持 COMMITTED。FinishClean 只释放一次该 charge，然后进入 NONE/FAILED，或为 REENQUEUE 重新执行容量申请。批量准入允许逐 block 结果，但任一事务内不得超配。
 
 Metadata 最小 RPC 包括 GetFileReadPlan、EnqueueCacheBlocks、AcquireCacheBlocks、CommitCacheBlocks、FailCacheBlocks、BeginCleanCacheBlocks 和 FinishCleanCacheBlocks。Client 不直接拆分 Metadata cleanup workflow。
 
@@ -167,15 +171,24 @@ Cache Manager 重启后不主动扫描恢复全部进程内队列；新的 miss 
 
 Loader 使用现有 `batchWrite`，Client 使用现有 `batchRead`，继续复用现有 ChunkId、ChainId、路由和错误处理。缓存数据使用独立 `CACHE_DATA` Chain Table，并在 M0 增加 role、logicalCapacity 和查询/校验；OriginFile 只能引用 CACHE_DATA table，普通 File 不能引用它。
 
-每次 cache block 写必须从 offset 0 写入恰好 actualBlockLength，并保证替换/截断同 ChunkId 的旧内容，尤其是较短的最后一个 block。实现前先验证现有 Storage op 是否具备该语义；若不具备，增加最小 full-chunk replace adapter。该 adapter 将 `storageGeneration` 持久化到 cache-chain chunk metadata，并在 write result/read result 中返回。checksum 使用现有 `ChecksumInfo` 表示，算法由 CACHE_DATA table 配置并在 table version 内保持不变，覆盖完整 actualBlockLength。Loader 必须验证写后 length、storageGeneration 和 checksum，之后才能 Commit。模糊超时后的重试必须以相同 storageGeneration 做幂等 full replacement，不能留下旧 tail。
+每次 cache block 写必须从 offset 0 写入恰好 actualBlockLength，并保证替换/截断同 ChunkId 的旧内容，尤其是较短的最后一个 block。Storage 增加 cache-chain 专用的 `replaceCacheChunkIfNewer(chunkId, cacheGeneration, operationId, data)`，并将 active generation 或 retired tombstone 持久化到 chunk metadata：
+
+- active generation 相同且 operationId/data identity 相同时幂等成功；同 generation 不同内容返回 Conflict；
+- 新 generation 大于 active/tombstone 时允许 full replacement；
+- 新 generation 小于 active/tombstone，或等于 retired tombstone 时返回 StaleGeneration，永不写数据；
+- 删除数据后仍保留最高 tombstone，第一阶段不回收该 tombstone，以阻止任意延迟旧写复活。
+
+write/read result 都返回 cacheGeneration。checksum 使用现有 `ChecksumInfo` 表示，算法由 CACHE_DATA table 配置并在 table version 内保持不变，覆盖完整 actualBlockLength。Loader 必须验证写后 length、cacheGeneration 和 checksum，之后才能 Commit。CacheHitReader 同时比较 cacheGeneration、length 和 checksum，任一不匹配都回源并报告 observed generation。模糊超时后的重试使用相同 generation 和 operationId，不能留下旧 tail。
 
 第一阶段不修改 ChunkEngine 物理 key，不实现 Storage Event、emergency eviction 和 inventory scan。
 
-显式清理、匹配 Fail 和异常 READY 修复使用 fenced sequence：QUEUED/LOADING/READY/FAILED 在 Metadata 中转为 CLEANING，递增 loadEpoch、生成 cleanupEpoch，记录 `terminalState = NONE | FAILED | REENQUEUE` 并取消当前 scheduler ownership，使 Client 回源；原 reservation/READY bytes 在清理完成前保持计费。旧 Loader 的 Commit/Fail 因 epoch 不匹配而 no-op。
+显式清理、匹配 Fail 和异常 READY 修复使用 fenced sequence：QUEUED/LOADING/READY/FAILED 在 Metadata 中转为 CLEANING，递增 loadEpoch、生成 cleanupEpoch，记录 `terminalState = NONE | FAILED | REENQUEUE` 并取消当前 scheduler ownership，使 Client 回源；原 chargeKind 与 chargedBytes 原样继承，清理完成前只计费一次。旧 Loader 的 Commit/Fail 因 epoch 不匹配而 no-op。
 
-Storage 增加 cache-chain 专用的 `removeChunkIfGeneration(chunkId, expectedStorageGeneration, operationId)`：仅当 chunk metadata 中的 generation 匹配时原子删除；generation 不匹配返回 Conflict/no-op，NotFound 视为成功；operationId 支持幂等重试。Metadata cleanupEpoch 只保护 record，Storage generation fence 才保护物理删除，禁止使用无条件 removeChunks 完成 cache cleanup。成功后按 cleanupEpoch 进入 terminalState 并释放 READY/reserved bytes；FAILED 保留无容量 record，NONE 删除 record，REENQUEUE 重新走容量申请。部分失败保持 CLEANING。
+Storage 同时提供 `retireCacheChunkGeneration(chunkId, expectedGeneration, operationId)`：active generation 匹配时删除数据并写入同 generation tombstone；数据尚不存在时也必须原子安装至少 expectedGeneration 的 tombstone后才算成功，从而阻止已发出但延迟到达的写；发现更高 generation 时返回 GenerationAdvanced。operationId 支持幂等重试。禁止使用无条件 removeChunks 完成 cache cleanup。
 
-Cache Manager 的 ReportCacheBlockInvalid handler 必须等待 Metadata CAS 结果，CAS 成功后在同一请求 workflow 中附着 cleanup task；下一次 EnsureCached 是崩溃窗口的 fallback，会重新附着 CLEANING。重复 AdminCleanup 会确定性恢复已有 CLEANING；Admin 命令在 Manager 重启后必须重试至逐 block terminal result。Hint 先于 invalidation 时，后续 CAS/cleanup 仍按 READY identity 和 storageGeneration fencing，不会误删新数据。不得扩展完整删除事件日志或后台全量扫描。
+Metadata cleanupEpoch 保护 record，Storage tombstone 保护物理数据。CLEANING record 保存 `deleteGeneration`：QUEUED 没有 generation，可直接 FinishClean；LOADING/READY 使用其 cacheGeneration。若命中读取观察到与 READY 不同的物理 generation，Report 同时携带 observed generation；BeginClean CAS 成功后以较高的 observed generation 清理。GenerationAdvanced 时重新查询当前 generation，在确认 Metadata 仍是同 cleanupEpoch 后更新 deleteGeneration 并重试。只有 Storage 确认 tombstone 不低于 deleteGeneration 且不存在 active data 后，才能按 cleanupEpoch FinishClean。FAILED 保留无 charge record，NONE 删除 record，REENQUEUE 重新走容量申请；部分失败保持 CLEANING。
+
+Cache Manager 的 ReportCacheBlockInvalid handler 必须等待 Metadata CAS 结果，CAS 成功后在同一请求 workflow 中附着 cleanup task；下一次 EnsureCached 是崩溃窗口的 fallback，会重新附着 CLEANING。重复 AdminCleanup 会确定性恢复已有 CLEANING；Admin 命令在 Manager 重启后必须重试至逐 block terminal result。Hint 先于 invalidation 时，后续 CAS/cleanup 仍按 READY identity、cacheGeneration 和 Storage tombstone fencing，不会误删新数据。不得扩展完整删除事件日志或后台全量扫描。
 
 ### 4.8 FUSE 与 Native API
 
@@ -197,12 +210,12 @@ GetFileReadPlan 必须携带 UserInfo 和有效的 read/open session，并复用
 
 ### 4.10 第一阶段 wire contract 最小字段
 
-- ImportOriginFile：ReqBase/UserInfo、PathAt、OriginId、bucket、key、规范 version identity、objectSize、CACHE_DATA tableId、blockSize、stripeSize 和 permission；响应返回 inode 与 `CREATED/ALREADY_EXISTS`。
+- ImportOriginFile：ReqBase/UserInfo、PathAt、OriginId、bucket、key、规范 versionSelector、objectSize、CACHE_DATA tableId、blockSize、stripeSize 和 permission；响应返回 inode 与 `CREATED/ALREADY_EXISTS`。
 - BatchImportOriginFiles：最多 1000 个上述 entry；响应与输入等长，每项独立 Result，不做跨项回滚。
-- RefreshOriginFile：cache-admin、PathAt、expectedInode、旧完整对象身份和新 Origin metadata；响应返回新 inode，expectedInode 或旧身份不匹配返回 Conflict。
+- RefreshOriginFile：cache-admin、requestId、PathAt、expectedInode、旧完整对象身份和新 Origin metadata；首次成功响应返回 newInode 与 cleanupJobId，并原子保存幂等结果；同 requestId 重试返回原结果，不同 requestId 的 expectedInode 或旧身份不匹配才返回 Conflict。
 - GetFileReadPlan：UserInfo、openSessionId、inode、offset、length、cacheProtocolVersion；响应绑定 inode 与完整不可变对象身份，并返回最多 1000 个 ReadBlockPlan。
-- Enqueue/Acquire/Commit/Fail：service identity、bounded block list；Acquire 返回 loaderId/loadEpoch/storageGeneration，Commit 和 Fail 都携带 loaderId/loadEpoch，Commit 还携带 storageGeneration/blockLength/checksum，逐项返回状态；stale Fail 为 Conflict/no-op。
-- ReportCacheBlockInvalid：Cache Manager API，携带 UserInfo/openSession、inode/block、观察到的 READY identity、NotFound/ChecksumMismatch reason；Manager 只对匹配 READY 调 Metadata BeginClean CAS，并负责附着 cleanup task。
+- Enqueue/Acquire/Commit/Fail：service identity、bounded block list；Acquire 返回 loaderId/loadEpoch/cacheGeneration，Commit 和 Fail 都携带 loaderId/loadEpoch，Commit 还携带 cacheGeneration/blockLength/checksum，逐项返回状态；stale Fail 为 Conflict/no-op。
+- ReportCacheBlockInvalid：Cache Manager API，携带 UserInfo/openSession、inode/block、观察到的 READY identity、observed physical cacheGeneration 和 NotFound/GenerationMismatch/ChecksumMismatch reason；Manager 只对匹配 READY 调 Metadata BeginClean CAS，并负责附着 cleanup task。
 - EnsureCached：service-authenticated client identity、inode、beginBlock、blockCount、reason 和 priority；它是短超时提示，响应只表示接收/旁路状态，不表示加载完成。
 - AdminCleanupCacheBlocks：Cache Manager API，携带 cache-admin、inode/range、可选 expected READY identity；响应逐 block 返回 CLEANED/RETRYING/NOT_FOUND/CONFLICT，并在重复调用时恢复 CLEANING workflow。
 
@@ -235,7 +248,7 @@ EnsureCached → Hint 合并 → CapacityGate → Enqueue → Scheduler
              → Storage batchWrite → Commit READY
 ```
 
-部分 Storage write 失败时，成功 block 可以分别 Commit READY；失败 block 调用 fenced Fail 转 CLEANING，按 storageGeneration 条件删除（未写入时返回 NotFound）后进入 FAILED 并释放。对象版本冲突或 inode 已 superseded 时禁止继续写入和 Commit，相关 block 同样走 CLEANING。
+部分 Storage write 失败时，成功 block 可以分别 Commit READY；失败 block 调用 fenced Fail 转 CLEANING，通过 retire generation 安装 tombstone 后进入 FAILED 并释放。对象版本冲突或 inode 已 superseded 时禁止继续写入和 Commit，相关 block 同样走 CLEANING。
 
 Metadata Commit 超时后，Loader查询 record 判断是否已经 READY；状态仍不明确时记录指标，可能产生的 orphan 留给后续 Reconcile 处理。
 
@@ -261,7 +274,7 @@ Client miss → S3 正常返回
 EnsureCached → CapacityGate → BYPASSED
 ```
 
-容量满不会使用户读取失败。ceiling 按 Metadata 原子维护的 READY/CLEANING bytes + reserved bytes 判定，并发请求不能超配。Admin 可查看 READY、CLEANING、reserved 和 bypass 原因，并通过 CLEANING fenced flow 显式清理指定 inode 的缓存；不实现自动 victim 选择。
+容量满不会使用户读取失败。ceiling 按 Metadata 原子维护的 `sum(chargedBytes)` 判定，并发请求不能超配。Admin 可按 RESERVED/COMMITTED 查看 charged bytes 和 bypass 原因，并通过 CLEANING fenced flow 显式清理指定 inode 的缓存；不实现自动 victim 选择。
 
 ## 6. 错误与降级
 
@@ -278,7 +291,8 @@ EnsureCached → CapacityGate → BYPASSED
 | 延迟 invalid 报告命中新 READY | 不受影响 | READY identity 不匹配，no-op |
 | Manager 在 QUEUED 后重启 | 回源成功则成功 | 新 hint 重新附着 Scheduler |
 | 旧 Loader 延迟 Fail | 不受影响 | epoch 不匹配，no-op 且不释放新 reservation |
-| 旧 cleanup 延迟删除 | 不受影响 | storageGeneration 不匹配，Storage no-op |
+| 旧 Loader 延迟写入 | 不受影响 | generation 低于 active/tombstone，Storage 拒绝 |
+| 旧 cleanup 延迟删除 | 不受影响 | cacheGeneration 不匹配，Storage no-op |
 | Manager 在 CLEANING 中重启 | 回源成功则成功 | Ensure/Admin retry 重新附着 cleanup |
 
 第一阶段保留两项最小恢复能力：LOADING lease 超时回收，以及 READY 异常后的 ReportCacheBlockInvalid。它们用于避免状态永久卡死，不扩展为完整 Reconcile。
@@ -309,7 +323,7 @@ EnsureCached → CapacityGate → BYPASSED
 ### M2：Metadata 状态与 Read Plan
 
 - 实现 Cache Block Store 和状态转换 RPC。
-- 实现 loadEpoch/storageGeneration/READY identity fencing、lease 回收、容量预留和 GetFileReadPlan。
+- 实现 loadEpoch/cacheGeneration/READY identity fencing、单一 charge accounting、lease 回收和 GetFileReadPlan。
 - 批量读取 100 至 1000 个 block，不产生逐 block RPC 或 NONE 写入。
 
 交付门槛：并发 Acquire 只有一个成功，旧 epoch 不能 Commit，延迟 invalidation 不能清除新 READY，并发准入不超过 ceiling，ChunkId/ChainId 与现有规则一致。
@@ -319,7 +333,7 @@ EnsureCached → CapacityGate → BYPASSED
 - 实现 Cache Manager、Hint 合并、容量门禁、Scheduler 和 Loader。
 - 实现全 hit、全 miss、mixed read、Range 合并和 singleflight。
 - 实现 READY NotFound/checksum mismatch 的回源降级和状态修复。
-- 实现 retry-safe full-block replacement、conditional generation delete、checksum 校验、QUEUED/CLEANING 重附着和 expired LOADING 回收。
+- 实现 generation-fenced full-block replacement、retired tombstone、conditional generation cleanup、checksum 校验、QUEUED/CLEANING 重附着和 expired LOADING 回收。
 
 交付门槛：cold read、后台填充、warm hit 可重复验证；Client 不写 Storage；Cache Manager 不参与 hit；Cache Manager 停止时 cold read 仍可用。
 
@@ -347,18 +361,19 @@ EnsureCached → CapacityGate → BYPASSED
 - OriginFile serde、未知 variant fail-closed、导入幂等、BatchImport 逐项结果/上限/重复 path 和现有 path 冲突。
 - 相同 ETag 不同 key、相同 VersionId 字符串不同 bucket/OriginId 均不视为同一对象。
 - 旧 Client 读取 OriginFile fail-closed，旧 Metadata writer 不能重写并丢字段，feature gate 阻止不兼容导入/回滚。
-- Refresh 创建新 inode，expectedInode 防止并发覆盖。
+- Refresh 创建新 inode，requestId 保证幂等，expectedInode 防止不同请求并发覆盖，cleanupJob 分页恢复。
 - NONE/QUEUED/LOADING/READY/FAILED 状态转换。
 - 重复 Enqueue、并发 Acquire、loaderId 和 epoch 冲突。
 - lease 回收后旧 Loader 的延迟 Fail 为 no-op，不释放新 epoch reservation。
 - lease 到期重获、inode 替换后旧 Loader Commit 失败。
 - QUEUED-before-acquire 重启后由新 hint 重新附着。
 - 延迟 ReportCacheBlockInvalid 与新 READY 竞态时 no-op。
-- 并发容量预留不超配，Fail/Invalid/Cleanup 后正确释放。
+- 每种 source-state→CLEANING 只继承一份 charge；并发容量预留不超配，Fail/Invalid/Cleanup 后只释放一次。
 - Admin cleanup 的 NotFound、重复请求和部分失败重试。
-- 旧 cleanup 在新 READY 后到达时因 storageGeneration 不匹配而 no-op。
+- 旧 cleanup 在新 READY 后到达时因 cacheGeneration 不匹配而 no-op。
 - cleanup-vs-LOADING 会 fence Loader；Manager 在 CLEANING 中重启后 Admin/Ensure 可恢复。
 - hint 先于 invalidation 的竞态不会跳过后续 cleanup/reload。
+- refresh commit 后、cleanup 附着前崩溃可用同 requestId 恢复；超过 1000 blocks 的 cleanupJob 可按 cursor 分批恢复。
 - refresh 有/无 open session、session close 后 inode GC、普通 unlink/rename 拒绝和 cleanup 后容量释放。
 - Read Plan 的 EOF、非对齐和 0/1/100/1000 blocks。
 - GetFileReadPlan session/权限校验，以及 Import/Refresh/Cleanup 的 cache-admin 校验。
@@ -386,7 +401,8 @@ EnsureCached → CapacityGate → BYPASSED
 - 容量满 BYPASSED。
 - Loader Range 合并、block 拆分和部分写失败。
 - 模糊写超时重试和短 last-block 覆盖不会遗留旧 tail。
-- conditional generation delete 的重复、延迟和 ABA 场景。
+- 旧 generation 写在新 READY 后、cleanup/re-enqueue 后到达均被 active generation 或 tombstone 拒绝。
+- generation cleanup 的重复、延迟、GenerationAdvanced 和 ABA 场景。
 - VersionMismatch 禁止 Commit。
 - 进程退出后 QUEUED 可重附着、expired LOADING 可重新加载。
 
@@ -418,9 +434,9 @@ EnsureCached → CapacityGate → BYPASSED
 - READY chunk 丢失或损坏后可以回源降级并修正状态。
 - Cache Manager 不可用不影响成功的 S3 回源和已有 hit。
 - 容量满后停止准入但不影响 foreground read。
-- 容量计数在并发准入、失败、失效和显式清理后保持一致。
-- 延迟 Loader Fail 和延迟 cleanup delete 不会破坏新状态或新 chunk。
-- Refresh/cleanup/open-session/GC 生命周期不会绕过 Cache Metadata 或永久占用容量。
+- 每个 block 只有一份 charge，容量计数在并发准入、各来源状态进入 CLEANING、失败、失效和显式清理后保持一致。
+- Storage generation/tombstone fencing 保证延迟 Loader write、Fail 和 cleanup delete 不会破坏新状态或新 chunk。
+- Refresh requestId 可恢复 commit-to-attach 崩溃窗口，cleanupJob 可分页恢复；open-session/GC 生命周期不会绕过 Cache Metadata 或永久占用容量。
 - 基础 Admin CLI 和指标可用。
 - benchmark 可运行并产出基线数据，但结果不阻塞交付。
 - 原生 3FS 文件的行为和相关测试不回归。
