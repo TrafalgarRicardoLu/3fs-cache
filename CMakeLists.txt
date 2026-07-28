@@ -57,6 +57,7 @@ option(OVERRIDE_CXX_NEW_DELETE "Override C++ new/delete operator" OFF)
 option(SAVE_ALLOCATE_SIZE "Use more memory to save allocate size" OFF)
 
 option(ENABLE_FUSE_APPLICATION "" ON)
+option(HF3FS_ENABLE_CACHE "Build S3-backed read cache support" OFF)
 
 if (DEFINED SANITIZER AND SANITIZER)
     set(OVERRIDE_CXX_NEW_DELETE OFF)
@@ -201,6 +202,7 @@ include(cmake/DumpConfig.cmake)
 include(cmake/Jemalloc.cmake)
 include(cmake/ApacheArrow.cmake)
 include(cmake/AddCrate.cmake)
+include(cmake/AwsSdk.cmake)
 configure_file(cmake/CTestCustom.cmake ${CMAKE_BINARY_DIR} @ONLY)
 
 add_subdirectory(src)

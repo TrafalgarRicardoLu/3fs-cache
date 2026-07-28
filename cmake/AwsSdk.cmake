@@ -1,0 +1,7 @@
+if(HF3FS_ENABLE_CACHE)
+    find_package(AWSSDK REQUIRED COMPONENTS s3)
+    add_compile_definitions(HF3FS_ENABLE_CACHE=1)
+    message(STATUS "3FS cache enabled with AWS SDK for C++ ${AWSSDK_VERSION}")
+else()
+    message(STATUS "3FS cache AWS backend disabled")
+endif()

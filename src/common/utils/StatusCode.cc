@@ -51,6 +51,17 @@ int toErrno(status_code_t code) {
       return EINVAL;
     case CacheCode::kRequestTooLarge:
       return E2BIG;
+    case CacheCode::kNotFound:
+      return ENOENT;
+    case CacheCode::kAccessDenied:
+      return EACCES;
+    case CacheCode::kThrottled:
+      return EAGAIN;
+    case CacheCode::kTimeout:
+      return ETIMEDOUT;
+    case CacheCode::kUnavailable:
+    case CacheCode::kInvalidResponse:
+      return EIO;
     case StatusCode::kNotImplemented:
       return ENOSYS;
     case StatusCode::kNotEnoughMemory:
