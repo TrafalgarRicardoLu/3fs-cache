@@ -13,7 +13,10 @@ class IMgmtdClientForAdmin : public ICommonMgmtdClient {
   virtual CoTryTask<mgmtd::SetChainTableRsp> setChainTable(const flat::UserInfo &userInfo,
                                                            flat::ChainTableId tableId,
                                                            const std::vector<flat::ChainId> &chains,
-                                                           const String &desc) = 0;
+                                                           const String &desc,
+                                                           flat::ChainTableRole role,
+                                                           uint64_t logicalCapacity,
+                                                           flat::ChainTableChecksumType checksumType) = 0;
 
   virtual CoTryTask<flat::ConfigVersion> setConfig(const flat::UserInfo &userInfo,
                                                    flat::NodeType nodeType,

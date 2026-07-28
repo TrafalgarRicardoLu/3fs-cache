@@ -350,21 +350,37 @@ struct RoutingInfoChecker {
       auto table = layout.tableId;
       auto tableVer = layout.tableVersion;
       switch (layout.type()) {
-        case Layout::Type::ChainRange:
+        case Layout::Type::ChainRange: {
           XLOGF_IF(DFATAL, (!table || !tableVer), "File {}, invalid layout", inode);
-          if (!routing.getChainTable(table, tableVer)) {
+          auto chainTable = routing.getChainTable(table, tableVer);
+          if (!chainTable) {
             XLOGF(WARN, "File {}, chain table {} version {}, not found in RoutingInfo", inode.id, table, tableVer);
             return false;
           }
-          break;
-        case Layout::Type::ChainList:
-          if (table && tableVer && !routing.getChainTable(table, tableVer)) {
-            XLOGF(WARN, "File {}, chain table {} version {}, not found in RoutingInfo", inode.id, table, tableVer);
+          if (chainTable->isCacheData() != inode.isOriginFile()) {
+            XLOGF(WARN, "File {} type and chain table {} role do not match", inode.id, table);
             return false;
           }
           break;
+        }
+        case Layout::Type::ChainList: {
+          auto chainTable = table && tableVer ? routing.getChainTable(table, tableVer) : nullptr;
+          if (table && tableVer && !chainTable) {
+            XLOGF(WARN, "File {}, chain table {} version {}, not found in RoutingInfo", inode.id, table, tableVer);
+            return false;
+          }
+          if (inode.isOriginFile() && (!chainTable || !chainTable->isCacheData())) {
+            XLOGF(WARN, "OriginFile {} requires a CACHE_DATA chain table", inode.id);
+            return false;
+          }
+          if (inode.isFile() && chainTable && chainTable->isCacheData()) {
+            XLOGF(WARN, "File {} cannot use a CACHE_DATA chain table", inode.id);
+            return false;
+          }
+          break;
+        }
         case Layout::Type::Empty:
-          break;
+          return !inode.isOriginFile();
       }
     }
     return true;

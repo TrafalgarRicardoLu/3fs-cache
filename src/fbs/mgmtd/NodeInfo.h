@@ -27,6 +27,8 @@ struct NodeInfo : public serde::SerdeHelper<NodeInfo> {
   SERDE_STRUCT_FIELD(tags, std::vector<TagPair>{});
   SERDE_STRUCT_FIELD(configVersion, ConfigVersion(0));
   SERDE_STRUCT_FIELD(configStatus, ConfigStatus::NORMAL);
+  SERDE_STRUCT_FIELD(cacheSchemaVersion, uint32_t{0});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
 };
 
 inline auto selectNodeByType(flat::NodeType type) {

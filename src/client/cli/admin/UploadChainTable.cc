@@ -16,6 +16,9 @@ auto getParser() {
   parser.add_argument("tableId").scan<'u', uint32_t>();
   parser.add_argument("csv-file-path");
   parser.add_argument("--desc");
+  parser.add_argument("--role").default_value(std::string("USER_DATA"));
+  parser.add_argument("--logical-capacity").default_value(uint64_t{0}).scan<'u', uint64_t>();
+  parser.add_argument("--checksum").default_value(std::string("NONE"));
   return parser;
 }
 
@@ -29,6 +32,19 @@ CoTryTask<Dispatcher::OutputTable> handleUploadChainTable(IEnv &ienv,
   auto tableId = flat::ChainTableId(parser.get<uint32_t>("tableId"));
   auto csvFilePath = parser.get<std::string>("csv-file-path");
   auto desc = parser.present<String>("--desc").value_or("");
+  auto roleName = parser.get<std::string>("--role");
+  if (roleName != "USER_DATA" && roleName != "CACHE_DATA") {
+    co_return makeError(StatusCode::kInvalidArg, "role must be USER_DATA or CACHE_DATA");
+  }
+  auto role = roleName == "CACHE_DATA" ? flat::ChainTableRole::CACHE_DATA : flat::ChainTableRole::USER_DATA;
+  auto logicalCapacity = parser.get<uint64_t>("--logical-capacity");
+  auto checksumName = parser.get<std::string>("--checksum");
+  if (checksumName != "NONE" && checksumName != "CRC32C" && checksumName != "CRC32") {
+    co_return makeError(StatusCode::kInvalidArg, "checksum must be NONE, CRC32C, or CRC32");
+  }
+  auto checksumType = checksumName == "CRC32C"  ? flat::ChainTableChecksumType::CRC32C
+                      : checksumName == "CRC32" ? flat::ChainTableChecksumType::CRC32
+                                                : flat::ChainTableChecksumType::NONE;
 
   if (parser.get<bool>("-d")) {
     std::ofstream of(csvFilePath);
@@ -77,7 +93,8 @@ CoTryTask<Dispatcher::OutputTable> handleUploadChainTable(IEnv &ienv,
     chainIds.emplace_back(row[0]);
   }
 
-  auto rsp = co_await env.mgmtdClientGetter()->setChainTable(env.userInfo, tableId, chainIds, desc);
+  auto rsp = co_await env.mgmtdClientGetter()
+                 ->setChainTable(env.userInfo, tableId, chainIds, desc, role, logicalCapacity, checksumType);
   CO_RETURN_ON_ERROR(rsp);
 
   table.push_back({fmt::format("Upload {} of {} succeeded", tableId, rsp->chainTableVersion)});

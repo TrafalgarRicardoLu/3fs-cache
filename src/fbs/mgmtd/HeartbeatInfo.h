@@ -13,6 +13,8 @@ class MetaHeartbeatInfo : public serde::SerdeHelper<MetaHeartbeatInfo> {
   static constexpr auto kTypeCode = NodeType::META;
 
   SERDE_STRUCT_FIELD(dummy, Void{});
+  SERDE_STRUCT_FIELD(cacheSchemaVersion, uint32_t{0});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
 };
 
 class StorageHeartbeatInfo : public serde::SerdeHelper<StorageHeartbeatInfo> {

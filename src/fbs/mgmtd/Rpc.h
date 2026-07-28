@@ -73,6 +73,9 @@ DEFINE_SERDE_HELPER_STRUCT(SetChainTableReq) {
   SERDE_STRUCT_FIELD(chains, std::vector<flat::ChainId>{});
   SERDE_STRUCT_FIELD(desc, String{});
   SERDE_STRUCT_FIELD(user, flat::UserInfo{});
+  SERDE_STRUCT_FIELD(role, flat::ChainTableRole::USER_DATA);
+  SERDE_STRUCT_FIELD(logicalCapacity, uint64_t{0});
+  SERDE_STRUCT_FIELD(checksumType, flat::ChainTableChecksumType::NONE);
 };
 
 DEFINE_SERDE_HELPER_STRUCT(SetChainTableRsp) { SERDE_STRUCT_FIELD(chainTableVersion, flat::ChainTableVersion(0)); };

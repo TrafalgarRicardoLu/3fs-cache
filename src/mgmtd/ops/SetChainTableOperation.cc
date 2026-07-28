@@ -38,7 +38,16 @@ CoTryTask<SetChainTableRsp> SetChainTableOperation::handle(MgmtdState &state) {
 
   auto tableId = req.chainTableId;
   auto tableVersion = flat::ChainTableVersion(1);
-  auto newChainTable = flat::ChainTable::create(tableId, tableVersion, std::move(req.chains), std::move(req.desc));
+  auto newChainTable = flat::ChainTable::create(tableId,
+                                                tableVersion,
+                                                std::move(req.chains),
+                                                std::move(req.desc),
+                                                req.role,
+                                                req.logicalCapacity,
+                                                req.checksumType);
+  if (auto valid = newChainTable.valid(); valid.hasError()) {
+    CO_RETURN_AND_LOG_OP_ERR(*this, MgmtdCode::kInvalidChainTable, "{}", valid.error().message());
+  }
 
   auto handler = [&]() -> CoTryTask<SetChainTableRsp> {
     auto writerLock = co_await state.coScopedLock<"SetChainTable">();
@@ -53,7 +62,9 @@ CoTryTask<SetChainTableRsp> SetChainTableOperation::handle(MgmtdState &state) {
         const auto &m = ctit->second;
         XLOGF_IF(FATAL, m.empty(), "{} has no versions", tableId);
         const auto &current = m.rbegin()->second;
-        if (newChainTable.chains != current.chains) {
+        if (newChainTable.chains != current.chains || newChainTable.role != current.role ||
+            newChainTable.logicalCapacity != current.logicalCapacity ||
+            newChainTable.checksumType != current.checksumType) {
           newChainTable.chainTableVersion = nextVersion(current.chainTableVersion);
         }
         if (newChainTable.desc.empty()) {

@@ -10,6 +10,9 @@
 
 namespace hf3fs::cache {
 
+inline constexpr uint32_t kCacheSchemaVersion = 1;
+inline constexpr uint32_t kCacheProtocolVersion = 1;
+
 STRONG_TYPEDEF(uint32_t, OriginId);
 STRONG_TYPEDEF(uint32_t, CacheBlockIndex);
 STRONG_TYPEDEF(uint64_t, CacheGeneration);

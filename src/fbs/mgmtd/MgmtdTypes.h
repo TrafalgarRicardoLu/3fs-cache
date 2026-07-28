@@ -39,6 +39,17 @@ enum class NodeStatus : uint8_t {
 
 enum class NodeType : uint8_t { MGMTD = 0, META = 1, STORAGE = 2, CLIENT = 3, FUSE = 4, MIN = MGMTD, MAX = FUSE };
 
+enum class ChainTableRole : uint8_t {
+  USER_DATA = 0,
+  CACHE_DATA = 1,
+};
+
+enum class ChainTableChecksumType : uint8_t {
+  NONE = 0,
+  CRC32C = 1,
+  CRC32 = 2,
+};
+
 enum class SetTagMode : uint8_t { REPLACE = 0, UPSERT = 1, REMOVE = 2, MIN = REPLACE, MAX = REMOVE };
 
 STRONG_TYPEDEF(uint64_t, TargetId);

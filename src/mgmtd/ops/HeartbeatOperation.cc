@@ -14,6 +14,10 @@ flat::NodeInfo onNewNode(const flat::HeartbeatInfo &hb, UtcTime now) {
   sn.lastHeartbeatTs = now;
   // sn.tags is empty
   sn.configVersion = hb.configVersion;
+  if (hb.type() == flat::NodeType::META) {
+    sn.cacheSchemaVersion = hb.asMeta().cacheSchemaVersion;
+    sn.cacheProtocolVersion = hb.asMeta().cacheProtocolVersion;
+  }
   return sn;
 }
 
@@ -23,6 +27,10 @@ flat::NodeInfo onNodeChanged(const flat::NodeInfo &oldNodeInfo, const flat::Hear
   sn.status = flat::NodeStatus::HEARTBEAT_CONNECTED;
   sn.configVersion = hb.configVersion;
   sn.configStatus = hb.configStatus;
+  if (hb.type() == flat::NodeType::META) {
+    sn.cacheSchemaVersion = hb.asMeta().cacheSchemaVersion;
+    sn.cacheProtocolVersion = hb.asMeta().cacheProtocolVersion;
+  }
   return sn;
 }
 
@@ -152,6 +160,8 @@ CoTryTask<HeartbeatRsp> HeartbeatOperation::handle(MgmtdState &state) {
     auto persistentNewNode = flat::toPersistentNode(newNode);
     auto needPersist = oldNode == nullptr || flat::toPersistentNode(oldNode->base()) != persistentNewNode;
     auto statusChanged = oldNode == nullptr || oldNode->base().status != newNode.status;
+    auto capabilityChanged = oldNode == nullptr || oldNode->base().cacheSchemaVersion != newNode.cacheSchemaVersion ||
+                             oldNode->base().cacheProtocolVersion != newNode.cacheProtocolVersion;
 
     if (needPersist) {
       CO_RETURN_ON_ERROR(
@@ -172,7 +182,7 @@ CoTryTask<HeartbeatRsp> HeartbeatOperation::handle(MgmtdState &state) {
       auto dataPtr = co_await state.data_.coLock();
       auto steadyNow = SteadyClock::now();
       auto &ri = dataPtr->routingInfo;
-      ri.routingInfoChanged |= statusChanged;
+      ri.routingInfoChanged |= statusChanged || capabilityChanged;
 
       auto &info = ri.nodeMap[nodeId];
       info.base() = std::move(newNode);
@@ -184,7 +194,7 @@ CoTryTask<HeartbeatRsp> HeartbeatOperation::handle(MgmtdState &state) {
         dataPtr->routingInfo.localUpdateTargets(nodeId, hb.asStorage().targets, state.config_);
       }
 
-      if (needPersist) {
+      if (needPersist || capabilityChanged) {
         updateMemoryRoutingInfo(ri, *this);
       }
 

@@ -65,10 +65,14 @@ class MgmtdClient {
   CoTryTask<mgmtd::SetChainsRsp> setChains(const flat::UserInfo &userInfo,
                                            const std::vector<flat::ChainSetting> &chains);
 
-  CoTryTask<mgmtd::SetChainTableRsp> setChainTable(const flat::UserInfo &userInfo,
-                                                   flat::ChainTableId tableId,
-                                                   const std::vector<flat::ChainId> &chains,
-                                                   const String &desc);
+  CoTryTask<mgmtd::SetChainTableRsp> setChainTable(
+      const flat::UserInfo &userInfo,
+      flat::ChainTableId tableId,
+      const std::vector<flat::ChainId> &chains,
+      const String &desc,
+      flat::ChainTableRole role = flat::ChainTableRole::USER_DATA,
+      uint64_t logicalCapacity = 0,
+      flat::ChainTableChecksumType checksumType = flat::ChainTableChecksumType::NONE);
 
   void setClientSessionPayload(ClientSessionPayload payload);
 

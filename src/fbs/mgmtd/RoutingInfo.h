@@ -32,6 +32,8 @@ struct RoutingInfo : public serde::SerdeHelper<RoutingInfo> {
   const TargetInfo *getTarget(TargetId id) const;
   TargetInfo *getTarget(TargetId id);
 
+  bool cacheFeatureEnabled(uint32_t requiredSchemaVersion, uint32_t requiredProtocolVersion) const;
+
   using NodeMap = robin_hood::unordered_map<NodeId, NodeInfo>;
   // ordered
   using ChainTableVersionMap = std::map<ChainTableVersion, ChainTable>;

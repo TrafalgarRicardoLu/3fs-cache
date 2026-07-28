@@ -3,6 +3,21 @@
 #include <folly/logging/xlog.h>
 
 namespace hf3fs::flat {
+
+bool RoutingInfo::cacheFeatureEnabled(uint32_t requiredSchemaVersion, uint32_t requiredProtocolVersion) const {
+  bool foundActiveMetadata = false;
+  for (const auto &[_, node] : nodes) {
+    if (node.type != NodeType::META ||
+        (node.status != NodeStatus::HEARTBEAT_CONNECTED && node.status != NodeStatus::PRIMARY_MGMTD)) {
+      continue;
+    }
+    foundActiveMetadata = true;
+    if (node.cacheSchemaVersion < requiredSchemaVersion || node.cacheProtocolVersion < requiredProtocolVersion) {
+      return false;
+    }
+  }
+  return foundActiveMetadata;
+}
 const ChainTable *RoutingInfo::getChainTable(ChainTableId tableId, ChainTableVersion tableVersion) const {
   auto tit = chainTables.find(tableId);
   if (tit == chainTables.end()) return nullptr;

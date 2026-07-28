@@ -28,11 +28,15 @@ class MgmtdClientForAdmin : public CommonMgmtdClient<IMgmtdClientForAdmin> {
     return client_->setChains(userInfo, chains);
   }
 
-  CoTryTask<mgmtd::SetChainTableRsp> setChainTable(const flat::UserInfo &userInfo,
-                                                   flat::ChainTableId tableId,
-                                                   const std::vector<flat::ChainId> &chains,
-                                                   const String &desc) final {
-    return client_->setChainTable(userInfo, tableId, chains, desc);
+  CoTryTask<mgmtd::SetChainTableRsp> setChainTable(
+      const flat::UserInfo &userInfo,
+      flat::ChainTableId tableId,
+      const std::vector<flat::ChainId> &chains,
+      const String &desc,
+      flat::ChainTableRole role = flat::ChainTableRole::USER_DATA,
+      uint64_t logicalCapacity = 0,
+      flat::ChainTableChecksumType checksumType = flat::ChainTableChecksumType::NONE) final {
+    return client_->setChainTable(userInfo, tableId, chains, desc, role, logicalCapacity, checksumType);
   }
 
   CoTryTask<flat::ConfigVersion> setConfig(const flat::UserInfo &userInfo,

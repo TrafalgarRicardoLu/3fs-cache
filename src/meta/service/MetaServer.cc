@@ -8,6 +8,7 @@
 #include "common/app/ApplicationBase.h"
 #include "common/utils/Result.h"
 #include "core/service/CoreService.h"
+#include "fbs/cache/Common.h"
 #include "fdb/HybridKvEngine.h"
 #include "meta/components/ChainAllocator.h"
 #include "meta/service/MetaOperator.h"
@@ -37,7 +38,10 @@ Result<Void> MetaServer::beforeStart() {
 
   mgmtdClient_->setAppInfoForHeartbeat(appInfo());
   mgmtdClient_->setConfigListener(ApplicationBase::updateConfig);
-  mgmtdClient_->updateHeartbeatPayload(flat::MetaHeartbeatInfo{});
+  auto heartbeat = flat::MetaHeartbeatInfo{};
+  heartbeat.cacheSchemaVersion = cache::kCacheSchemaVersion;
+  heartbeat.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  mgmtdClient_->updateHeartbeatPayload(std::move(heartbeat));
   folly::coro::blockingWait(mgmtdClient_->start(&tpg().bgThreadPool().randomPick()));
   auto mgmtdClientRefreshRes = folly::coro::blockingWait(mgmtdClient_->refreshRoutingInfo(/*force=*/false));
   XLOGF_IF(FATAL, !mgmtdClientRefreshRes, "Failed to refresh initial routing info!");

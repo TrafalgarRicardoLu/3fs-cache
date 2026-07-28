@@ -856,8 +856,11 @@ CoTryTask<mgmtd::SetChainsRsp> MgmtdClient::setChains(const flat::UserInfo &user
 CoTryTask<mgmtd::SetChainTableRsp> MgmtdClient::setChainTable(const flat::UserInfo &userInfo,
                                                               flat::ChainTableId tableId,
                                                               const std::vector<flat::ChainId> &chains,
-                                                              const String &desc) {
-  SetChainTableOp op(impl_->clusterId_, tableId, chains, desc, userInfo);
+                                                              const String &desc,
+                                                              flat::ChainTableRole role,
+                                                              uint64_t logicalCapacity,
+                                                              flat::ChainTableChecksumType checksumType) {
+  SetChainTableOp op(impl_->clusterId_, tableId, chains, desc, userInfo, role, logicalCapacity, checksumType);
   co_return co_await impl_->invoke(op);
 }
 

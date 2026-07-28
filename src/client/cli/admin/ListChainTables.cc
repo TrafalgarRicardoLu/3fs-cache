@@ -22,7 +22,14 @@ CoTryTask<Dispatcher::OutputTable> handleListChainTables(IEnv &ienv,
   CO_RETURN_ON_ERROR(co_await env.mgmtdClientGetter()->refreshRoutingInfo(/*force=*/true));
   auto routingInfo = env.mgmtdClientGetter()->getRoutingInfo();
   XLOGF(DBG, "ListChainTables routingInfo:{}", serde::toJsonString(*routingInfo->raw()));
-  table.push_back({"ChainTableId", "ChainTableVersion", "ChainCount", "ReplicaCount", "Desc"});
+  table.push_back({"ChainTableId",
+                   "ChainTableVersion",
+                   "Role",
+                   "LogicalCapacity",
+                   "Checksum",
+                   "ChainCount",
+                   "ReplicaCount",
+                   "Desc"});
   for ([[maybe_unused]] const auto &[tableId, chainTables] : routingInfo->raw()->chainTables) {
     for ([[maybe_unused]] const auto &[tv, chainTable] : chainTables) {
       auto chainCount = chainTable.chains.size();
@@ -39,6 +46,9 @@ CoTryTask<Dispatcher::OutputTable> handleListChainTables(IEnv &ienv,
       }
       table.push_back({std::to_string(tableId.toUnderType()),
                        std::to_string(tv.toUnderType()),
+                       std::string(magic_enum::enum_name(chainTable.role)),
+                       std::to_string(chainTable.logicalCapacity),
+                       std::string(magic_enum::enum_name(chainTable.checksumType)),
                        std::to_string(chainCount),
                        fmt::format("{}", fmt::join(replicaCount, "/")),
                        chainTable.desc});

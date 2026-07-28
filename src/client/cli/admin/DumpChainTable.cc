@@ -44,7 +44,13 @@ CoTryTask<Dispatcher::OutputTable> handleDumpChainTable(IEnv &ienv,
     of << cid.toUnderType() << "\n";
   }
 
-  table.push_back({fmt::format("Dump {} of {} to {} succeeded", tableId, tableVer, csvFilePath)});
+  table.push_back({fmt::format("Dump {} of {} ({}, capacity {}, checksum {}) to {} succeeded",
+                               tableId,
+                               tableVer,
+                               magic_enum::enum_name(t->role),
+                               t->logicalCapacity,
+                               magic_enum::enum_name(t->checksumType),
+                               csvFilePath)});
   co_return table;
 }
 }  // namespace
