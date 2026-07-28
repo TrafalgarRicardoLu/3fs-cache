@@ -118,7 +118,7 @@ CLEANING → NONE/FAILED/QUEUED
 - NONE 不创建 FDB record。
 - 同一 block 同时只有一个有效 Loader。
 - 每次 Acquire 递增 `loadEpoch`。
-- Acquire 还通过 FDB versionstamp 分配全局单调、不可复用的 `cacheGeneration`，并将其写入 LOADING record。generation 在同一 CacheBlockKey 的历次删除和重建间保持可排序。
+- Acquire 还递增每个 CacheBlockKey 独立、持久化且不可回退的 `uint64_t cacheGeneration` counter，并将新值写入 LOADING record。counter 在 cache record 删除、cleanup 和重新 Enqueue 后仍保留；达到上限时拒绝继续 Acquire。Storage generation 比较只发生在同一 ChunkId 内，因此不要求跨 block 全局排序。
 - Commit 和 Fail 都必须匹配 inode、loaderId、loadEpoch、LOADING 状态和 inode 未 superseded 条件；旧 epoch 的 Fail 返回 Conflict/no-op，不能释放当前 reservation。匹配的 Fail 总是先转 CLEANING，并设置 terminalState=FAILED，不直接释放 reservation。
 - READY 只在 Storage 写入成功并获得 checksum 后产生。
 - READY identity 由 `loadEpoch + cacheGeneration + checksum + blockLength` 组成，并随 Read Plan 返回。
