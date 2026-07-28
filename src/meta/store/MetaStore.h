@@ -137,6 +137,10 @@ class MetaStore {
 
   OpPtr<LockDirectoryRsp> lockDirectory(const LockDirectoryReq &req);
 
+  OpPtr<ImportOriginFileRsp> importOriginFile(const ImportOriginFileReq &req);
+
+  OpPtr<RefreshOriginFileRsp> refreshOriginFile(const RefreshOriginFileReq &req);
+
  private:
   template <typename>
   FRIEND_TEST(TestRemove, GC);

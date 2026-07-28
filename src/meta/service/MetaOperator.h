@@ -103,6 +103,12 @@ class MetaOperator : public folly::NonCopyableNonMovable {
 
   CoTryTask<BatchStatByPathRsp> batchStatByPath(BatchStatByPathReq req);
 
+  CoTryTask<ImportOriginFileRsp> importOriginFile(ImportOriginFileReq req);
+
+  CoTryTask<BatchImportOriginFilesRsp> batchImportOriginFiles(BatchImportOriginFilesReq req);
+
+  CoTryTask<RefreshOriginFileRsp> refreshOriginFile(RefreshOriginFileReq req);
+
  private:
   friend class MockMeta;
 
@@ -187,6 +193,9 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   CoTryTask<Rsp> runInBatch(InodeId inodeId, Req req);
 
   CoTryTask<void> authenticate(UserInfo &userInfo);
+  CoTryTask<Void> requireCacheAdmin(const UserInfo &userInfo);
+  Result<Void> checkCacheFeature(uint32_t protocolVersion) const;
+  Result<Void> checkCacheTable(flat::ChainTableId tableId) const;
 
   const Config &config_;
   flat::NodeId nodeId_;

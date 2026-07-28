@@ -770,8 +770,10 @@ struct RefreshOriginFileReq : ReqBase {
  public:
   Result<Void> valid() const {
     if (requestId == Uuid::zero()) return INVALID("requestId not set");
+    if (expectedInode == InodeId{}) return INVALID("expectedInode not set");
     RETURN_ON_ERROR(path.validForCreate());
     RETURN_ON_ERROR(oldObject.valid());
+    if (oldObject == newMetadata.object) return INVALID("refresh object identity did not change");
     return newMetadata.valid();
   }
 };

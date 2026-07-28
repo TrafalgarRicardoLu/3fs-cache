@@ -48,6 +48,7 @@
 #include "meta/components/FileHelper.h"
 #include "meta/components/Forward.h"
 #include "meta/components/InodeIdAllocator.h"
+#include "meta/components/OriginNamespaceManager.h"
 #include "meta/components/SessionManager.h"
 #include "meta/store/Idempotent.h"
 #include "meta/store/Inode.h"
@@ -276,6 +277,41 @@ CoTryTask<void> MetaOperator::authenticate(UserInfo &userInfo) {
   co_return Void{};
 }
 
+CoTryTask<Void> MetaOperator::requireCacheAdmin(const UserInfo &userInfo) {
+  if (userInfo.isRoot()) co_return Void{};
+  auto user = co_await userStore_->getUser(userInfo.uid);
+  if (user.hasError()) {
+    if (user.error().code() != StatusCode::kAuthenticationFail) CO_RETURN_ERROR(user);
+    co_return makeError(MetaCode::kNoPermission, "cache admin permission required");
+  }
+  if (!user->admin) {
+    co_return makeError(MetaCode::kNoPermission, "cache admin permission required");
+  }
+  co_return Void{};
+}
+
+Result<Void> MetaOperator::checkCacheFeature(uint32_t protocolVersion) const {
+  if (protocolVersion != cache::kCacheProtocolVersion) {
+    return makeError(CacheCode::kUpgradeRequired, "incompatible cache protocol version");
+  }
+  auto routing = mgmtd_->getRoutingInfo();
+  if (!routing || !routing->raw() ||
+      !routing->raw()->cacheFeatureEnabled(cache::kCacheSchemaVersion, cache::kCacheProtocolVersion)) {
+    return makeError(CacheCode::kFeatureDisabled, "cache feature gate is not active");
+  }
+  return Void{};
+}
+
+Result<Void> MetaOperator::checkCacheTable(flat::ChainTableId tableId) const {
+  auto routing = mgmtd_->getRoutingInfo();
+  auto table = routing && routing->raw() ? routing->raw()->getChainTable(tableId) : nullptr;
+  if (table == nullptr || !table->isCacheData()) {
+    return makeError(MetaCode::kInvalidFileLayout, "OriginFile requires a CACHE_DATA chain table");
+  }
+  RETURN_ON_ERROR(table->valid());
+  return Void{};
+}
+
 CoTryTask<AuthRsp> MetaOperator::authenticate(AuthReq req) {
   AUTHENTICATE(req.user);
   co_return AuthRsp(std::move(req.user));
@@ -434,6 +470,72 @@ CoTryTask<DropUserCacheRsp> MetaOperator::dropUserCache(DropUserCacheReq req) {
 CoTryTask<TestRpcRsp> MetaOperator::testRpc(TestRpcReq req) {
   // don't need auth user
   co_return co_await runOp(&MetaStore::testRpc, req);
+}
+
+CoTryTask<ImportOriginFileRsp> MetaOperator::importOriginFile(ImportOriginFileReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheFeature(req.cacheProtocolVersion));
+  CO_RETURN_ON_ERROR(co_await requireCacheAdmin(req.user));
+  CO_RETURN_ON_ERROR(checkCacheTable(req.entry.metadata.tableId));
+  co_return co_await runOp(&MetaStore::importOriginFile, req);
+}
+
+CoTryTask<BatchImportOriginFilesRsp> MetaOperator::batchImportOriginFiles(BatchImportOriginFilesReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheFeature(req.cacheProtocolVersion));
+  CO_RETURN_ON_ERROR(co_await requireCacheAdmin(req.user));
+
+  BatchImportOriginFilesRsp rsp;
+  rsp.results.reserve(req.entries.size());
+  for (size_t i = 0; i < req.entries.size(); ++i) {
+    auto duplicates = std::count_if(req.entries.begin(), req.entries.end(), [&](const auto &entry) {
+      return entry.path == req.entries[i].path;
+    });
+    if (duplicates > 1) {
+      rsp.results.emplace_back(makeError(StatusCode::kInvalidArg, "duplicate path in batch import"));
+      continue;
+    }
+    if (auto table = checkCacheTable(req.entries[i].metadata.tableId); table.hasError()) {
+      rsp.results.emplace_back(makeError(table.error()));
+      continue;
+    }
+    ImportOriginFileReq item;
+    item.user = req.user;
+    item.client = req.client;
+    item.forward = req.forward;
+    item.uuid = req.uuid;
+    item.entry = req.entries[i];
+    item.cacheProtocolVersion = req.cacheProtocolVersion;
+    rsp.results.emplace_back(co_await runOp(&MetaStore::importOriginFile, item));
+  }
+  co_return rsp;
+}
+
+CoTryTask<RefreshOriginFileRsp> MetaOperator::refreshOriginFile(RefreshOriginFileReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  if (req.cacheProtocolVersion != cache::kCacheProtocolVersion) {
+    co_return makeError(CacheCode::kUpgradeRequired, "incompatible cache protocol version");
+  }
+  CO_RETURN_ON_ERROR(co_await requireCacheAdmin(req.user));
+
+  auto strategy = kv::FDBRetryStrategy(createRetryConfig());
+  auto previous = co_await kv::WithTransaction(strategy).run(
+      kvEngine_->createReadWriteTransaction(),
+      [&](kv::IReadWriteTransaction &txn) { return OriginNamespaceManager::loadRefresh(txn, req.requestId); });
+  CO_RETURN_ON_ERROR(previous);
+  if (previous->has_value()) {
+    if (!(**previous).matches(req)) {
+      co_return makeError(CacheCode::kStateConflict, "refresh request id was reused with different parameters");
+    }
+    co_return (**previous).response();
+  }
+
+  CO_RETURN_ON_ERROR(checkCacheFeature(req.cacheProtocolVersion));
+  CO_RETURN_ON_ERROR(checkCacheTable(req.newMetadata.tableId));
+  co_return co_await runOp(&MetaStore::refreshOriginFile, req);
 }
 
 }  // namespace hf3fs::meta::server
