@@ -1,5 +1,12 @@
-set(CLANG_FORMAT "/usr/bin/clang-format-14")
-if(EXISTS ${CLANG_FORMAT})
+find_program(CLANG_FORMAT NAMES clang-format-14 clang-format)
+if(CLANG_FORMAT)
+    execute_process(
+        COMMAND ${CLANG_FORMAT} --version
+        OUTPUT_VARIABLE CLANG_FORMAT_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT CLANG_FORMAT_VERSION MATCHES "clang-format version 14\\.")
+        message(FATAL_ERROR "clang-format 14 required, found: ${CLANG_FORMAT_VERSION}")
+    endif()
     message(STATUS "Found clang-format at ${CLANG_FORMAT}")
 
     set(SOURCE_DIRS
