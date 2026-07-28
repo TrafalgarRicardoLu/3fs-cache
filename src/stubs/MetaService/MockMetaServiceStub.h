@@ -67,8 +67,8 @@ struct MockMetaStubHolder {
 
 class DummyMetaServiceStubWithInode : public DummyMetaServiceStub {
  public:
-  DummyMetaServiceStubWithInode(std::variant<File, Directory, Symlink> data)
-      : inode_({InodeId(0x10de1d), {data, Acl{Uid(0), Gid(0), Permission(0777)}}}) {}
+  DummyMetaServiceStubWithInode(std::variant<File, Directory, Symlink, OriginFile> data)
+      : inode_(InodeId(0x10de1d), InodeData{data, Acl{Uid(0), Gid(0), Permission(0777)}}) {}
 
   CoTryTask<CreateRsp> create(const CreateReq &) override { co_return CreateRsp(inode_, false); }
   CoTryTask<OpenRsp> open(const OpenReq &) override { co_return OpenRsp(inode_, false); }

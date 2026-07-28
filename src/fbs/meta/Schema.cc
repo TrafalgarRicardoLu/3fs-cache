@@ -22,6 +22,38 @@
 
 namespace hf3fs::meta {
 
+namespace {
+
+Result<ChunkId> getFileLikeChunkId(const Layout &layout, InodeId id, uint64_t offset) {
+  if (!layout.chunkSize) {
+    return makeError(MetaCode::kInvalidFileLayout, "chunk size = 0");
+  }
+  auto chunk = offset / layout.chunkSize;
+  if (chunk > std::numeric_limits<uint32_t>::max()) {
+    return MAKE_ERROR_F(MetaCode::kFileTooLarge, "offset {} chunk id {} > uint32_max", offset, chunk);
+  }
+  return ChunkId(id, 0, chunk);
+}
+
+Result<ChainId> getFileLikeChainId(const Layout &layout,
+                                   const Inode &inode,
+                                   size_t offset,
+                                   const flat::RoutingInfo &routingInfo,
+                                   uint16_t track) {
+  if (!layout.chunkSize || !layout.stripeSize) {
+    return makeError(MetaCode::kInvalidFileLayout, !layout.chunkSize ? "empty chunksize" : "empty stripesize");
+  }
+  auto ref = layout.getChainOfChunk(inode, offset / layout.chunkSize + track * TRACK_OFFSET_FOR_CHAIN);
+  auto chainId = routingInfo.getChainId(ref);
+  if (!chainId) {
+    return makeError(MgmtdClientCode::kRoutingInfoNotReady,
+                     fmt::format("Cannot find ChainId by {}, offset is {}", ref, offset));
+  }
+  return *chainId;
+}
+
+}  // namespace
+
 Result<Void> Acl::checkPermission(const UserInfo &user, AccessType type) const {
   uint32_t permNeeded = 0;
   if (user.uid == 0)
@@ -59,35 +91,67 @@ Result<Void> Acl::checkRecursiveRmPerm(const UserInfo &user, bool owner) const {
   return Void{};
 }
 
-Result<ChunkId> File::getChunkId(InodeId id, uint64_t offset) const {
-  if (!layout.chunkSize) {
-    XLOGF(CRITICAL, "File {} chunkSize == 0.", *this);
-    return makeError(MetaCode::kInvalidFileLayout, "chunk size = 0");
-  }
-  auto chunk = offset / layout.chunkSize;
-  if (chunk > std::numeric_limits<uint32_t>::max()) {
-    XLOGF(CRITICAL, "File {}, offset {}, chunk {} > uint32_max", *this, offset, chunk);
-    return MAKE_ERROR_F(MetaCode::kFileTooLarge, "offset {} chunk id {} > uint32_max", offset, chunk);
-  }
-  return ChunkId(id, 0, chunk);
-}
+Result<ChunkId> File::getChunkId(InodeId id, uint64_t offset) const { return getFileLikeChunkId(layout, id, offset); }
 
 Result<ChainId> File::getChainId(const Inode &inode,
                                  size_t offset,
                                  const flat::RoutingInfo &routingInfo,
                                  uint16_t track) const {
-  if ((!layout.chunkSize || !layout.stripeSize)) {
-    XLOGF(CRITICAL, "File {} chunkSize {}, stripeSize {}.", inode.id, layout.chunkSize, layout.stripeSize);
-    return makeError(MetaCode::kInvalidFileLayout, !layout.chunkSize ? "empty chunksize" : "empty stripesize");
-  }
-  auto ref = layout.getChainOfChunk(inode, offset / layout.chunkSize + track * TRACK_OFFSET_FOR_CHAIN);
-  auto cid = routingInfo.getChainId(ref);
-  if (!cid) {
-    auto msg = fmt::format("Cannot find ChainId by {}, offset is {}", ref, offset);
-    XLOG(ERR, msg);
-    return makeError(MgmtdClientCode::kRoutingInfoNotReady, msg);
-  }
-  return *cid;
+  return getFileLikeChainId(layout, inode, offset, routingInfo, track);
+}
+
+Result<Void> OriginFile::valid() const {
+  RETURN_ON_ERROR(layout.valid(false));
+  RETURN_ON_ERROR(object.valid());
+  if (length) RETURN_ON_ERROR(getChunkId(InodeId{}, length - 1));
+  return Void{};
+}
+
+Result<ChunkId> OriginFile::getChunkId(InodeId id, uint64_t offset) const {
+  return getFileLikeChunkId(layout, id, offset);
+}
+
+Result<ChainId> OriginFile::getChainId(const Inode &inode,
+                                       size_t offset,
+                                       const flat::RoutingInfo &routingInfo,
+                                       uint16_t track) const {
+  return getFileLikeChainId(layout, inode, offset, routingInfo, track);
+}
+
+uint64_t InodeData::fileLength() const {
+  return folly::variant_match(
+      type,
+      [](const File &file) { return file.length; },
+      [](const OriginFile &file) { return file.length; },
+      [](const auto &) -> uint64_t {
+        XLOG(FATAL, "inode is not regular-file-like");
+        return 0;
+      });
+}
+
+const Layout &InodeData::fileLayout() const {
+  return folly::variant_match(
+      type,
+      [](const File &file) -> const Layout & { return file.layout; },
+      [](const OriginFile &file) -> const Layout & { return file.layout; },
+      [](const auto &) -> const Layout & {
+        XLOG(FATAL, "inode is not regular-file-like");
+        static const Layout invalid;
+        return invalid;
+      });
+}
+
+Result<ChunkId> InodeData::getChunkId(InodeId id, uint64_t offset) const {
+  if (!isRegularFileLike()) return makeError(MetaCode::kNotFile);
+  return getFileLikeChunkId(fileLayout(), id, offset);
+}
+
+Result<ChainId> InodeData::getChainId(const Inode &inode,
+                                      size_t offset,
+                                      const flat::RoutingInfo &routingInfo,
+                                      uint16_t track) const {
+  if (!isRegularFileLike()) return makeError(MetaCode::kNotFile);
+  return getFileLikeChainId(fileLayout(), inode, offset, routingInfo, track);
 }
 
 Layout Layout::newEmpty(ChainTableId table, uint32_t chunk, uint32_t stripe) {

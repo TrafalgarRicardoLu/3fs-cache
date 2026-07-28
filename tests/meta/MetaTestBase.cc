@@ -106,6 +106,9 @@ DirEntry MetaTestHelper::randomDirEntry() {
     case InodeType::Symlink:
       entry = DirEntry::newSymlink(parent, name, id);
       break;
+    case InodeType::OriginFile:
+      entry = DirEntry::newOriginFile(parent, name, id);
+      break;
   }
   return entry;
 }
@@ -316,6 +319,9 @@ CoTryTask<void> printTree(MetaOperator &meta) {
         switch (entry.type) {
           case InodeType::File:
             map[entryPath] = "File";
+            break;
+          case InodeType::OriginFile:
+            map[entryPath] = "OriginFile";
             break;
           case InodeType::Directory:
             map[entryPath] = "";

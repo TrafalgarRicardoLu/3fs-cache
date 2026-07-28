@@ -173,6 +173,17 @@ CoTryTask<Dispatcher::OutputTable> handleStat(IEnv &ienv,
       }
       break;
     }
+    case meta::InodeType::OriginFile: {
+      const auto &origin = o.asOriginFile();
+      table.push_back({"Length", fmt::format("{}", origin.length)});
+      table.push_back({"OriginId", fmt::format("{}", origin.object.originId.toUnderType())});
+      table.push_back({"Bucket", origin.object.bucket});
+      table.push_back({"ObjectKey", origin.object.key});
+      if (displayLayout) {
+        CO_RETURN_ON_ERROR(printLayout(table, *routingInfo->raw(), origin.layout, displayChainList));
+      }
+      break;
+    }
     case meta::InodeType::Directory:
       table.push_back({"ParentInode", o.asDirectory().parent.toHexString()});
       if (displayLayout) {

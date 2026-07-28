@@ -128,6 +128,11 @@ CoTryTask<void> Inode::store(IReadWriteTransaction &txn) const {
       co_return makeError(MetaCode::kFoundBug,
                           fmt::format("File {} invalid layout {}, {}", id, asFile().layout, valid.error()));
     }
+  } else if (isOriginFile()) {
+    if (auto valid = asOriginFile().valid(); valid.hasError()) {
+      XLOGF(DFATAL, "OriginFile {} is invalid, error {}", id, valid.error());
+      co_return makeError(MetaCode::kFoundBug, fmt::format("OriginFile {} is invalid, {}", id, valid.error()));
+    }
   }
 
   auto key = packKey();

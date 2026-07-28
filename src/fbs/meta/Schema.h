@@ -27,6 +27,7 @@
 #include "common/utils/StrongType.h"
 #include "common/utils/UtcTimeSerde.h"
 #include "common/utils/Uuid.h"
+#include "fbs/cache/Common.h"
 #include "fbs/core/user/User.h"
 #include "fbs/meta/Common.h"
 #include "fbs/mgmtd/ChainRef.h"
@@ -172,6 +173,7 @@ enum class InodeType : uint8_t {
   File = 0,
   Directory,
   Symlink,
+  OriginFile,
 };
 
 class ChunkId {
@@ -275,6 +277,31 @@ struct File {
   bool operator==(const File &o) const { return serde::equals(*this, o); }
 };
 
+struct OriginFile {
+  SERDE_STRUCT_FIELD(length, uint64_t(0));
+  SERDE_STRUCT_FIELD(layout, Layout());
+  SERDE_STRUCT_FIELD(object, cache::ImmutableObjectIdentity{});
+  SERDE_STRUCT_FIELD(superseded, false);
+  SERDE_STRUCT_FIELD(cacheAdmissionDisabled, false);
+  SERDE_STRUCT_FIELD(cleanupJobId, Uuid::zero());
+
+ public:
+  OriginFile() = default;
+  OriginFile(uint64_t length, Layout layout, cache::ImmutableObjectIdentity object)
+      : length(length),
+        layout(std::move(layout)),
+        object(std::move(object)) {}
+
+  static constexpr auto kType = InodeType::OriginFile;
+  Result<Void> valid() const;
+  Result<ChunkId> getChunkId(InodeId id, uint64_t offset) const;
+  Result<ChainId> getChainId(const Inode &inode,
+                             size_t offset,
+                             const flat::RoutingInfo &routingInfo,
+                             uint16_t track = 0) const;
+  bool operator==(const OriginFile &o) const { return serde::equals(*this, o); }
+};
+
 struct Directory {
   struct Lock {
     SERDE_STRUCT_FIELD(client, ClientId(Uuid::zero(), ""));
@@ -314,7 +341,7 @@ struct Symlink {
 };
 
 struct InodeData {
-  SERDE_STRUCT_FIELD(type, (std::variant<File, Directory, Symlink>()));
+  SERDE_STRUCT_FIELD(type, (std::variant<File, Directory, Symlink, OriginFile>()));
   SERDE_STRUCT_FIELD(acl, Acl());
   SERDE_STRUCT_FIELD(nlink, uint16_t(1));
   // 2023/6/1 as default inode timestamps
@@ -349,7 +376,17 @@ struct InodeData {
   INODE_TYPE_FUNC(File)
   INODE_TYPE_FUNC(Directory)
   INODE_TYPE_FUNC(Symlink)
+  INODE_TYPE_FUNC(OriginFile)
 #undef INODE_TYPE_FUNC
+
+  bool isRegularFileLike() const { return isFile() || isOriginFile(); }
+  uint64_t fileLength() const;
+  const Layout &fileLayout() const;
+  Result<ChunkId> getChunkId(InodeId id, uint64_t offset) const;
+  Result<ChainId> getChainId(const Inode &inode,
+                             size_t offset,
+                             const flat::RoutingInfo &routingInfo,
+                             uint16_t track = 0) const;
 
   Result<Void> valid() const {
     XLOGF_IF(FATAL, type.valueless_by_exception(), "InodeType is valueless");
@@ -396,7 +433,10 @@ struct DirEntryData {
   INODE_TYPE_FUNC(File)
   INODE_TYPE_FUNC(Directory)
   INODE_TYPE_FUNC(Symlink)
+  INODE_TYPE_FUNC(OriginFile)
 #undef INODE_TYPE_FUNC
+
+  bool isRegularFileLike() const { return isFile() || isOriginFile(); }
 
   Result<Void> valid() const {
     if (!magic_enum::enum_contains(type)) return INVALID(fmt::format("invalid type {}", (int)type));

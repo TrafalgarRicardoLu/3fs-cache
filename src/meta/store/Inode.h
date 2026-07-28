@@ -31,10 +31,19 @@ class Inode : public meta::Inode {
 
   Inode(Base base)
       : Base(std::move(base)) {}
-  Inode(InodeId id, Acl acl, UtcTime time, std::variant<File, Directory, Symlink> type)
+  Inode(InodeId id, Acl acl, UtcTime time, std::variant<File, Directory, Symlink, OriginFile> type)
       : Base{id, InodeData{type, acl, 1, time, time, time}} {}
 
   static Inode newFile(InodeId id, Acl acl, Layout layout, UtcTime time) { return Inode(id, acl, time, File(layout)); }
+
+  static Inode newOriginFile(InodeId id,
+                             Acl acl,
+                             uint64_t length,
+                             Layout layout,
+                             cache::ImmutableObjectIdentity object,
+                             UtcTime time) {
+    return Inode(id, acl, time, OriginFile(length, std::move(layout), std::move(object)));
+  }
 
   static Inode newDirectory(InodeId id, InodeId parent, std::string name, Acl acl, Layout layout, UtcTime time) {
     return Inode(id, acl, time, Directory{parent, std::move(layout), std::move(name)});

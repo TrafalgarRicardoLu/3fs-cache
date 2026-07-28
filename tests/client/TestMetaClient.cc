@@ -71,6 +71,9 @@
       case InodeType::Symlink:                                                                                        \
         CO_ASSERT_EQ(_e.asSymlink(), _a.asSymlink()) << fmt::format("{} {}", _e.asSymlink(), _a.asSymlink());         \
         break;                                                                                                        \
+      case InodeType::OriginFile:                                                                                     \
+        CO_ASSERT_EQ(_e.asOriginFile(), _a.asOriginFile());                                                           \
+        break;                                                                                                        \
     }                                                                                                                 \
   } while (false)
 

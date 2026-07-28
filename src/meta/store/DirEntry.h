@@ -57,6 +57,9 @@ class DirEntry : public meta::DirEntry {
   static DirEntry newFile(InodeId parent, std::string name, InodeId inode) {
     return meta::DirEntry(parent, name, {inode, InodeType::File});
   }
+  static DirEntry newOriginFile(InodeId parent, std::string name, InodeId inode) {
+    return meta::DirEntry(parent, name, {inode, InodeType::OriginFile});
+  }
   static DirEntry newSymlink(InodeId parent, std::string name, InodeId inode) {
     return meta::DirEntry(parent, name, {inode, InodeType::Symlink});
   }

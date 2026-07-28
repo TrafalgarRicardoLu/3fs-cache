@@ -345,10 +345,11 @@ struct RoutingInfoChecker {
   static constexpr bool hasInode() { return hasInode<typename T::value_type>(); }
 
   static bool checkRoutingInfo(const Inode &inode, const flat::RoutingInfo &routing) {
-    if (inode.isFile()) {
-      auto table = inode.asFile().layout.tableId;
-      auto tableVer = inode.asFile().layout.tableVersion;
-      switch (inode.asFile().layout.type()) {
+    if (inode.isRegularFileLike()) {
+      const auto &layout = inode.fileLayout();
+      auto table = layout.tableId;
+      auto tableVer = layout.tableVersion;
+      switch (layout.type()) {
         case Layout::Type::ChainRange:
           XLOGF_IF(DFATAL, (!table || !tableVer), "File {}, invalid layout", inode);
           if (!routing.getChainTable(table, tableVer)) {
