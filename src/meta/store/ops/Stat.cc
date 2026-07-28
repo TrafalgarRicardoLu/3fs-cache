@@ -47,6 +47,7 @@ class StatOp : public ReadOnlyOperation<StatRsp> {
 
     switch (stat->getType()) {
       case InodeType::File:
+      case InodeType::OriginFile:
         statFile.addSample(1);
         break;
       case InodeType::Directory:

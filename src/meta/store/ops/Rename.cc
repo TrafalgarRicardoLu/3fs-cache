@@ -165,6 +165,9 @@ class RenameOp : public Operation<RenameRsp> {
 
     auto &entry = *resolve.dirEntry;
     CO_RETURN_ON_ERROR(co_await snapshotLoadInode(txn, entry, inode));
+    if (inode->isOriginFile()) {
+      co_return makeError(CacheCode::kReadOnlyOriginFile);
+    }
     if (inode->acl.iflags & FS_IMMUTABLE_FL) {
       auto msg = fmt::format("rename can't move {}, FS_IMMUTABLE_FL set on inode", entry);
       XLOG(DBG, msg);
@@ -261,6 +264,10 @@ class RenameOp : public Operation<RenameRsp> {
     // check src InodeId
     if (req_.inodeId && srcResult->dirEntry->id != req_.inodeId) {
       co_return MAKE_ERROR_F(MetaCode::kNotFound, "rename src {}, inodeId != {}", *srcResult->dirEntry, *req_.inodeId);
+    }
+    if (srcResult->dirEntry->isOriginFile() ||
+        (dstResult->dirEntry.has_value() && dstResult->dirEntry->isOriginFile())) {
+      co_return makeError(CacheCode::kReadOnlyOriginFile);
     }
     // if src and dst points to same dir entry, do nothing
     if (dstResult->dirEntry.has_value() && dstResult->dirEntry->parent == srcResult->dirEntry->parent &&

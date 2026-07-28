@@ -69,6 +69,8 @@ class HardLinkOp : public Operation<HardLinkRsp> {
       case InodeType::File:
         entry = DirEntry::newFile(parentId, req_.newPath.path->filename().native(), inode.id);
         break;
+      case InodeType::OriginFile:
+        co_return makeError(CacheCode::kReadOnlyOriginFile);
       case InodeType::Directory:
         co_return makeError(MetaCode::kIsDirectory);
       case InodeType::Symlink:

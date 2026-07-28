@@ -202,21 +202,20 @@ void fillLinuxStat(struct ::stat &statbuf, const Inode &inode) {
   statbuf.st_dev = statbuf.st_rdev = 0;
   statbuf.st_ino = linux_ino(inode.id);
 
-  statbuf.st_blksize = inode.isSymlink()
-                           ? 0
-                           : (inode.isDirectory() ? inode.asDirectory().layout : inode.asFile().layout).chunkSize.u32();
+  statbuf.st_blksize =
+      inode.isSymlink() ? 0 : (inode.isDirectory() ? inode.asDirectory().layout : inode.fileLayout()).chunkSize.u32();
 
-  auto type = inode.isFile() ? S_IFREG : inode.isDirectory() ? S_IFDIR : inode.isSymlink() ? S_IFLNK : 0;
+  auto type = inode.isRegularFileLike() ? S_IFREG : inode.isDirectory() ? S_IFDIR : inode.isSymlink() ? S_IFLNK : 0;
   XLOGF_IF(FATAL, !type, "Invalid inode type, {}", inode);
 
   statbuf.st_mode = (inode.acl.perm.toUnderType() & ALLPERMS) | type;
   statbuf.st_nlink = inode.nlink;
   statbuf.st_uid = inode.acl.uid.toUnderType();
   statbuf.st_gid = inode.acl.gid.toUnderType();
-  statbuf.st_size = inode.isFile()      ? inode.asFile().length
-                    : inode.isSymlink() ? inode.asSymlink().target.native().size()
-                                        : 0;
-  statbuf.st_blocks = inode.isFile() ? (statbuf.st_size + 511) / 512 : 0;  // we don't allow holes
+  statbuf.st_size = inode.isRegularFileLike() ? inode.fileLength()
+                    : inode.isSymlink()       ? inode.asSymlink().target.native().size()
+                                              : 0;
+  statbuf.st_blocks = inode.isRegularFileLike() ? (statbuf.st_size + 511) / 512 : 0;  // we don't allow holes
   setTime(statbuf.st_atim, inode.atime);
   setTime(statbuf.st_mtim, inode.mtime);
   setTime(statbuf.st_ctim, inode.ctime);
@@ -2065,6 +2064,10 @@ void hf3fs_ioctl(fuse_req_t req,
       auto arg = (hf3fs::lib::fuse::Hf3fsIoctlPunchHoleArg *)in_buf;
       std::vector<storage::client::RemoveChunksOp> removeOps;
       auto pi = inodeOf(ino);
+      if (pi->inode.isOriginFile()) {
+        fuse_reply_err(req, EROFS);
+        return;
+      }
       auto file = pi->inode.asFile();
       auto chunkSize = file.layout.chunkSize;
       auto routingInfo = d.mgmtdClient->getRoutingInfo();
@@ -2618,6 +2621,9 @@ CoTryTask<uint64_t> RcInode::beginWrite(flat::UserInfo userInfo,
                                         meta::client::MetaClient &meta,
                                         uint64_t offset,
                                         uint64_t length) {
+  if (inode.isOriginFile()) {
+    co_return makeError(CacheCode::kReadOnlyOriginFile);
+  }
   auto stripe = std::min((uint32_t)folly::divCeil(offset + length, (uint64_t)inode.asFile().layout.chunkSize),
                          inode.asFile().layout.stripeSize);
   {

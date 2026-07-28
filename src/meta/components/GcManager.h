@@ -146,6 +146,7 @@ class GcManager {
     CoTryTask<void> run(GcManager &manager);
     CoTryTask<void> gcDirectory(GcManager &manager);
     CoTryTask<void> gcFile(GcManager &manager);
+    CoTryTask<void> gcOriginFile(GcManager &manager);
 
     CoTryTask<void> removeEntry(GcManager &manager,
                                 IReadWriteTransaction &txn,

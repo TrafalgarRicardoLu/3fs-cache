@@ -106,6 +106,9 @@ class RemoveOp : public Operation<RemoveRsp> {
     auto loadInodeResult = co_await entry.snapshotLoadInode(txn);
     CO_RETURN_ON_ERROR(loadInodeResult);
     auto &inode = *loadInodeResult;
+    if (inode.isOriginFile()) {
+      co_return makeError(CacheCode::kReadOnlyOriginFile);
+    }
     if ((parent->acl.perm & S_ISVTX) && req_.user.uid != parent->acl.uid && !req_.user.isRoot() &&
         req_.user.uid != inode.acl.uid) {
       auto msg = fmt::format("can't remove {}, S_ISVTX set on parent {} {}", entry, parent->id, parent->acl);

@@ -190,6 +190,8 @@ CoTryTask<void> GcManager::GcDirectory::add(auto &txn, const Inode &inode, const
   switch (inode.getType()) {
     case InodeType::File:
       co_return co_await addFile(txn, inode, config);
+    case InodeType::OriginFile:
+      co_return co_await addFile(txn, inode, config);
     case InodeType::Directory:
       // only directory need gcInfo
       co_return co_await addDirectory(txn, inode, gcInfo);
@@ -200,14 +202,16 @@ CoTryTask<void> GcManager::GcDirectory::add(auto &txn, const Inode &inode, const
 
 CoTryTask<void> GcManager::GcDirectory::addFile(auto &txn, const Inode &inode, const GcConfig &config) {
   auto prefix = prefixOf(GcEntryType::FILE_MEDIUM);
-  auto chunks = inode.asFile().length / inode.asFile().layout.chunkSize;
+  auto chunks = inode.fileLength() / inode.fileLayout().chunkSize;
   if (chunks >= config.large_file_chunks()) {
     prefix = prefixOf(GcEntryType::FILE_LARGE);
   }
   if (chunks < config.small_file_chunks()) {
     prefix = prefixOf(GcEntryType::FILE_SMALL);
   }
-  auto entry = DirEntry::newFile(dirId(), formatGcEntry(prefix, UtcClock::now(), inode.id), inode.id);
+  auto name = formatGcEntry(prefix, UtcClock::now(), inode.id);
+  auto entry = inode.isOriginFile() ? DirEntry::newOriginFile(dirId(), std::move(name), inode.id)
+                                    : DirEntry::newFile(dirId(), std::move(name), inode.id);
   CO_RETURN_ON_ERROR(co_await entry.store(txn));
   XLOGF(DBG, "GcManager create GC entry {}", entry);
   co_return Void{};
@@ -258,6 +262,9 @@ CoTryTask<void> GcManager::GcTask::run(GcManager &manager) {
   switch (taskEntry.type) {
     case InodeType::File:
       result = co_await gcFile(manager);
+      break;
+    case InodeType::OriginFile:
+      result = co_await gcOriginFile(manager);
       break;
     case InodeType::Directory:
       result = co_await gcDirectory(manager);
@@ -454,6 +461,18 @@ CoTryTask<void> GcManager::GcTask::gcFile(GcManager &manager) {
   }
 
   co_return Void{};
+}
+
+CoTryTask<void> GcManager::GcTask::gcOriginFile(GcManager &manager) {
+  auto session =
+      co_await manager.runReadOnly([&](auto &txn) { return FileSession::snapshotCheckExists(txn, taskEntry.id); });
+  CO_RETURN_ON_ERROR(session);
+  if (*session) {
+    co_return makeError(MetaCode::kBusy, "origin file still has an open session");
+  }
+  // Origin chunks must be retired through the generation-fenced cleanup workflow.
+  // Until that workflow marks the cleanup job complete, generic GC must never call FileHelper::remove().
+  co_return makeError(MetaCode::kBusy, "origin file cache cleanup is not complete");
 }
 
 CoTryTask<void> GcManager::GcTask::removeEntry(GcManager &manager,

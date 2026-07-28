@@ -270,7 +270,7 @@ CoTryTask<ResolveResult> PathResolveOp::pathRange(InodeId parentId,
       }
     }
 
-    if (resolveResult->dirEntry->isFile()) {
+    if (resolveResult->dirEntry->isRegularFileLike()) {
       co_return makeError(MetaCode::kNotDirectory);
     }
 

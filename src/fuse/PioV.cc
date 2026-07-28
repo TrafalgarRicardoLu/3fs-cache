@@ -61,6 +61,9 @@ hf3fs::Result<Void> PioV::addWrite(size_t idx,
                                    storage::client::IOBuffer &memh) {
   if (!rios_.empty()) {
     return makeError(StatusCode::kInvalidArg, "adding write to read operations");
+  } else if (inode.isOriginFile()) {
+    res_[idx] = -static_cast<ssize_t>(CacheCode::kReadOnlyOriginFile);
+    return Void{};
   } else if (!inode.isFile()) {
     res_[idx] = -static_cast<ssize_t>(MetaCode::kNotFile);
     return Void{};
