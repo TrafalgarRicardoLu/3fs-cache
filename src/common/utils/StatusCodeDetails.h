@@ -17,6 +17,7 @@
 #define CLIENT_AGENT_STATUS(...) STATUS(ClientAgent, __VA_ARGS__)
 #define CLI_STATUS(...) STATUS(Cli, __VA_ARGS__)
 #define KV_SERVICE_STATUS(...) STATUS(KvService, __VA_ARGS__)
+#define CACHE_STATUS(...) STATUS(Cache, __VA_ARGS__)
 
 COMMON_STATUS(OK, 0)
 COMMON_STATUS(NotImplemented, 1)
@@ -258,6 +259,15 @@ KV_SERVICE_STATUS(UpdateConflict, 11000)
 KV_SERVICE_STATUS(OperatingByOthers, 11001)
 KV_SERVICE_STATUS(StoreNotFound, 11002)
 KV_SERVICE_STATUS(StoreNotAvailable, 11003)
+
+/* 12xxx: cache errors. */
+CACHE_STATUS(FeatureDisabled, 12000)
+CACHE_STATUS(UpgradeRequired, 12001)
+CACHE_STATUS(VersionMismatch, 12002)
+CACHE_STATUS(StaleGeneration, 12003)
+CACHE_STATUS(CapacityExceeded, 12004)
+CACHE_STATUS(StateConflict, 12005)
+CACHE_STATUS(ReadOnlyOriginFile, 12006)
 KV_SERVICE_STATUS(StoreLoaded, 11004)
 KV_SERVICE_STATUS(ClusterIdMismatch, 11005)
 KV_SERVICE_STATUS(NotPrimary, 11006)

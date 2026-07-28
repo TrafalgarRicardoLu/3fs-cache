@@ -35,6 +35,7 @@ enum class StatusCodeType {
   ClientAgent,
   Cli,
   KvService,
+  Cache,
 };
 
 namespace StatusCode {

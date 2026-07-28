@@ -56,6 +56,7 @@ int toErrno(status_code_t code) {
     case StatusCode::kAuthenticationFail:
       return EPERM;
     case StatusCode::kReadOnlyMode:
+    case CacheCode::kReadOnlyOriginFile:
       return EROFS;
     case MetaCode::kRequestCanceled:
     case StorageClientCode::kRequestCanceled:
