@@ -38,6 +38,18 @@ IMPL_META_STUB_METHOD(lockDirectory, LockDirectoryReq, LockDirectoryRsp);
 IMPL_META_STUB_METHOD(testRpc, TestRpcReq, TestRpcRsp);
 IMPL_META_STUB_METHOD(batchStat, BatchStatReq, BatchStatRsp);
 IMPL_META_STUB_METHOD(batchStatByPath, BatchStatByPathReq, BatchStatByPathRsp);
+IMPL_META_STUB_METHOD(importOriginFile, ImportOriginFileReq, ImportOriginFileRsp);
+IMPL_META_STUB_METHOD(batchImportOriginFiles, BatchImportOriginFilesReq, BatchImportOriginFilesRsp);
+IMPL_META_STUB_METHOD(refreshOriginFile, RefreshOriginFileReq, RefreshOriginFileRsp);
+IMPL_META_STUB_METHOD(getFileReadPlan, GetFileReadPlanReq, GetFileReadPlanRsp);
+IMPL_META_STUB_METHOD(enqueueCacheBlocks, EnqueueCacheBlocksReq, EnqueueCacheBlocksRsp);
+IMPL_META_STUB_METHOD(acquireCacheBlocks, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
+IMPL_META_STUB_METHOD(commitCacheBlocks, CommitCacheBlocksReq, CommitCacheBlocksRsp);
+IMPL_META_STUB_METHOD(failCacheBlocks, FailCacheBlocksReq, FailCacheBlocksRsp);
+IMPL_META_STUB_METHOD(beginCleanCacheBlocks, BeginCleanCacheBlocksReq, BeginCleanCacheBlocksRsp);
+IMPL_META_STUB_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
+IMPL_META_STUB_METHOD(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
+IMPL_META_STUB_METHOD(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
 
 template class MetaServiceStub<serde::ClientContext>;
 template class MetaServiceStub<serde::ClientMockContext>;

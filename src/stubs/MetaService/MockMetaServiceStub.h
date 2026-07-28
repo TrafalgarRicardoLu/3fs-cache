@@ -50,6 +50,18 @@ class DummyMetaServiceStub : public IMetaServiceStub {
   NOT_IMPLEMENTED_FUNC(testRpc, TestRpcReq, TestRpcRsp);
   NOT_IMPLEMENTED_FUNC(batchStat, BatchStatReq, BatchStatRsp);
   NOT_IMPLEMENTED_FUNC(batchStatByPath, BatchStatByPathReq, BatchStatByPathRsp);
+  NOT_IMPLEMENTED_FUNC(importOriginFile, ImportOriginFileReq, ImportOriginFileRsp);
+  NOT_IMPLEMENTED_FUNC(batchImportOriginFiles, BatchImportOriginFilesReq, BatchImportOriginFilesRsp);
+  NOT_IMPLEMENTED_FUNC(refreshOriginFile, RefreshOriginFileReq, RefreshOriginFileRsp);
+  NOT_IMPLEMENTED_FUNC(getFileReadPlan, GetFileReadPlanReq, GetFileReadPlanRsp);
+  NOT_IMPLEMENTED_FUNC(enqueueCacheBlocks, EnqueueCacheBlocksReq, EnqueueCacheBlocksRsp);
+  NOT_IMPLEMENTED_FUNC(acquireCacheBlocks, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
+  NOT_IMPLEMENTED_FUNC(commitCacheBlocks, CommitCacheBlocksReq, CommitCacheBlocksRsp);
+  NOT_IMPLEMENTED_FUNC(failCacheBlocks, FailCacheBlocksReq, FailCacheBlocksRsp);
+  NOT_IMPLEMENTED_FUNC(beginCleanCacheBlocks, BeginCleanCacheBlocksReq, BeginCleanCacheBlocksRsp);
+  NOT_IMPLEMENTED_FUNC(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
+  NOT_IMPLEMENTED_FUNC(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
+  NOT_IMPLEMENTED_FUNC(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
 
   virtual CoTryTask<AuthRsp> authenticate(const AuthReq &req) { co_return AuthRsp{req.user}; }
   CoTryTask<AuthRsp> authenticate(const AuthReq &req, const net::UserRequestOptions &, serde::Timestamp *) override {
@@ -138,6 +150,18 @@ class MetaServiceStub<hf3fs::stubs::StubMockContext<IMetaServiceStub>> : public 
   FORWARD_RPC_FUNC(testRpc, TestRpcReq, TestRpcRsp);
   FORWARD_RPC_FUNC(batchStat, BatchStatReq, BatchStatRsp);
   FORWARD_RPC_FUNC(batchStatByPath, BatchStatByPathReq, BatchStatByPathRsp);
+  FORWARD_RPC_FUNC(importOriginFile, ImportOriginFileReq, ImportOriginFileRsp);
+  FORWARD_RPC_FUNC(batchImportOriginFiles, BatchImportOriginFilesReq, BatchImportOriginFilesRsp);
+  FORWARD_RPC_FUNC(refreshOriginFile, RefreshOriginFileReq, RefreshOriginFileRsp);
+  FORWARD_RPC_FUNC(getFileReadPlan, GetFileReadPlanReq, GetFileReadPlanRsp);
+  FORWARD_RPC_FUNC(enqueueCacheBlocks, EnqueueCacheBlocksReq, EnqueueCacheBlocksRsp);
+  FORWARD_RPC_FUNC(acquireCacheBlocks, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
+  FORWARD_RPC_FUNC(commitCacheBlocks, CommitCacheBlocksReq, CommitCacheBlocksRsp);
+  FORWARD_RPC_FUNC(failCacheBlocks, FailCacheBlocksReq, FailCacheBlocksRsp);
+  FORWARD_RPC_FUNC(beginCleanCacheBlocks, BeginCleanCacheBlocksReq, BeginCleanCacheBlocksRsp);
+  FORWARD_RPC_FUNC(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
+  FORWARD_RPC_FUNC(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
+  FORWARD_RPC_FUNC(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
 
 #undef FORWARD_RPC_FUNC
 

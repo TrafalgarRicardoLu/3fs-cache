@@ -38,6 +38,18 @@ class MetaServiceStub : public IMetaServiceStub {
   META_STUB_METHOD(testRpc, TestRpcReq, TestRpcRsp);
   META_STUB_METHOD(batchStat, BatchStatReq, BatchStatRsp);
   META_STUB_METHOD(batchStatByPath, BatchStatByPathReq, BatchStatByPathRsp);
+  META_STUB_METHOD(importOriginFile, ImportOriginFileReq, ImportOriginFileRsp);
+  META_STUB_METHOD(batchImportOriginFiles, BatchImportOriginFilesReq, BatchImportOriginFilesRsp);
+  META_STUB_METHOD(refreshOriginFile, RefreshOriginFileReq, RefreshOriginFileRsp);
+  META_STUB_METHOD(getFileReadPlan, GetFileReadPlanReq, GetFileReadPlanRsp);
+  META_STUB_METHOD(enqueueCacheBlocks, EnqueueCacheBlocksReq, EnqueueCacheBlocksRsp);
+  META_STUB_METHOD(acquireCacheBlocks, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
+  META_STUB_METHOD(commitCacheBlocks, CommitCacheBlocksReq, CommitCacheBlocksRsp);
+  META_STUB_METHOD(failCacheBlocks, FailCacheBlocksReq, FailCacheBlocksRsp);
+  META_STUB_METHOD(beginCleanCacheBlocks, BeginCleanCacheBlocksReq, BeginCleanCacheBlocksRsp);
+  META_STUB_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
+  META_STUB_METHOD(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
+  META_STUB_METHOD(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
 
 #undef META_STUB_METHOD
 

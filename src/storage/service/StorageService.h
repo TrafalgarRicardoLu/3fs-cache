@@ -99,6 +99,20 @@ class StorageService : public serde::ServiceWrapper<StorageService, storage::Sto
     return storageOperator_.getAllChunkMetadata(req);
   }
 
+  CoTryTask<ReplaceCacheChunksRsp> replaceCacheChunks(serde::CallContext &, const ReplaceCacheChunksReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+
+  CoTryTask<RetireCacheChunkGenerationsRsp> retireCacheChunkGenerations(serde::CallContext &,
+                                                                        const RetireCacheChunkGenerationsReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+
+  CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(serde::CallContext &,
+                                                                      const QueryCacheChunkGenerationsReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+
  private:
   void reportReadQueueLatency(serde::CallContext &ctx);
   void reportUpdateQueueLatency(serde::CallContext &ctx);

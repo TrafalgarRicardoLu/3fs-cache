@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <folly/logging/xlog.h>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <type_traits>
 #include <variant>
@@ -693,6 +694,287 @@ struct LockDirectoryRsp : RspBase {
   LockDirectoryRsp() = default;
 };
 
+inline constexpr size_t kMaxCacheBatchItems = 1000;
+
+enum class ImportOriginFileOutcome : uint8_t {
+  CREATED,
+  ALREADY_EXISTS,
+};
+
+struct OriginFileMetadata {
+  SERDE_STRUCT_FIELD(object, cache::ImmutableObjectIdentity{});
+  SERDE_STRUCT_FIELD(objectSize, uint64_t{0});
+  SERDE_STRUCT_FIELD(tableId, flat::ChainTableId{});
+  SERDE_STRUCT_FIELD(blockSize, uint32_t{0});
+  SERDE_STRUCT_FIELD(stripeSize, uint32_t{0});
+  SERDE_STRUCT_FIELD(permission, Permission{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(object.valid());
+    if (!tableId || blockSize == 0 || stripeSize == 0) return INVALID("invalid OriginFile layout");
+    auto blocks = objectSize / blockSize + (objectSize % blockSize != 0);
+    if (blocks > std::numeric_limits<uint32_t>::max()) return INVALID("object has too many cache blocks");
+    return VALID;
+  }
+};
+
+struct ImportOriginFileEntry {
+  SERDE_STRUCT_FIELD(path, PathAt{});
+  SERDE_STRUCT_FIELD(metadata, OriginFileMetadata{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(path.validForCreate());
+    return metadata.valid();
+  }
+};
+
+struct ImportOriginFileReq : ReqBase {
+  SERDE_STRUCT_FIELD(entry, ImportOriginFileEntry{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const { return entry.valid(); }
+};
+
+struct ImportOriginFileRsp : RspBase {
+  SERDE_STRUCT_FIELD(inode, Inode{});
+  SERDE_STRUCT_FIELD(outcome, ImportOriginFileOutcome::CREATED);
+};
+
+struct BatchImportOriginFilesReq : ReqBase {
+  SERDE_STRUCT_FIELD(entries, std::vector<ImportOriginFileEntry>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (entries.size() > kMaxCacheBatchItems) return makeError(CacheCode::kRequestTooLarge, "too many import entries");
+    for (const auto &entry : entries) RETURN_ON_ERROR(entry.valid());
+    return VALID;
+  }
+};
+
+struct BatchImportOriginFilesRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<ImportOriginFileRsp>>{});
+};
+
+struct RefreshOriginFileReq : ReqBase {
+  SERDE_STRUCT_FIELD(requestId, Uuid::zero());
+  SERDE_STRUCT_FIELD(path, PathAt{});
+  SERDE_STRUCT_FIELD(expectedInode, InodeId{});
+  SERDE_STRUCT_FIELD(oldObject, cache::ImmutableObjectIdentity{});
+  SERDE_STRUCT_FIELD(newMetadata, OriginFileMetadata{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (requestId == Uuid::zero()) return INVALID("requestId not set");
+    RETURN_ON_ERROR(path.validForCreate());
+    RETURN_ON_ERROR(oldObject.valid());
+    return newMetadata.valid();
+  }
+};
+
+struct RefreshOriginFileRsp : RspBase {
+  SERDE_STRUCT_FIELD(newInode, Inode{});
+  SERDE_STRUCT_FIELD(cleanupJobId, Uuid::zero());
+};
+
+struct ReadBlockPlan {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(fileRange, cache::ByteRange{});
+  SERDE_STRUCT_FIELD(originRange, cache::ByteRange{});
+  SERDE_STRUCT_FIELD(state, cache::CacheBlockState::NONE);
+  SERDE_STRUCT_FIELD(chunkId, (ChunkId(InodeId{}, 0, 0)));
+  SERDE_STRUCT_FIELD(chainId, flat::ChainId{});
+  SERDE_STRUCT_FIELD(actualBlockLength, uint64_t{0});
+  SERDE_STRUCT_FIELD(loadEpoch, uint64_t{0});
+  SERDE_STRUCT_FIELD(ready, std::optional<cache::ReadyIdentity>{});
+};
+
+struct GetFileReadPlanReq : ReqBase {
+  SERDE_STRUCT_FIELD(openSessionId, Uuid::zero());
+  SERDE_STRUCT_FIELD(inode, InodeId{});
+  SERDE_STRUCT_FIELD(offset, uint64_t{0});
+  SERDE_STRUCT_FIELD(length, uint64_t{0});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (openSessionId == Uuid::zero()) return INVALID("openSessionId not set");
+    if (length && offset > std::numeric_limits<uint64_t>::max() - length) return INVALID("read range overflow");
+    return VALID;
+  }
+};
+
+struct GetFileReadPlanRsp : RspBase {
+  SERDE_STRUCT_FIELD(inode, InodeId{});
+  SERDE_STRUCT_FIELD(object, cache::ImmutableObjectIdentity{});
+  SERDE_STRUCT_FIELD(blocks, std::vector<ReadBlockPlan>{});
+};
+
+struct CacheServiceIdentity {
+  SERDE_STRUCT_FIELD(name, String{});
+  SERDE_STRUCT_FIELD(token, String{});
+
+ public:
+  Result<Void> valid() const {
+    if (name.empty() || token.empty()) return INVALID("invalid service identity");
+    return VALID;
+  }
+};
+
+struct CacheBlockRequestBase {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(blockLength, uint64_t{0});
+
+ public:
+  Result<Void> valid() const { return key.valid(); }
+};
+
+struct CacheBlockLease {
+  SERDE_STRUCT_FIELD(loaderId, Uuid::zero());
+  SERDE_STRUCT_FIELD(loadEpoch, uint64_t{0});
+  SERDE_STRUCT_FIELD(cacheGeneration, cache::CacheGeneration{});
+};
+
+struct CacheBlockMutationResult {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(state, cache::CacheBlockState::NONE);
+};
+
+#define CACHE_BOUNDED_REQ(NAME, ITEM)                                                \
+  struct NAME##Req : ReqBase {                                                       \
+    SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});                             \
+    SERDE_STRUCT_FIELD(items, std::vector<ITEM>{});                                  \
+                                                                                     \
+   public:                                                                           \
+    Result<Void> valid() const {                                                     \
+      RETURN_ON_ERROR(service.valid());                                              \
+      if (items.size() > kMaxCacheBatchItems)                                        \
+        return makeError(CacheCode::kRequestTooLarge, "too many cache block items"); \
+      for (const auto &item : items) RETURN_ON_ERROR(item.valid());                  \
+      return VALID;                                                                  \
+    }                                                                                \
+  }
+
+CACHE_BOUNDED_REQ(EnqueueCacheBlocks, CacheBlockRequestBase);
+struct EnqueueCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CacheBlockMutationResult>>{});
+};
+
+CACHE_BOUNDED_REQ(AcquireCacheBlocks, CacheBlockRequestBase);
+struct AcquireCacheBlockResult {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(lease, CacheBlockLease{});
+};
+struct AcquireCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<AcquireCacheBlockResult>>{});
+};
+
+struct CommitCacheBlockItem {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(loaderId, Uuid::zero());
+  SERDE_STRUCT_FIELD(loadEpoch, uint64_t{0});
+  SERDE_STRUCT_FIELD(cacheGeneration, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(blockLength, uint64_t{0});
+  SERDE_STRUCT_FIELD(checksumType, uint8_t{0});
+  SERDE_STRUCT_FIELD(checksumValue, uint32_t{0});
+
+ public:
+  Result<Void> valid() const { return key.valid(); }
+};
+CACHE_BOUNDED_REQ(CommitCacheBlocks, CommitCacheBlockItem);
+struct CommitCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CacheBlockMutationResult>>{});
+};
+
+struct FailCacheBlockItem {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(loaderId, Uuid::zero());
+  SERDE_STRUCT_FIELD(loadEpoch, uint64_t{0});
+
+ public:
+  Result<Void> valid() const { return key.valid(); }
+};
+CACHE_BOUNDED_REQ(FailCacheBlocks, FailCacheBlockItem);
+struct FailCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CacheBlockMutationResult>>{});
+};
+
+struct BeginCleanCacheBlockItem {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(expectedReady, std::optional<cache::ReadyIdentity>{});
+  SERDE_STRUCT_FIELD(observedGeneration, std::optional<cache::CacheGeneration>{});
+  SERDE_STRUCT_FIELD(terminalState, cache::CleanupTerminalState::NONE);
+
+ public:
+  Result<Void> valid() const { return key.valid(); }
+};
+CACHE_BOUNDED_REQ(BeginCleanCacheBlocks, BeginCleanCacheBlockItem);
+struct BeginCleanCacheBlockResult {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(cleanupEpoch, cache::CleanupEpoch{});
+  SERDE_STRUCT_FIELD(deleteGeneration, cache::CacheGeneration{});
+};
+struct BeginCleanCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<BeginCleanCacheBlockResult>>{});
+};
+
+struct FinishCleanCacheBlockItem {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(cleanupEpoch, cache::CleanupEpoch{});
+
+ public:
+  Result<Void> valid() const { return key.valid(); }
+};
+CACHE_BOUNDED_REQ(FinishCleanCacheBlocks, FinishCleanCacheBlockItem);
+struct FinishCleanCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CacheBlockMutationResult>>{});
+};
+
+#undef CACHE_BOUNDED_REQ
+
+struct GetCacheStatusReq : ReqBase {
+  SERDE_STRUCT_FIELD(inode, std::optional<InodeId>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const { return VALID; }
+};
+struct CacheStateCount {
+  SERDE_STRUCT_FIELD(state, cache::CacheBlockState::NONE);
+  SERDE_STRUCT_FIELD(count, uint64_t{0});
+};
+struct GetCacheStatusRsp : RspBase {
+  SERDE_STRUCT_FIELD(logicalCapacity, uint64_t{0});
+  SERDE_STRUCT_FIELD(usedCapacity, uint64_t{0});
+  SERDE_STRUCT_FIELD(stateCounts, std::vector<CacheStateCount>{});
+};
+
+struct ListCacheBlocksReq : ReqBase {
+  SERDE_STRUCT_FIELD(inode, InodeId{});
+  SERDE_STRUCT_FIELD(beginBlock, cache::CacheBlockIndex{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{1000});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (limit > kMaxCacheBatchItems) return makeError(CacheCode::kRequestTooLarge, "limit too large");
+    return VALID;
+  }
+};
+struct CacheBlockStatus {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(state, cache::CacheBlockState::NONE);
+  SERDE_STRUCT_FIELD(ready, std::optional<cache::ReadyIdentity>{});
+};
+struct ListCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(blocks, std::vector<CacheBlockStatus>{});
+  SERDE_STRUCT_FIELD(more, false);
+};
+
 // testRpc
 struct TestRpcReq : ReqBase {
   SERDE_STRUCT_FIELD(path, PathAt());
@@ -737,6 +1019,18 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(lockDirectory, 19, LockDirectoryReq, LockDirectoryRsp);
   META_SERVICE_METHOD(batchStat, 20, BatchStatReq, BatchStatRsp);
   META_SERVICE_METHOD(batchStatByPath, 21, BatchStatByPathReq, BatchStatByPathRsp);
+  META_SERVICE_METHOD(importOriginFile, 22, ImportOriginFileReq, ImportOriginFileRsp);
+  META_SERVICE_METHOD(batchImportOriginFiles, 23, BatchImportOriginFilesReq, BatchImportOriginFilesRsp);
+  META_SERVICE_METHOD(refreshOriginFile, 24, RefreshOriginFileReq, RefreshOriginFileRsp);
+  META_SERVICE_METHOD(getFileReadPlan, 25, GetFileReadPlanReq, GetFileReadPlanRsp);
+  META_SERVICE_METHOD(enqueueCacheBlocks, 26, EnqueueCacheBlocksReq, EnqueueCacheBlocksRsp);
+  META_SERVICE_METHOD(acquireCacheBlocks, 27, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
+  META_SERVICE_METHOD(commitCacheBlocks, 28, CommitCacheBlocksReq, CommitCacheBlocksRsp);
+  META_SERVICE_METHOD(failCacheBlocks, 29, FailCacheBlocksReq, FailCacheBlocksRsp);
+  META_SERVICE_METHOD(beginCleanCacheBlocks, 30, BeginCleanCacheBlocksReq, BeginCleanCacheBlocksRsp);
+  META_SERVICE_METHOD(finishCleanCacheBlocks, 31, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
+  META_SERVICE_METHOD(getCacheStatus, 32, GetCacheStatusReq, GetCacheStatusRsp);
+  META_SERVICE_METHOD(listCacheBlocks, 33, ListCacheBlocksReq, ListCacheBlocksRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

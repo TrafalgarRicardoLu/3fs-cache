@@ -1,5 +1,6 @@
 add_subdirectory(core)
 add_subdirectory(cache)
+add_subdirectory(cache_manager)
 add_subdirectory(mgmtd)
 add_subdirectory(meta)
 add_subdirectory(storage)

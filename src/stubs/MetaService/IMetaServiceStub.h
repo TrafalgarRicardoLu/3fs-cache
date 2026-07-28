@@ -41,6 +41,18 @@ class IMetaServiceStub {
   IMETA_STUB_METHOD(testRpc, TestRpcReq, TestRpcRsp);
   IMETA_STUB_METHOD(batchStat, BatchStatReq, BatchStatRsp);
   IMETA_STUB_METHOD(batchStatByPath, BatchStatByPathReq, BatchStatByPathRsp);
+  IMETA_STUB_METHOD(importOriginFile, ImportOriginFileReq, ImportOriginFileRsp);
+  IMETA_STUB_METHOD(batchImportOriginFiles, BatchImportOriginFilesReq, BatchImportOriginFilesRsp);
+  IMETA_STUB_METHOD(refreshOriginFile, RefreshOriginFileReq, RefreshOriginFileRsp);
+  IMETA_STUB_METHOD(getFileReadPlan, GetFileReadPlanReq, GetFileReadPlanRsp);
+  IMETA_STUB_METHOD(enqueueCacheBlocks, EnqueueCacheBlocksReq, EnqueueCacheBlocksRsp);
+  IMETA_STUB_METHOD(acquireCacheBlocks, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
+  IMETA_STUB_METHOD(commitCacheBlocks, CommitCacheBlocksReq, CommitCacheBlocksRsp);
+  IMETA_STUB_METHOD(failCacheBlocks, FailCacheBlocksReq, FailCacheBlocksRsp);
+  IMETA_STUB_METHOD(beginCleanCacheBlocks, BeginCleanCacheBlocksReq, BeginCleanCacheBlocksRsp);
+  IMETA_STUB_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
+  IMETA_STUB_METHOD(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
+  IMETA_STUB_METHOD(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
 
 #undef IMETA_STUB_METHOD
 };

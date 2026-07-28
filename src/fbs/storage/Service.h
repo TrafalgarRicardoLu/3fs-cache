@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/serde/Service.h"
+#include "fbs/storage/Cache.h"
 #include "fbs/storage/Common.h"
 
 namespace hf3fs::storage {
@@ -20,6 +21,9 @@ SERDE_SERVICE(StorageSerde, 3) {
   SERDE_SERVICE_METHOD(getAllChunkMetadata, 13, GetAllChunkMetadataReq, GetAllChunkMetadataRsp);
   SERDE_SERVICE_METHOD(offlineTarget, 16, OfflineTargetReq, OfflineTargetRsp);
   SERDE_SERVICE_METHOD(removeTarget, 17, RemoveTargetReq, RemoveTargetRsp);
+  SERDE_SERVICE_METHOD(replaceCacheChunks, 18, ReplaceCacheChunksReq, ReplaceCacheChunksRsp);
+  SERDE_SERVICE_METHOD(retireCacheChunkGenerations, 19, RetireCacheChunkGenerationsReq, RetireCacheChunkGenerationsRsp);
+  SERDE_SERVICE_METHOD(queryCacheChunkGenerations, 20, QueryCacheChunkGenerationsReq, QueryCacheChunkGenerationsRsp);
 };
 
 }  // namespace hf3fs::storage

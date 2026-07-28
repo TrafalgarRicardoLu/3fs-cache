@@ -221,6 +221,19 @@ class MetaClient {
 
   CoTryTask<void> lockDirectory(const UserInfo &userInfo, InodeId inode, LockDirectoryReq::LockAction action);
 
+  CoTryTask<ImportOriginFileRsp> importOriginFile(ImportOriginFileReq req);
+  CoTryTask<BatchImportOriginFilesRsp> batchImportOriginFiles(BatchImportOriginFilesReq req);
+  CoTryTask<RefreshOriginFileRsp> refreshOriginFile(RefreshOriginFileReq req);
+  CoTryTask<GetFileReadPlanRsp> getFileReadPlan(GetFileReadPlanReq req);
+  CoTryTask<EnqueueCacheBlocksRsp> enqueueCacheBlocks(EnqueueCacheBlocksReq req);
+  CoTryTask<AcquireCacheBlocksRsp> acquireCacheBlocks(AcquireCacheBlocksReq req);
+  CoTryTask<CommitCacheBlocksRsp> commitCacheBlocks(CommitCacheBlocksReq req);
+  CoTryTask<FailCacheBlocksRsp> failCacheBlocks(FailCacheBlocksReq req);
+  CoTryTask<BeginCleanCacheBlocksRsp> beginCleanCacheBlocks(BeginCleanCacheBlocksReq req);
+  CoTryTask<FinishCleanCacheBlocksRsp> finishCleanCacheBlocks(FinishCleanCacheBlocksReq req);
+  CoTryTask<GetCacheStatusRsp> getCacheStatus(GetCacheStatusReq req);
+  CoTryTask<ListCacheBlocksRsp> listCacheBlocks(ListCacheBlocksReq req);
+
   CoTryTask<Inode> extendStripe(const UserInfo &userInfo, InodeId inodeId, uint32_t stripe);
 
   CoTryTask<Void> testRpc();

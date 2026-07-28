@@ -1,4 +1,5 @@
 add_subdirectory(common)
 add_subdirectory(MetaService)
 add_subdirectory(mgmtd)
+add_subdirectory(cache_manager)
 add_subdirectory(core)

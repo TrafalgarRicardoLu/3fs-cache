@@ -466,6 +466,23 @@ struct DirEntry : DirEntryData {
 }  // namespace hf3fs::meta
 
 template <>
+struct hf3fs::serde::SerdeMethod<hf3fs::meta::ChunkId> {
+  static std::string serdeTo(const hf3fs::meta::ChunkId &chunk) { return chunk.pack(); }
+  static hf3fs::Result<hf3fs::meta::ChunkId> serdeFrom(std::string_view value) {
+    if (value.size() != sizeof(hf3fs::meta::ChunkId)) return hf3fs::makeError(hf3fs::StatusCode::kDataCorruption);
+    return hf3fs::meta::ChunkId::unpack(value);
+  }
+  static std::string serdeToReadable(const hf3fs::meta::ChunkId &chunk) {
+    return fmt::format("{}-{}-{}", chunk.inode().u64(), chunk.track(), chunk.chunk());
+  }
+  static hf3fs::Result<hf3fs::meta::ChunkId> serdeFromReadable(std::string_view value) {
+    auto [result, inode, track, chunk] = scn::scan_tuple<uint64_t, uint16_t, uint32_t>(value, "{}-{}-{}");
+    if (!result) return hf3fs::makeError(hf3fs::StatusCode::kDataCorruption);
+    return hf3fs::meta::ChunkId(hf3fs::meta::InodeId{inode}, track, chunk);
+  }
+};
+
+template <>
 struct hf3fs::serde::SerdeMethod<hf3fs::meta::InodeType> {
   static constexpr std::string_view serdeToReadable(hf3fs::meta::InodeType t) { return magic_enum::enum_name(t); }
 };

@@ -49,6 +49,8 @@ int toErrno(status_code_t code) {
 
     case StatusCode::kInvalidArg:
       return EINVAL;
+    case CacheCode::kRequestTooLarge:
+      return E2BIG;
     case StatusCode::kNotImplemented:
       return ENOSYS;
     case StatusCode::kNotEnoughMemory:

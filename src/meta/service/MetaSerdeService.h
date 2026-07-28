@@ -38,6 +38,22 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
   META_SERVICE_METHOD(batchStatByPath, BatchStatByPathReq, BatchStatByPathRsp);
 #undef META_SERVICE_METHOD
 
+#define CACHE_SERVICE_STUB(NAME, REQ, RESP) \
+  CoTryTask<RESP> NAME(serde::CallContext &, const REQ &) { co_return makeError(CacheCode::kFeatureDisabled); }
+  CACHE_SERVICE_STUB(importOriginFile, ImportOriginFileReq, ImportOriginFileRsp);
+  CACHE_SERVICE_STUB(batchImportOriginFiles, BatchImportOriginFilesReq, BatchImportOriginFilesRsp);
+  CACHE_SERVICE_STUB(refreshOriginFile, RefreshOriginFileReq, RefreshOriginFileRsp);
+  CACHE_SERVICE_STUB(getFileReadPlan, GetFileReadPlanReq, GetFileReadPlanRsp);
+  CACHE_SERVICE_STUB(enqueueCacheBlocks, EnqueueCacheBlocksReq, EnqueueCacheBlocksRsp);
+  CACHE_SERVICE_STUB(acquireCacheBlocks, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
+  CACHE_SERVICE_STUB(commitCacheBlocks, CommitCacheBlocksReq, CommitCacheBlocksRsp);
+  CACHE_SERVICE_STUB(failCacheBlocks, FailCacheBlocksReq, FailCacheBlocksRsp);
+  CACHE_SERVICE_STUB(beginCleanCacheBlocks, BeginCleanCacheBlocksReq, BeginCleanCacheBlocksRsp);
+  CACHE_SERVICE_STUB(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
+  CACHE_SERVICE_STUB(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
+  CACHE_SERVICE_STUB(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
+#undef CACHE_SERVICE_STUB
+
  private:
   MetaOperator &meta_;
 };

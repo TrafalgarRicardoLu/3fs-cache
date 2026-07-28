@@ -978,4 +978,20 @@ CoTryTask<void> MetaClient::lockDirectory(const UserInfo &userInfo,
       .then(RETURN_VOID);
 }
 
+#define META_CACHE_CLIENT_METHOD(NAME, REQ, RSP) \
+  CoTryTask<RSP> MetaClient::NAME(REQ req) { co_return co_await retry(&IMetaServiceStub::NAME, std::move(req)); }
+META_CACHE_CLIENT_METHOD(importOriginFile, ImportOriginFileReq, ImportOriginFileRsp);
+META_CACHE_CLIENT_METHOD(batchImportOriginFiles, BatchImportOriginFilesReq, BatchImportOriginFilesRsp);
+META_CACHE_CLIENT_METHOD(refreshOriginFile, RefreshOriginFileReq, RefreshOriginFileRsp);
+META_CACHE_CLIENT_METHOD(getFileReadPlan, GetFileReadPlanReq, GetFileReadPlanRsp);
+META_CACHE_CLIENT_METHOD(enqueueCacheBlocks, EnqueueCacheBlocksReq, EnqueueCacheBlocksRsp);
+META_CACHE_CLIENT_METHOD(acquireCacheBlocks, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
+META_CACHE_CLIENT_METHOD(commitCacheBlocks, CommitCacheBlocksReq, CommitCacheBlocksRsp);
+META_CACHE_CLIENT_METHOD(failCacheBlocks, FailCacheBlocksReq, FailCacheBlocksRsp);
+META_CACHE_CLIENT_METHOD(beginCleanCacheBlocks, BeginCleanCacheBlocksReq, BeginCleanCacheBlocksRsp);
+META_CACHE_CLIENT_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
+META_CACHE_CLIENT_METHOD(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
+META_CACHE_CLIENT_METHOD(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
+#undef META_CACHE_CLIENT_METHOD
+
 }  // namespace hf3fs::meta::client
