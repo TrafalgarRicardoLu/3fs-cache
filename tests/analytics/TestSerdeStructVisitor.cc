@@ -15,6 +15,11 @@ class DebugStructVisitor : public BaseStructVisitor<DebugStructVisitor> {
   void visit(std::string_view k) = delete;
 
   template <>
+  void visit<bool>(std::string_view k) {
+    XLOGF(DBG3, "bool visit({})", k);
+  }
+
+  template <>
   void visit<uint16_t>(std::string_view k) {
     XLOGF(DBG3, "uint16_t visit({})", k);
   }
