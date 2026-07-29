@@ -1,8 +1,19 @@
 #include "cache_manager/cleanup/CacheCleanupWorker.h"
 
+#include <folly/ScopeGuard.h>
+
+#include "cache/metrics/CacheMetrics.h"
+
 namespace hf3fs::cache_manager {
 
 CoTryTask<void> CacheCleanupWorker::clean(meta::BeginCleanCacheBlockItem item) {
+  auto outcome = std::string{"failure"};
+  auto metric = folly::makeGuard([&] {
+    cache::metrics::recordCount(
+        cache::metrics::Event::MANAGER_CLEANUP_RESULT,
+        1,
+        {.inode = item.key.inode, .block = item.key.block.toUnderType(), .reason = std::move(outcome)});
+  });
   auto begun = co_await backend_->beginClean(item);
   CO_RETURN_ON_ERROR(begun);
   auto inode = co_await backend_->stat(meta::InodeId{item.key.inode});
@@ -36,7 +47,9 @@ CoTryTask<void> CacheCleanupWorker::clean(meta::BeginCleanCacheBlockItem item) {
   if (begun->deleteGeneration != cache::CacheGeneration{} && !retired) {
     co_return makeError(CacheCode::kUnavailable, "cache cleanup generation kept advancing");
   }
-  co_return co_await backend_->finishClean({item.key, begun->cleanupEpoch, retired});
+  auto finished = co_await backend_->finishClean({item.key, begun->cleanupEpoch, retired});
+  outcome = finished.hasValue() ? "success" : StatusCode::toString(finished.error().code());
+  co_return finished;
 }
 
 }  // namespace hf3fs::cache_manager

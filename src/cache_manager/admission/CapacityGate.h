@@ -37,6 +37,7 @@ class CapacityGate {
   CapacityGate(Limit global, std::map<cache::OriginId, Limit> origins);
   Result<Permit> tryAcquire(cache::OriginId origin, uint64_t bytes);
   uint64_t inflightBytes() const;
+  uint32_t inflightRequests() const;
 
  private:
   struct Usage {

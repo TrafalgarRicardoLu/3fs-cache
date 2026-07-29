@@ -1,7 +1,9 @@
 #include "client/cache/OriginMissReader.h"
 
 #include <algorithm>
+#include <chrono>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "client/cache/BufferAssembler.h"
 #include "client/cache/OriginRangePlanner.h"
 
@@ -31,7 +33,13 @@ CoTryTask<size_t> OriginMissReader::read(const hf3fs::cache::ImmutableObjectIden
   std::vector<OriginRangeData> results;
   results.reserve(planned->size());
   for (auto range : *planned) {
+    auto start = std::chrono::steady_clock::now();
     auto data = co_await singleflight_.run(object, range, [&]() { return store_.getRange(object, range); });
+    hf3fs::cache::metrics::recordLatency(
+        hf3fs::cache::metrics::Event::CLIENT_ORIGIN_READ,
+        std::chrono::steady_clock::now() - start,
+        {.originId = object.originId.toUnderType(),
+         .reason = data.hasValue() ? "success" : std::string(StatusCode::toString(data.error().code()))});
     CO_RETURN_ON_ERROR(data);
     results.push_back({range, std::move(*data)});
   }

@@ -1,6 +1,7 @@
 #include <limits>
 #include <memory>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "common/kv/ITransaction.h"
 #include "common/utils/Coroutine.h"
 #include "meta/store/MetaStore.h"
@@ -58,6 +59,10 @@ class FailCacheBlocksOp : public Operation<FailCacheBlocksRsp> {
     }
     if (record.state != cache::CacheBlockState::LOADING || record.loaderId != item.loaderId ||
         record.loadEpoch != item.loadEpoch) {
+      cache::metrics::recordCount(
+          cache::metrics::Event::META_EPOCH_CONFLICT,
+          1,
+          {.inode = item.key.inode, .block = item.key.block.toUnderType(), .reason = "stale_fail"});
       co_return makeError(CacheCode::kStateConflict, "stale cache block failure");
     }
     if (record.cleanupEpoch.toUnderType() == std::numeric_limits<uint64_t>::max()) {

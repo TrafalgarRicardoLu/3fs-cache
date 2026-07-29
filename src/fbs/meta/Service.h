@@ -984,10 +984,18 @@ struct CacheStateCount {
   SERDE_STRUCT_FIELD(state, cache::CacheBlockState::NONE);
   SERDE_STRUCT_FIELD(count, uint64_t{0});
 };
+struct CacheChargeCount {
+  SERDE_STRUCT_FIELD(kind, cache::ChargeKind::NONE);
+  SERDE_STRUCT_FIELD(count, uint64_t{0});
+  SERDE_STRUCT_FIELD(bytes, uint64_t{0});
+};
 struct GetCacheStatusRsp : RspBase {
   SERDE_STRUCT_FIELD(logicalCapacity, uint64_t{0});
   SERDE_STRUCT_FIELD(usedCapacity, uint64_t{0});
+  SERDE_STRUCT_FIELD(reservedCapacity, uint64_t{0});
+  SERDE_STRUCT_FIELD(committedCapacity, uint64_t{0});
   SERDE_STRUCT_FIELD(stateCounts, std::vector<CacheStateCount>{});
+  SERDE_STRUCT_FIELD(chargeCounts, std::vector<CacheChargeCount>{});
 };
 
 struct ListCacheBlocksReq : ReqBase {
@@ -1006,6 +1014,8 @@ struct CacheBlockStatus {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(state, cache::CacheBlockState::NONE);
   SERDE_STRUCT_FIELD(ready, std::optional<cache::ReadyIdentity>{});
+  SERDE_STRUCT_FIELD(chargeKind, cache::ChargeKind::NONE);
+  SERDE_STRUCT_FIELD(chargedBytes, uint64_t{0});
 };
 struct ListCacheBlocksRsp : RspBase {
   SERDE_STRUCT_FIELD(blocks, std::vector<CacheBlockStatus>{});

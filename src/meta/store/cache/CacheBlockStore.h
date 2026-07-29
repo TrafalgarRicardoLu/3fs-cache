@@ -10,6 +10,11 @@
 
 namespace hf3fs::meta::server {
 
+struct CacheBlockPage {
+  std::vector<CacheBlockRecord> records;
+  bool more{false};
+};
+
 class CacheBlockStore {
  public:
   static CoTryTask<std::optional<CacheBlockRecord>> snapshotLoad(kv::IReadOnlyTransaction &txn,
@@ -17,6 +22,12 @@ class CacheBlockStore {
   static CoTryTask<std::vector<std::optional<CacheBlockRecord>>> snapshotLoadBatch(
       kv::IReadOnlyTransaction &txn,
       std::span<const cache::CacheBlockKey> keys);
+  static CoTryTask<CacheBlockPage> snapshotList(kv::IReadOnlyTransaction &txn,
+                                                uint64_t inode,
+                                                cache::CacheBlockIndex begin,
+                                                uint32_t limit);
+  static CoTryTask<std::vector<CacheBlockRecord>> snapshotListAll(kv::IReadOnlyTransaction &txn,
+                                                                  std::optional<uint64_t> inode = std::nullopt);
   static CoTryTask<std::optional<CacheBlockRecord>> load(kv::IReadWriteTransaction &txn,
                                                          const cache::CacheBlockKey &key);
   static CoTryTask<Void> store(kv::IReadWriteTransaction &txn, const CacheBlockRecord &record);

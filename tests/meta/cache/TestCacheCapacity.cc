@@ -159,5 +159,43 @@ TEST_F(TestCacheCapacity, ReservedCleaningReleasesOnceIntoFailed) {
   }());
 }
 
+TEST_F(TestCacheCapacity, ListsBlocksWithStablePaginationAndOptionalInodeFilter) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto setup = engine_.createReadWriteTransaction();
+    CO_ASSERT_OK(co_await CacheCapacityStore::setLogicalCapacity(*setup, 1024));
+    for (uint32_t block = 0; block < 3; ++block) {
+      CO_ASSERT_OK(co_await CacheBlockStore::enqueue(*setup,
+                                                     cache::CacheBlockKey{100, cache::CacheBlockIndex{block}},
+                                                     flat::ChainId{3},
+                                                     16));
+    }
+    CO_ASSERT_OK(co_await CacheBlockStore::enqueue(*setup,
+                                                   cache::CacheBlockKey{101, cache::CacheBlockIndex{0}},
+                                                   flat::ChainId{3},
+                                                   16));
+    CO_ASSERT_OK(co_await setup->commit());
+
+    auto read = engine_.createReadonlyTransaction();
+    auto first = co_await CacheBlockStore::snapshotList(*read, uint64_t{100}, cache::CacheBlockIndex{1}, 1);
+    CO_ASSERT_OK(first);
+    CO_ASSERT_EQ(first->records.size(), size_t{1});
+    CO_ASSERT_EQ(first->records.front().key.block, cache::CacheBlockIndex{1});
+    CO_ASSERT_TRUE(first->more);
+
+    auto second = co_await CacheBlockStore::snapshotList(*read, uint64_t{100}, cache::CacheBlockIndex{2}, 2);
+    CO_ASSERT_OK(second);
+    CO_ASSERT_EQ(second->records.size(), size_t{1});
+    CO_ASSERT_EQ(second->records.front().key.block, cache::CacheBlockIndex{2});
+    CO_ASSERT_FALSE(second->more);
+
+    auto filtered = co_await CacheBlockStore::snapshotListAll(*read, uint64_t{100});
+    CO_ASSERT_OK(filtered);
+    CO_ASSERT_EQ(filtered->size(), size_t{3});
+    auto all = co_await CacheBlockStore::snapshotListAll(*read);
+    CO_ASSERT_OK(all);
+    CO_ASSERT_EQ(all->size(), size_t{4});
+  }());
+}
+
 }  // namespace
 }  // namespace hf3fs::meta::server

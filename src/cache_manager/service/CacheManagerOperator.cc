@@ -114,7 +114,7 @@ CoTryTask<EnsureCachedRsp> CacheManagerOperator::ensureCached(const EnsureCached
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkProtocol(req.cacheProtocolVersion));
   CO_RETURN_ON_ERROR(checkService(req.service));
-  if (!ensureCached_) co_return EnsureCachedRsp{EnsureCachedStatus::BYPASSED};
+  if (!ensureCached_) co_return EnsureCachedRsp{EnsureCachedStatus::BYPASSED, BypassReason::FEATURE_DISABLED};
   co_return co_await ensureCached_->run(req);
 }
 
@@ -138,7 +138,36 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkProtocol(req.cacheProtocolVersion));
   if (backend_) CO_RETURN_ON_ERROR(co_await backend_->authorizeAdmin(req.user, req.inode));
-  co_return GetCacheStatusRsp{};
+  GetCacheStatusRsp response;
+  response.queued = hints_.size();
+  if (capacityGate_) {
+    response.loading = capacityGate_->inflightRequests();
+    response.inflightBytes = capacityGate_->inflightBytes();
+  }
+  if (ensureCached_) response.lastBypassReason = ensureCached_->lastBypassReason();
+  if (metaClient_) {
+    meta::GetCacheStatusReq status;
+    status.user = req.user;
+    status.inode = req.inode;
+    status.cacheProtocolVersion = req.cacheProtocolVersion;
+    auto metaStatus = co_await metaClient_->getCacheStatus(std::move(status));
+    CO_RETURN_ON_ERROR(metaStatus);
+    response.logicalCapacity = metaStatus->logicalCapacity;
+    response.usedCapacity = metaStatus->usedCapacity;
+    for (const auto &count : metaStatus->stateCounts) {
+      switch (count.state) {
+        case cache::CacheBlockState::READY:
+          response.ready = count.count;
+          break;
+        case cache::CacheBlockState::CLEANING:
+          response.cleaning = count.count;
+          break;
+        default:
+          break;
+      }
+    }
+  }
+  co_return response;
 }
 
 }  // namespace hf3fs::cache_manager

@@ -1,5 +1,6 @@
 #include <memory>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "common/kv/ITransaction.h"
 #include "common/utils/Coroutine.h"
 #include "meta/store/MetaStore.h"
@@ -37,6 +38,10 @@ class FinishCleanCacheBlocksOp : public Operation<FinishCleanCacheBlocksRsp> {
     if (!loaded->has_value()) co_return CacheBlockMutationResult{item.key, cache::CacheBlockState::NONE};
     const auto &record = **loaded;
     if (record.cleanupEpoch != item.cleanupEpoch) {
+      cache::metrics::recordCount(
+          cache::metrics::Event::META_EPOCH_CONFLICT,
+          1,
+          {.inode = item.key.inode, .block = item.key.block.toUnderType(), .reason = "stale_cleanup"});
       co_return makeError(CacheCode::kStateConflict, "stale cache cleanup epoch");
     }
     if (record.state == cache::CacheBlockState::FAILED && record.terminalState == cache::CleanupTerminalState::FAILED) {

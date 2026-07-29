@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <limits>
 
+#include "cache/metrics/CacheMetrics.h"
+#include "common/utils/MagicEnum.hpp"
+
 namespace hf3fs::cache_manager {
 
 CoTryTask<EnsureCachedRsp> EnsureCached::run(const EnsureCachedReq &req) {
@@ -10,7 +13,21 @@ CoTryTask<EnsureCachedRsp> EnsureCached::run(const EnsureCachedReq &req) {
   CO_RETURN_ON_ERROR(inode);
   if (!inode->isOriginFile()) co_return makeError(MetaCode::kNotFile, "cache hint inode is not an OriginFile");
   const auto &origin = inode->asOriginFile();
-  if (origin.superseded || origin.cacheAdmissionDisabled) co_return EnsureCachedRsp{EnsureCachedStatus::BYPASSED};
+  auto respond = [&](EnsureCachedStatus status, BypassReason bypassReason = BypassReason::NONE) {
+    lastBypassReason_.store(bypassReason, std::memory_order_relaxed);
+    cache::metrics::recordCount(
+        cache::metrics::Event::MANAGER_ADMISSION_RESULT,
+        1,
+        {.inode = inode->id.u64(),
+         .block = req.beginBlock.toUnderType(),
+         .originId = origin.object.originId.toUnderType(),
+         .reason = bypassReason == BypassReason::NONE ? std::string(magic_enum::enum_name(status))
+                                                      : std::string(magic_enum::enum_name(bypassReason))});
+    return EnsureCachedRsp{status, bypassReason};
+  };
+  if (origin.superseded || origin.cacheAdmissionDisabled) {
+    co_return respond(EnsureCachedStatus::BYPASSED, BypassReason::ADMISSION_DISABLED);
+  }
   if (req.beginBlock.toUnderType() > std::numeric_limits<uint32_t>::max() - req.blockCount) {
     co_return makeError(StatusCode::kInvalidArg, "cache hint block range overflow");
   }
@@ -24,7 +41,7 @@ CoTryTask<EnsureCachedRsp> EnsureCached::run(const EnsureCachedReq &req) {
     if (offset >= inode->fileLength()) break;
     items.push_back({{inode->id.u64(), block}, std::min(blockSize, inode->fileLength() - offset)});
   }
-  if (items.empty()) co_return EnsureCachedRsp{EnsureCachedStatus::BYPASSED};
+  if (items.empty()) co_return respond(EnsureCachedStatus::BYPASSED, BypassReason::EMPTY_RANGE);
 
   auto enqueued = co_await backend_->enqueue(items);
   CO_RETURN_ON_ERROR(enqueued);
@@ -33,10 +50,14 @@ CoTryTask<EnsureCachedRsp> EnsureCached::run(const EnsureCachedReq &req) {
   }
   bool accepted = false;
   bool attached = false;
+  bool capacityBypass = false;
   for (size_t i = 0; i < items.size(); ++i) {
     const auto &result = enqueued->results[i];
     if (result.hasError()) {
-      if (result.error().code() == CacheCode::kCapacityExceeded) continue;
+      if (result.error().code() == CacheCode::kCapacityExceeded) {
+        capacityBypass = true;
+        continue;
+      }
       co_return makeError(result.error());
     }
     switch (result->state) {
@@ -61,9 +82,10 @@ CoTryTask<EnsureCachedRsp> EnsureCached::run(const EnsureCachedReq &req) {
         break;
     }
   }
-  if (accepted) co_return EnsureCachedRsp{EnsureCachedStatus::ACCEPTED};
-  if (attached) co_return EnsureCachedRsp{EnsureCachedStatus::ATTACHED};
-  co_return EnsureCachedRsp{EnsureCachedStatus::BYPASSED};
+  cache::metrics::setGauge(cache::metrics::Event::MANAGER_QUEUE, hints_.size());
+  if (accepted) co_return respond(EnsureCachedStatus::ACCEPTED);
+  if (attached) co_return respond(EnsureCachedStatus::ATTACHED);
+  co_return respond(EnsureCachedStatus::BYPASSED, capacityBypass ? BypassReason::CAPACITY : BypassReason::EMPTY_RANGE);
 }
 
 }  // namespace hf3fs::cache_manager

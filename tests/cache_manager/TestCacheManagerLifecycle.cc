@@ -106,6 +106,7 @@ TEST(TestCacheManagerService, ValidatesIdentityAndProtocol) {
   auto accepted = folly::coro::blockingWait(operator_.ensureCached(request));
   ASSERT_OK(accepted);
   ASSERT_EQ(accepted->status, EnsureCachedStatus::BYPASSED);
+  ASSERT_EQ(accepted->bypassReason, BypassReason::FEATURE_DISABLED);
 
   request.service.token = "wrong";
   ASSERT_ERROR(folly::coro::blockingWait(operator_.ensureCached(request)), StatusCode::kAuthenticationFail);

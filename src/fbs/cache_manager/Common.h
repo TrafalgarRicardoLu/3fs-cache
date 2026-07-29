@@ -34,6 +34,14 @@ enum class EnsureCachedStatus : uint8_t {
   BYPASSED,
 };
 
+enum class BypassReason : uint8_t {
+  NONE,
+  FEATURE_DISABLED,
+  ADMISSION_DISABLED,
+  EMPTY_RANGE,
+  CAPACITY,
+};
+
 enum class InvalidReason : uint8_t {
   NOT_FOUND,
   GENERATION_MISMATCH,

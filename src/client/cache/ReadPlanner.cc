@@ -1,7 +1,9 @@
 #include "client/cache/ReadPlanner.h"
 
 #include <algorithm>
+#include <chrono>
 
+#include "cache/metrics/CacheMetrics.h"
 namespace hf3fs::client::cache {
 
 CoTryTask<meta::GetFileReadPlanRsp> MetaReadPlanSource::fetch(meta::GetFileReadPlanReq request) {
@@ -22,9 +24,16 @@ CoTryTask<BatchedReadPlan> ReadPlanner::plan(const flat::UserInfo &user,
   request.offset = offset;
   request.length = length;
   request.cacheProtocolVersion = hf3fs::cache::kCacheProtocolVersion;
+  auto start = std::chrono::steady_clock::now();
   auto result = co_await ReadPlanBatcher::fetch(inode, request, [source = source_](meta::GetFileReadPlanReq batch) {
     return source->fetch(std::move(batch));
   });
+  hf3fs::cache::metrics::recordLatency(
+      hf3fs::cache::metrics::Event::CLIENT_READ_PLAN,
+      std::chrono::steady_clock::now() - start,
+      {.inode = inode.id.u64(),
+       .originId = inode.asOriginFile().object.originId.toUnderType(),
+       .reason = result.hasValue() ? "success" : std::string(StatusCode::toString(result.error().code()))});
   CO_RETURN_ON_ERROR(result);
   CO_RETURN_ON_ERROR(validate(inode, {offset, length}, *result));
   co_return std::move(*result);

@@ -26,6 +26,7 @@ struct EnsureCachedReq {
 };
 struct EnsureCachedRsp {
   SERDE_STRUCT_FIELD(status, EnsureCachedStatus::BYPASSED);
+  SERDE_STRUCT_FIELD(bypassReason, BypassReason::NONE);
 };
 
 struct ReportCacheBlockInvalidReq {
@@ -92,6 +93,8 @@ struct GetCacheStatusRsp {
   SERDE_STRUCT_FIELD(loading, uint64_t{0});
   SERDE_STRUCT_FIELD(ready, uint64_t{0});
   SERDE_STRUCT_FIELD(cleaning, uint64_t{0});
+  SERDE_STRUCT_FIELD(inflightBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(lastBypassReason, BypassReason::NONE);
 };
 
 SERDE_SERVICE(CacheManagerSerde, 1) {

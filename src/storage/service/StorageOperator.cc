@@ -3,6 +3,7 @@
 #include <boost/range/adaptor/reversed.hpp>
 #include <fmt/format.h>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "common/monitor/Recorder.h"
 #include "common/net/RDMAControl.h"
 #include "common/net/RequestOptions.h"
@@ -1233,8 +1234,20 @@ CoTryTask<ReplaceCacheChunksRsp> StorageOperator::replaceCacheChunks(const Repla
     auto lock = target->storageTarget->lockChunk(baton, item.key.chunkId, "replaceCacheChunk");
     if (!lock.locked()) co_await lock.lock();
     auto result = target->storageTarget->replaceCacheChunk(item, updateWorker_.backgroundExecutor());
-    if (!result && result.error().code() == CacheCode::kStaleGeneration) storageCacheStaleReplaceCount.addSample(1);
-    if (result) storageCacheReplaceCount.addSample(1);
+    if (!result && result.error().code() == CacheCode::kStaleGeneration) {
+      storageCacheStaleReplaceCount.addSample(1);
+      cache::metrics::recordCount(cache::metrics::Event::STORAGE_GENERATION_STALE, 1, {.reason = "replace"});
+    }
+    if (result) {
+      storageCacheReplaceCount.addSample(1);
+      cache::metrics::recordCount(cache::metrics::Event::STORAGE_GENERATION_REPLACE, 1, {.reason = "replace"});
+    }
+    XLOGF_IF(WARN,
+             result.hasError(),
+             "Cache generation replace failed chunk {} generation {}: {}",
+             item.key.chunkId,
+             item.cacheGeneration,
+             result.error().describe());
     response.results.push_back(std::move(result));
   }
   co_return response;
@@ -1268,7 +1281,14 @@ CoTryTask<RetireCacheChunkGenerationsRsp> StorageOperator::retireCacheChunkGener
     if (result) {
       storageCacheRetireCount.addSample(1);
       storageCacheTombstoneCount.addSample(1);
+      cache::metrics::recordCount(cache::metrics::Event::STORAGE_TOMBSTONE, 1, {.reason = "retire"});
     }
+    XLOGF_IF(WARN,
+             result.hasError(),
+             "Cache tombstone failed chunk {} generation {}: {}",
+             item.key.chunkId,
+             item.expectedGeneration,
+             result.error().describe());
     response.results.push_back(std::move(result));
   }
   co_return response;

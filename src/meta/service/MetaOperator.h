@@ -118,6 +118,7 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   CoTryTask<BeginCleanCacheBlocksRsp> beginCleanCacheBlocks(BeginCleanCacheBlocksReq req);
   CoTryTask<FinishCleanCacheBlocksRsp> finishCleanCacheBlocks(FinishCleanCacheBlocksReq req);
   CoTryTask<GetCacheStatusRsp> getCacheStatus(GetCacheStatusReq req);
+  CoTryTask<ListCacheBlocksRsp> listCacheBlocks(ListCacheBlocksReq req);
 
  private:
   friend class MockMeta;

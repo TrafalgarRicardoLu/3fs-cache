@@ -56,6 +56,8 @@
 #include "meta/store/Operation.h"
 #include "meta/store/PathResolve.h"
 #include "meta/store/Utils.h"
+#include "meta/store/cache/CacheBlockStore.h"
+#include "meta/store/cache/CacheCapacityStore.h"
 #include "meta/store/ops/BatchOperation.h"
 
 #define AUTHENTICATE(user)                             \
@@ -576,7 +578,54 @@ CoTryTask<GetCacheStatusRsp> MetaOperator::getCacheStatus(GetCacheStatusReq req)
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkCacheFeature(req.cacheProtocolVersion));
   CO_RETURN_ON_ERROR(co_await requireCacheAdmin(req.user));
-  co_return GetCacheStatusRsp{};
+  auto handler = [inode = req.inode](kv::IReadOnlyTransaction &transaction) -> CoTryTask<GetCacheStatusRsp> {
+    auto capacity = co_await CacheCapacityStore::snapshotLoad(transaction);
+    CO_RETURN_ON_ERROR(capacity);
+    auto records =
+        co_await CacheBlockStore::snapshotListAll(transaction,
+                                                  inode ? std::optional<uint64_t>{inode->u64()} : std::nullopt);
+    CO_RETURN_ON_ERROR(records);
+
+    GetCacheStatusRsp response;
+    response.logicalCapacity = capacity->logicalCapacity;
+    response.usedCapacity = capacity->usedBytes;
+    response.reservedCapacity = capacity->reservedBytes;
+    response.committedCapacity = capacity->committedBytes;
+    std::map<cache::CacheBlockState, uint64_t> states;
+    std::map<cache::ChargeKind, CacheChargeCount> charges;
+    for (const auto &record : *records) {
+      ++states[record.state];
+      auto &charge = charges[record.chargeKind];
+      charge.kind = record.chargeKind;
+      ++charge.count;
+      charge.bytes += record.chargedBytes;
+    }
+    for (const auto &[state, count] : states) response.stateCounts.push_back({state, count});
+    for (const auto &[kind, count] : charges) response.chargeCounts.push_back(count);
+    co_return response;
+  };
+  co_return co_await kv::WithTransaction(kv::FDBRetryStrategy(createRetryConfig()))
+      .run(kvEngine_->createReadonlyTransaction(), std::move(handler));
+}
+
+CoTryTask<ListCacheBlocksRsp> MetaOperator::listCacheBlocks(ListCacheBlocksReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheFeature(req.cacheProtocolVersion));
+  CO_RETURN_ON_ERROR(co_await requireCacheAdmin(req.user));
+  auto handler = [req](kv::IReadOnlyTransaction &transaction) -> CoTryTask<ListCacheBlocksRsp> {
+    auto page = co_await CacheBlockStore::snapshotList(transaction, req.inode.u64(), req.beginBlock, req.limit);
+    CO_RETURN_ON_ERROR(page);
+    ListCacheBlocksRsp response;
+    response.more = page->more;
+    response.blocks.reserve(page->records.size());
+    for (const auto &record : page->records) {
+      response.blocks.push_back({record.key, record.state, record.ready, record.chargeKind, record.chargedBytes});
+    }
+    co_return response;
+  };
+  co_return co_await kv::WithTransaction(kv::FDBRetryStrategy(createRetryConfig()))
+      .run(kvEngine_->createReadonlyTransaction(), std::move(handler));
 }
 
 }  // namespace hf3fs::meta::server

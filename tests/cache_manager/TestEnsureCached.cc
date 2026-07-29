@@ -76,6 +76,7 @@ TEST(TestEnsureCached, EnqueuesExactBlocksAndDeduplicatesRestartedQueue) {
   auto first = folly::coro::blockingWait(ensure.run(request()));
   ASSERT_OK(first);
   ASSERT_EQ(first->status, EnsureCachedStatus::ACCEPTED);
+  ASSERT_EQ(first->bypassReason, BypassReason::NONE);
   ASSERT_EQ(backend->seen.size(), size_t{3});
   ASSERT_EQ(backend->seen[2].blockLength, uint64_t{1});
   ASSERT_EQ(hints.size(), size_t{3});
@@ -83,6 +84,7 @@ TEST(TestEnsureCached, EnqueuesExactBlocksAndDeduplicatesRestartedQueue) {
   auto repeated = folly::coro::blockingWait(ensure.run(request()));
   ASSERT_OK(repeated);
   ASSERT_EQ(repeated->status, EnsureCachedStatus::ATTACHED);
+  ASSERT_EQ(repeated->bypassReason, BypassReason::NONE);
   ASSERT_EQ(hints.size(), size_t{3});
 }
 
@@ -94,12 +96,14 @@ TEST(TestEnsureCached, AttachesExistingStatesAndBypassesCapacity) {
   auto ready = folly::coro::blockingWait(ensure.run(request()));
   ASSERT_OK(ready);
   ASSERT_EQ(ready->status, EnsureCachedStatus::ATTACHED);
+  ASSERT_EQ(ready->bypassReason, BypassReason::NONE);
   ASSERT_EQ(hints.size(), size_t{0});
 
   backend->capacityReject = true;
   auto bypassed = folly::coro::blockingWait(ensure.run(request()));
   ASSERT_OK(bypassed);
   ASSERT_EQ(bypassed->status, EnsureCachedStatus::BYPASSED);
+  ASSERT_EQ(bypassed->bypassReason, BypassReason::CAPACITY);
 }
 
 }  // namespace

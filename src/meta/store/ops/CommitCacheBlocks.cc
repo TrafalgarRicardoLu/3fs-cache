@@ -1,5 +1,6 @@
 #include <memory>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "common/kv/ITransaction.h"
 #include "common/utils/Coroutine.h"
 #include "meta/store/MetaStore.h"
@@ -64,6 +65,10 @@ class CommitCacheBlocksOp : public Operation<CommitCacheBlocksRsp> {
     }
     if (record.state != cache::CacheBlockState::LOADING || record.loaderId != item.loaderId ||
         record.loadEpoch != item.loadEpoch || record.cacheGeneration != item.cacheGeneration) {
+      cache::metrics::recordCount(
+          cache::metrics::Event::META_EPOCH_CONFLICT,
+          1,
+          {.inode = item.key.inode, .block = item.key.block.toUnderType(), .reason = "stale_commit"});
       co_return makeError(CacheCode::kStateConflict, "stale cache block commit");
     }
 

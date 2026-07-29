@@ -37,15 +37,23 @@ CoTryTask<Dispatcher::OutputTable> handle(IEnv &ienv,
       {"Metric", "Value"},
       {"logical_capacity", std::to_string(result->logicalCapacity)},
       {"used_capacity", std::to_string(result->usedCapacity)},
+      {"reserved_capacity", std::to_string(result->reservedCapacity)},
+      {"committed_capacity", std::to_string(result->committedCapacity)},
       {"free_capacity",
        std::to_string(result->logicalCapacity > result->usedCapacity ? result->logicalCapacity - result->usedCapacity
                                                                      : 0)},
       {"manager.queued", std::to_string(managerResult->queued)},
       {"manager.loading", std::to_string(managerResult->loading)},
+      {"manager.inflight_bytes", std::to_string(managerResult->inflightBytes)},
       {"manager.ready", std::to_string(managerResult->ready)},
-      {"manager.cleaning", std::to_string(managerResult->cleaning)}};
+      {"manager.cleaning", std::to_string(managerResult->cleaning)},
+      {"manager.last_bypass_reason", std::string(magic_enum::enum_name(managerResult->lastBypassReason))}};
   for (const auto &count : result->stateCounts) {
     table.push_back({fmt::format("state.{}", magic_enum::enum_name(count.state)), std::to_string(count.count)});
+  }
+  for (const auto &count : result->chargeCounts) {
+    table.push_back({fmt::format("charge.{}.count", magic_enum::enum_name(count.kind)), std::to_string(count.count)});
+    table.push_back({fmt::format("charge.{}.bytes", magic_enum::enum_name(count.kind)), std::to_string(count.bytes)});
   }
   co_return table;
 }

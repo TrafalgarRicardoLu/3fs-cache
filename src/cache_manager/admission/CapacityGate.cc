@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include "cache/metrics/CacheMetrics.h"
+
 namespace hf3fs::cache_manager {
 
 CapacityGate::Permit::Permit(CapacityGate *gate, cache::OriginId origin, uint64_t bytes)
@@ -50,12 +52,20 @@ Result<CapacityGate::Permit> CapacityGate::tryAcquire(cache::OriginId origin, ui
   globalUsage_.bytes += bytes;
   ++originUsage.concurrency;
   originUsage.bytes += bytes;
+  cache::metrics::setGauge(cache::metrics::Event::MANAGER_INFLIGHT_BYTES,
+                           globalUsage_.bytes,
+                           {.originId = origin.toUnderType()});
   return Permit(this, origin, bytes);
 }
 
 uint64_t CapacityGate::inflightBytes() const {
   auto lock = std::unique_lock(mutex_);
   return globalUsage_.bytes;
+}
+
+uint32_t CapacityGate::inflightRequests() const {
+  auto lock = std::unique_lock(mutex_);
+  return globalUsage_.concurrency;
 }
 
 void CapacityGate::release(cache::OriginId origin, uint64_t bytes) {
@@ -65,6 +75,9 @@ void CapacityGate::release(cache::OriginId origin, uint64_t bytes) {
   globalUsage_.bytes -= bytes;
   --originUsage.concurrency;
   originUsage.bytes -= bytes;
+  cache::metrics::setGauge(cache::metrics::Event::MANAGER_INFLIGHT_BYTES,
+                           globalUsage_.bytes,
+                           {.originId = origin.toUnderType()});
 }
 
 }  // namespace hf3fs::cache_manager

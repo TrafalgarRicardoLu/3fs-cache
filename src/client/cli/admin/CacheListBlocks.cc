@@ -31,16 +31,18 @@ CoTryTask<Dispatcher::OutputTable> handle(IEnv &ienv,
   auto result = co_await env.metaClientGetter()->listCacheBlocks(std::move(request));
   CO_RETURN_ON_ERROR(result);
 
-  Dispatcher::OutputTable table{{"Block", "State", "Generation", "Length", "Checksum"}};
+  Dispatcher::OutputTable table{{"Block", "State", "Charge", "ChargedBytes", "Generation", "Length", "Checksum"}};
   for (const auto &block : result->blocks) {
     table.push_back({std::to_string(block.key.block.toUnderType()),
                      std::string(magic_enum::enum_name(block.state)),
+                     std::string(magic_enum::enum_name(block.chargeKind)),
+                     std::to_string(block.chargedBytes),
                      block.ready ? std::to_string(block.ready->cacheGeneration.toUnderType()) : "",
                      block.ready ? std::to_string(block.ready->blockLength) : "",
                      block.ready ? fmt::format("{}:{}", block.ready->checksumType, block.ready->checksumValue) : ""});
   }
   if (result->more && !result->blocks.empty()) {
-    table.push_back({"NEXT", std::to_string(result->blocks.back().key.block.toUnderType() + 1), "", "", ""});
+    table.push_back({"NEXT", std::to_string(result->blocks.back().key.block.toUnderType() + 1), "", "", "", "", ""});
   }
   co_return table;
 }

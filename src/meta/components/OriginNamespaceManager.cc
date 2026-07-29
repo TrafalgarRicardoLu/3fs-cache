@@ -3,6 +3,7 @@
 #include <limits>
 #include <sys/stat.h>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "common/kv/KeyPrefix.h"
 #include "common/serde/Serde.h"
 #include "common/utils/MagicEnum.hpp"
@@ -148,7 +149,20 @@ CoTryTask<std::optional<OriginCleanupJobRecord>> OriginNamespaceManager::loadCle
 CoTryTask<Void> OriginNamespaceManager::storeCleanup(kv::IReadWriteTransaction &txn,
                                                      const OriginCleanupJobRecord &record) {
   CO_RETURN_ON_ERROR(record.valid());
-  co_return co_await txn.set(cleanupKey(record.jobId), serde::serialize(record));
+  auto result = co_await txn.set(cleanupKey(record.jobId), serde::serialize(record));
+  CO_RETURN_ON_ERROR(result);
+  cache::metrics::recordCount(
+      cache::metrics::Event::META_CLEANUP_JOB_STATE,
+      1,
+      {.inode = record.inode.u64(), .reason = std::string(magic_enum::enum_name(record.state))});
+  XLOGF(DBG,
+        "Cache cleanup job {} inode {} state {} cursor {}/{}",
+        record.jobId,
+        record.inode,
+        magic_enum::enum_name(record.state),
+        record.cursor,
+        record.endBlock);
+  co_return Void{};
 }
 
 }  // namespace hf3fs::meta::server

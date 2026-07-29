@@ -2,6 +2,8 @@
 
 #include <folly/logging/xlog.h>
 
+#include "cache/metrics/CacheMetrics.h"
+
 namespace hf3fs::cache_manager {
 
 CoTask<void> LoaderScheduler::runOne() {
@@ -9,6 +11,13 @@ CoTask<void> LoaderScheduler::runOne() {
   if (hints.empty()) co_return;
   auto first = hints.front();
   auto result = co_await loader_.loadBatch(std::move(hints));
+  cache::metrics::setGauge(cache::metrics::Event::MANAGER_QUEUE, hints_.size());
+  cache::metrics::recordCount(
+      cache::metrics::Event::MANAGER_LOADER_RESULT,
+      1,
+      {.inode = first.inode.u64(),
+       .block = first.block.toUnderType(),
+       .reason = result.hasValue() ? "success" : std::string(StatusCode::toString(result.error().code()))});
   XLOGF_IF(WARN,
            result.hasError(),
            "Cache load failed for inode {} block {}: {}",

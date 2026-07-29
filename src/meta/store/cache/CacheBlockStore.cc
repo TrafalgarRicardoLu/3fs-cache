@@ -1,15 +1,27 @@
 #include "meta/store/cache/CacheBlockStore.h"
 
 #include <folly/experimental/coro/Collect.h>
+#include <folly/logging/xlog.h>
 #include <limits>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "common/kv/KeyPrefix.h"
 #include "common/serde/Serde.h"
+#include "common/utils/MagicEnum.hpp"
 #include "common/utils/SerDeser.h"
 #include "meta/store/cache/CacheCapacityStore.h"
 
 namespace hf3fs::meta::server {
 namespace {
+
+Result<CacheBlockRecord> decodeRecord(const kv::IReadOnlyTransaction::KeyValue &kv) {
+  CacheBlockRecord record;
+  auto deserialized = serde::deserialize(record, kv.value);
+  if (deserialized.hasError() || record.valid().hasError() || CacheBlockStore::recordKey(record.key) != kv.key) {
+    return makeError(StatusCode::kDataCorruption, "invalid cache block record in range");
+  }
+  return record;
+}
 
 template <typename Transaction>
 CoTryTask<std::optional<CacheBlockRecord>> loadRecord(Transaction &txn,
@@ -62,6 +74,45 @@ CoTryTask<std::vector<std::optional<CacheBlockRecord>>> CacheBlockStore::snapsho
   co_return records;
 }
 
+CoTryTask<CacheBlockPage> CacheBlockStore::snapshotList(kv::IReadOnlyTransaction &txn,
+                                                        uint64_t inode,
+                                                        cache::CacheBlockIndex begin,
+                                                        uint32_t limit) {
+  if (inode == 0 || limit == 0) co_return makeError(StatusCode::kInvalidArg, "invalid cache block list range");
+  auto prefix = Serializer::serRawArgs(kv::KeyPrefix::CacheBlock, uint8_t{0}, inode);
+  auto beginKey = recordKey({inode, begin});
+  auto endKey = kv::TransactionHelper::prefixListEndKey(prefix);
+  auto result = co_await txn.snapshotGetRange({beginKey, true}, {endKey, false}, static_cast<int32_t>(limit + 1));
+  CO_RETURN_ON_ERROR(result);
+  CacheBlockPage page;
+  page.more = result->kvs.size() > limit || result->hasMore;
+  auto count = std::min<size_t>(result->kvs.size(), limit);
+  page.records.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    auto record = decodeRecord(result->kvs[i]);
+    CO_RETURN_ON_ERROR(record);
+    page.records.push_back(std::move(*record));
+  }
+  co_return page;
+}
+
+CoTryTask<std::vector<CacheBlockRecord>> CacheBlockStore::snapshotListAll(kv::IReadOnlyTransaction &txn,
+                                                                          std::optional<uint64_t> inode) {
+  auto prefix = inode ? Serializer::serRawArgs(kv::KeyPrefix::CacheBlock, uint8_t{0}, *inode)
+                      : Serializer::serRawArgs(kv::KeyPrefix::CacheBlock, uint8_t{0});
+  auto options = kv::TransactionHelper::ListByPrefixOptions().withInclusive(true).withSnapshot(true).withLimit(0);
+  auto values = co_await kv::TransactionHelper::listByPrefix(txn, prefix, options);
+  CO_RETURN_ON_ERROR(values);
+  std::vector<CacheBlockRecord> records;
+  records.reserve(values->size());
+  for (const auto &value : *values) {
+    auto record = decodeRecord(value);
+    CO_RETURN_ON_ERROR(record);
+    records.push_back(std::move(*record));
+  }
+  co_return records;
+}
+
 CoTryTask<std::optional<CacheBlockRecord>> CacheBlockStore::load(kv::IReadWriteTransaction &txn,
                                                                  const cache::CacheBlockKey &key) {
   co_return co_await loadRecord(txn, key, false);
@@ -69,7 +120,28 @@ CoTryTask<std::optional<CacheBlockRecord>> CacheBlockStore::load(kv::IReadWriteT
 
 CoTryTask<Void> CacheBlockStore::store(kv::IReadWriteTransaction &txn, const CacheBlockRecord &record) {
   CO_RETURN_ON_ERROR(record.valid());
-  co_return co_await txn.set(recordKey(record.key), serde::serialize(record));
+  auto result = co_await txn.set(recordKey(record.key), serde::serialize(record));
+  CO_RETURN_ON_ERROR(result);
+  cache::metrics::recordCount(cache::metrics::Event::META_STATE_TRANSITION,
+                              1,
+                              {.inode = record.key.inode,
+                               .block = record.key.block.toUnderType(),
+                               .reason = std::string(magic_enum::enum_name(record.state))});
+  if (record.chargeKind != cache::ChargeKind::NONE && record.chargedBytes != 0) {
+    cache::metrics::recordCount(cache::metrics::Event::META_CHARGE_BYTES,
+                                record.chargedBytes,
+                                {.inode = record.key.inode,
+                                 .block = record.key.block.toUnderType(),
+                                 .reason = std::string(magic_enum::enum_name(record.chargeKind))});
+  }
+  XLOGF(DBG,
+        "Cache block state inode {} block {} state {} charge {} bytes {}",
+        record.key.inode,
+        record.key.block,
+        magic_enum::enum_name(record.state),
+        magic_enum::enum_name(record.chargeKind),
+        record.chargedBytes);
+  co_return Void{};
 }
 
 CoTryTask<Void> CacheBlockStore::remove(kv::IReadWriteTransaction &txn, const cache::CacheBlockKey &key) {

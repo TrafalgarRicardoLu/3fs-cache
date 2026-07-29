@@ -1,7 +1,9 @@
 #include "client/cache/CacheReadPipeline.h"
 
 #include <algorithm>
+#include <chrono>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "client/cache/BufferAssembler.h"
 
 namespace hf3fs::client::cache {
@@ -36,7 +38,16 @@ CoTryTask<size_t> CacheReadPipeline::read(const flat::UserInfo &user,
   }
   const auto &origin = inode.asOriginFile();
   if (!planner_) {
-    co_return co_await missReader_.read(origin.object, origin.length, origin.layout.chunkSize, offset, output);
+    auto result = co_await missReader_.read(origin.object, origin.length, origin.layout.chunkSize, offset, output);
+    if (result.hasValue()) {
+      hf3fs::cache::metrics::recordCount(hf3fs::cache::metrics::Event::CLIENT_MISS_BYTES,
+                                         *result,
+                                         {.inode = inode.id.u64(), .originId = origin.object.originId.toUnderType()});
+      hf3fs::cache::metrics::recordCount(hf3fs::cache::metrics::Event::CLIENT_ORIGIN_BYTES,
+                                         *result,
+                                         {.inode = inode.id.u64(), .originId = origin.object.originId.toUnderType()});
+    }
+    co_return result;
   }
   if (!session) co_return makeError(StatusCode::kInvalidArg, "cache read requires an open session");
   if (output.empty() || offset >= origin.length) co_return size_t{0};
@@ -53,8 +64,21 @@ CoTryTask<size_t> CacheReadPipeline::read(const flat::UserInfo &user,
     if (segmentBegin >= segmentEnd) continue;
 
     if (block.state == hf3fs::cache::CacheBlockState::READY) {
+      auto storageStart = std::chrono::steady_clock::now();
       auto hit = co_await hitReader_->readFullBlock(block, user);
+      hf3fs::cache::metrics::recordLatency(
+          hf3fs::cache::metrics::Event::CLIENT_STORAGE_READ,
+          std::chrono::steady_clock::now() - storageStart,
+          {.inode = inode.id.u64(),
+           .block = block.key.block.toUnderType(),
+           .originId = origin.object.originId.toUnderType(),
+           .reason = hit.hasValue() ? "hit" : std::string(StatusCode::toString(hit.error().code()))});
       if (hit.hasValue()) {
+        hf3fs::cache::metrics::recordCount(hf3fs::cache::metrics::Event::CLIENT_HIT_BYTES,
+                                           segmentEnd - segmentBegin,
+                                           {.inode = inode.id.u64(),
+                                            .block = block.key.block.toUnderType(),
+                                            .originId = origin.object.originId.toUnderType()});
         ranges.push_back({block.fileRange, std::move(*hit)});
         continue;
       }
@@ -67,6 +91,16 @@ CoTryTask<size_t> CacheReadPipeline::read(const flat::UserInfo &user,
     auto miss = co_await missReader_.read(origin.object, origin.length, origin.layout.chunkSize, segmentBegin, data);
     CO_RETURN_ON_ERROR(miss);
     if (*miss != data.size()) co_return makeError(CacheCode::kInvalidResponse, "short origin fallback read");
+    hf3fs::cache::metrics::recordCount(hf3fs::cache::metrics::Event::CLIENT_MISS_BYTES,
+                                       *miss,
+                                       {.inode = inode.id.u64(),
+                                        .block = block.key.block.toUnderType(),
+                                        .originId = origin.object.originId.toUnderType()});
+    hf3fs::cache::metrics::recordCount(hf3fs::cache::metrics::Event::CLIENT_ORIGIN_BYTES,
+                                       *miss,
+                                       {.inode = inode.id.u64(),
+                                        .block = block.key.block.toUnderType(),
+                                        .originId = origin.object.originId.toUnderType()});
     ranges.push_back({{segmentBegin, data.size()}, std::move(data)});
     if (reporter_) static_cast<void>(co_await reporter_->ensure(inode.id, block.key.block));
   }
