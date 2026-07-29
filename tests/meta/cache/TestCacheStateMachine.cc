@@ -153,6 +153,19 @@ TEST_F(TestCacheStateMachine, EnqueuePreservesOrderCapacityAndServiceBoundary) {
   }());
 }
 
+TEST_F(TestCacheStateMachine, CacheStatusRequiresServerSideAdminAuthorization) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    CO_ASSERT_OK(co_await prepare(cluster, "/status"));
+    GetCacheStatusReq req;
+    req.user = SUPER_USER;
+    req.cacheProtocolVersion = cache::kCacheProtocolVersion;
+    CO_ASSERT_OK(co_await cluster.meta().getOperator().getCacheStatus(req));
+    req.user = UserInfo{Uid{1234}, Gid{1234}, "untrusted"};
+    CO_ASSERT_ERROR(co_await cluster.meta().getOperator().getCacheStatus(req), MetaCode::kNoPermission);
+  }());
+}
+
 TEST_F(TestCacheStateMachine, FencesConcurrentAcquireLeaseReclaimAndCommit) {
   folly::coro::blockingWait([&]() -> CoTask<void> {
     auto cluster = createCluster();

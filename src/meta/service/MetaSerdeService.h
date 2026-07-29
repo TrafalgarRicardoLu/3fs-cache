@@ -46,11 +46,11 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
   META_SERVICE_METHOD(failCacheBlocks, FailCacheBlocksReq, FailCacheBlocksRsp);
   META_SERVICE_METHOD(beginCleanCacheBlocks, BeginCleanCacheBlocksReq, BeginCleanCacheBlocksRsp);
   META_SERVICE_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
+  META_SERVICE_METHOD(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
 #undef META_SERVICE_METHOD
 
 #define CACHE_SERVICE_STUB(NAME, REQ, RESP) \
   CoTryTask<RESP> NAME(serde::CallContext &, const REQ &) { co_return makeError(CacheCode::kFeatureDisabled); }
-  CACHE_SERVICE_STUB(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
   CACHE_SERVICE_STUB(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
 #undef CACHE_SERVICE_STUB
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <limits>
+
 #include "common/serde/Service.h"
 #include "fbs/cache_manager/Common.h"
 
@@ -39,7 +41,10 @@ struct ReportCacheBlockInvalidReq {
  public:
   Result<Void> valid() const {
     if (openSessionId == Uuid::zero()) return makeError(StatusCode::kInvalidArg, "openSessionId not set");
-    return expectedReady.valid();
+    RETURN_ON_ERROR(expectedReady.valid());
+    if (observedGeneration == cache::CacheGeneration{})
+      return makeError(StatusCode::kInvalidArg, "observedGeneration not set");
+    return Void{};
   }
 };
 struct ReportCacheBlockInvalidRsp {
@@ -58,6 +63,9 @@ struct AdminCleanupCacheBlocksReq {
   Result<Void> valid() const {
     if (blockCount == 0) return makeError(StatusCode::kInvalidArg, "blockCount is zero");
     if (blockCount > kMaxCacheManagerBlocks) return makeError(CacheCode::kRequestTooLarge, "blockCount too large");
+    if (beginBlock.toUnderType() > std::numeric_limits<uint32_t>::max() - blockCount)
+      return makeError(StatusCode::kInvalidArg, "block range overflow");
+    if (expectedReady) RETURN_ON_ERROR(expectedReady->valid());
     return Void{};
   }
 };

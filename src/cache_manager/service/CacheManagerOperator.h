@@ -4,10 +4,13 @@
 #include <memory>
 #include <mutex>
 
+#include "cache_manager/cleanup/CacheCleanupWorker.h"
 #include "cache_manager/config/Config.h"
 #include "cache_manager/loader/CacheLoader.h"
 #include "cache_manager/scheduler/LoaderScheduler.h"
+#include "cache_manager/service/AdminCleanupCacheBlocks.h"
 #include "cache_manager/service/EnsureCached.h"
+#include "cache_manager/service/ReportCacheBlockInvalid.h"
 #include "common/utils/BackgroundRunner.h"
 #include "fbs/cache_manager/Service.h"
 
@@ -48,6 +51,9 @@ class CacheManagerOperator {
   std::unique_ptr<CacheLoader> loader_;
   std::unique_ptr<LoaderScheduler> loaderScheduler_;
   std::unique_ptr<EnsureCached> ensureCached_;
+  std::unique_ptr<CacheCleanupWorker> cleanupWorker_;
+  std::unique_ptr<ReportCacheBlockInvalid> reportInvalid_;
+  std::unique_ptr<AdminCleanupCacheBlocks> adminCleanup_;
   std::unique_ptr<BackgroundRunner> scheduler_;
   SchedulerStopHook schedulerStopHook_;
   mutable std::mutex mutex_;

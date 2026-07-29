@@ -30,6 +30,26 @@ class CacheManagerBackend {
                                  const meta::CacheBlockLease &lease,
                                  const storage::CacheChunkGenerationInfo &stored) = 0;
   virtual CoTryTask<void> fail(const cache::CacheBlockKey &key, const meta::CacheBlockLease &lease) = 0;
+  virtual CoTryTask<void> validateReport(const ReportCacheBlockInvalidReq &) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<void> authorizeAdmin(const flat::UserInfo &, std::optional<meta::InodeId>) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<meta::BeginCleanCacheBlockResult> beginClean(const meta::BeginCleanCacheBlockItem &) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<storage::CacheChunkGenerationInfo> retire(const meta::Inode &,
+                                                              cache::CacheBlockIndex,
+                                                              cache::CacheGeneration) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<storage::CacheChunkGenerationInfo> query(const meta::Inode &, cache::CacheBlockIndex) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<void> finishClean(const meta::FinishCleanCacheBlockItem &) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
 };
 
 class RealCacheManagerBackend final : public CacheManagerBackend {
@@ -54,9 +74,18 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
                          const meta::CacheBlockLease &lease,
                          const storage::CacheChunkGenerationInfo &stored) final;
   CoTryTask<void> fail(const cache::CacheBlockKey &key, const meta::CacheBlockLease &lease) final;
+  CoTryTask<void> validateReport(const ReportCacheBlockInvalidReq &req) final;
+  CoTryTask<void> authorizeAdmin(const flat::UserInfo &user, std::optional<meta::InodeId> inode) final;
+  CoTryTask<meta::BeginCleanCacheBlockResult> beginClean(const meta::BeginCleanCacheBlockItem &item) final;
+  CoTryTask<storage::CacheChunkGenerationInfo> retire(const meta::Inode &inode,
+                                                      cache::CacheBlockIndex block,
+                                                      cache::CacheGeneration generation) final;
+  CoTryTask<storage::CacheChunkGenerationInfo> query(const meta::Inode &inode, cache::CacheBlockIndex block) final;
+  CoTryTask<void> finishClean(const meta::FinishCleanCacheBlockItem &item) final;
 
  private:
   meta::CacheServiceIdentity service() const;
+  Result<storage::CacheChunkKey> storageKey(const meta::Inode &inode, cache::CacheBlockIndex block) const;
 
   const Config &config_;
   std::shared_ptr<meta::client::MetaClient> metaClient_;

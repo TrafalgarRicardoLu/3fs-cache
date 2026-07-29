@@ -48,8 +48,14 @@ CoTryTask<EnsureCachedRsp> EnsureCached::run(const EnsureCachedReq &req) {
       }
       case cache::CacheBlockState::LOADING:
       case cache::CacheBlockState::READY:
+        attached = true;
+        break;
       case cache::CacheBlockState::CLEANING:
         attached = true;
+        if (cleanupWorker_) {
+          (void)co_await cleanupWorker_->clean(
+              {items[i].key, std::nullopt, std::nullopt, cache::CleanupTerminalState::FAILED});
+        }
         break;
       default:
         break;

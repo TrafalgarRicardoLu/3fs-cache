@@ -37,7 +37,10 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                                      std::move(originLimits));
   loader_ = std::make_unique<CacheLoader>(backend_, *capacityGate_);
   loaderScheduler_ = std::make_unique<LoaderScheduler>(hints_, *loader_, config_.range_size());
-  ensureCached_ = std::make_unique<EnsureCached>(backend_, hints_);
+  cleanupWorker_ = std::make_unique<CacheCleanupWorker>(backend_);
+  ensureCached_ = std::make_unique<EnsureCached>(backend_, hints_, cleanupWorker_.get());
+  reportInvalid_ = std::make_unique<ReportCacheBlockInvalid>(backend_, *cleanupWorker_);
+  adminCleanup_ = std::make_unique<AdminCleanupCacheBlocks>(backend_, *cleanupWorker_);
   auto scheduler = std::make_unique<BackgroundRunner>(executor);
   if (!scheduler->start(
           "CacheManagerScheduler",
@@ -119,19 +122,22 @@ CoTryTask<ReportCacheBlockInvalidRsp> CacheManagerOperator::reportCacheBlockInva
     const ReportCacheBlockInvalidReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkProtocol(req.cacheProtocolVersion));
-  co_return makeError(CacheCode::kFeatureDisabled, "cache cleanup worker is not enabled");
+  if (!reportInvalid_) co_return makeError(CacheCode::kFeatureDisabled, "cache cleanup worker is not enabled");
+  co_return co_await reportInvalid_->run(req);
 }
 
 CoTryTask<AdminCleanupCacheBlocksRsp> CacheManagerOperator::adminCleanupCacheBlocks(
     const AdminCleanupCacheBlocksReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkProtocol(req.cacheProtocolVersion));
-  co_return makeError(CacheCode::kFeatureDisabled, "cache cleanup worker is not enabled");
+  if (!adminCleanup_) co_return makeError(CacheCode::kFeatureDisabled, "cache cleanup worker is not enabled");
+  co_return co_await adminCleanup_->run(req);
 }
 
 CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCacheStatusReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkProtocol(req.cacheProtocolVersion));
+  if (backend_) CO_RETURN_ON_ERROR(co_await backend_->authorizeAdmin(req.user, req.inode));
   co_return GetCacheStatusRsp{};
 }
 

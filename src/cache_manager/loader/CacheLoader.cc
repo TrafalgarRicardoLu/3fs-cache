@@ -123,6 +123,104 @@ CoTryTask<void> RealCacheManagerBackend::fail(const cache::CacheBlockKey &key, c
   co_return Void{};
 }
 
+Result<storage::CacheChunkKey> RealCacheManagerBackend::storageKey(const meta::Inode &inode,
+                                                                   cache::CacheBlockIndex block) const {
+  auto routing = mgmtdClient_->getRoutingInfo();
+  if (!routing || !routing->raw()) return makeError(CacheCode::kUnavailable, "routing info is unavailable");
+  auto offset = uint64_t{block.toUnderType()} * inode.fileLayout().chunkSize;
+  auto chunkId = inode.getChunkId(inode.id, offset);
+  RETURN_ON_ERROR(chunkId);
+  auto chainId = inode.getChainId(inode, offset, *routing->raw());
+  RETURN_ON_ERROR(chainId);
+  auto chain = routing->getChain(*chainId);
+  if (!chain) return makeError(CacheCode::kUnavailable, "cache chain is unavailable");
+  return storage::CacheChunkKey{{*chainId, chain->chainVersion}, storage::ChunkId(chunkId->pack())};
+}
+
+CoTryTask<void> RealCacheManagerBackend::validateReport(const ReportCacheBlockInvalidReq &req) {
+  auto inode = co_await stat(req.inode);
+  CO_RETURN_ON_ERROR(inode);
+  if (!inode->isOriginFile()) co_return makeError(MetaCode::kNotFile);
+  auto offset = uint64_t{req.block.toUnderType()} * inode->fileLayout().chunkSize;
+  meta::GetFileReadPlanReq plan;
+  plan.user = req.user;
+  plan.openSessionId = req.openSessionId;
+  plan.inode = req.inode;
+  plan.offset = offset;
+  plan.length = 1;
+  plan.cacheProtocolVersion = req.cacheProtocolVersion;
+  auto result = co_await metaClient_->getFileReadPlan(std::move(plan));
+  CO_RETURN_ON_ERROR(result);
+  if (result->blocks.size() != 1 || result->blocks.front().key != cache::CacheBlockKey{req.inode.u64(), req.block} ||
+      result->blocks.front().ready != req.expectedReady) {
+    co_return makeError(CacheCode::kStateConflict, "reported cache READY identity changed");
+  }
+  co_return Void{};
+}
+
+CoTryTask<void> RealCacheManagerBackend::authorizeAdmin(const flat::UserInfo &user,
+                                                        std::optional<meta::InodeId> inode) {
+  meta::GetCacheStatusReq req;
+  req.user = user;
+  req.inode = inode;
+  req.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  auto result = co_await metaClient_->getCacheStatus(std::move(req));
+  CO_RETURN_ON_ERROR(result);
+  co_return Void{};
+}
+
+CoTryTask<meta::BeginCleanCacheBlockResult> RealCacheManagerBackend::beginClean(
+    const meta::BeginCleanCacheBlockItem &item) {
+  meta::BeginCleanCacheBlocksReq req;
+  req.service = service();
+  req.items.push_back(item);
+  auto result = co_await metaClient_->beginCleanCacheBlocks(std::move(req));
+  CO_RETURN_ON_ERROR(result);
+  if (result->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid begin clean result");
+  CO_RETURN_ON_ERROR(result->results.front());
+  co_return *result->results.front();
+}
+
+CoTryTask<storage::CacheChunkGenerationInfo> RealCacheManagerBackend::retire(const meta::Inode &inode,
+                                                                             cache::CacheBlockIndex block,
+                                                                             cache::CacheGeneration generation) {
+  auto key = storageKey(inode, block);
+  CO_RETURN_ON_ERROR(key);
+  storage::RetireCacheChunkGenerationsReq req;
+  req.userInfo = flat::UserInfo{};
+  req.items.push_back({*key, generation, Uuid::random()});
+  auto result = co_await storageClient_->retireCacheChunkGenerations(req);
+  CO_RETURN_ON_ERROR(result);
+  if (result->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid retire result");
+  CO_RETURN_ON_ERROR(result->results.front());
+  co_return *result->results.front();
+}
+
+CoTryTask<storage::CacheChunkGenerationInfo> RealCacheManagerBackend::query(const meta::Inode &inode,
+                                                                            cache::CacheBlockIndex block) {
+  auto key = storageKey(inode, block);
+  CO_RETURN_ON_ERROR(key);
+  storage::QueryCacheChunkGenerationsReq req;
+  req.userInfo = flat::UserInfo{};
+  req.keys.push_back(*key);
+  auto result = co_await storageClient_->queryCacheChunkGenerations(req);
+  CO_RETURN_ON_ERROR(result);
+  if (result->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid query result");
+  CO_RETURN_ON_ERROR(result->results.front());
+  co_return *result->results.front();
+}
+
+CoTryTask<void> RealCacheManagerBackend::finishClean(const meta::FinishCleanCacheBlockItem &item) {
+  meta::FinishCleanCacheBlocksReq req;
+  req.service = service();
+  req.items.push_back(item);
+  auto result = co_await metaClient_->finishCleanCacheBlocks(std::move(req));
+  CO_RETURN_ON_ERROR(result);
+  if (result->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid finish clean result");
+  CO_RETURN_ON_ERROR(result->results.front());
+  co_return Void{};
+}
+
 Result<std::vector<cache::ByteRange>> CacheLoader::mergeRanges(std::span<const LoadHint> hints, uint64_t blockSize) {
   if (blockSize == 0) return makeError(StatusCode::kInvalidArg, "block size is zero");
   std::vector<cache::ByteRange> ranges;

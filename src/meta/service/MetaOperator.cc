@@ -571,4 +571,12 @@ META_CACHE_MUTATION_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, Fi
 
 #undef META_CACHE_MUTATION_METHOD
 
+CoTryTask<GetCacheStatusRsp> MetaOperator::getCacheStatus(GetCacheStatusReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheFeature(req.cacheProtocolVersion));
+  CO_RETURN_ON_ERROR(co_await requireCacheAdmin(req.user));
+  co_return GetCacheStatusRsp{};
+}
+
 }  // namespace hf3fs::meta::server
