@@ -30,6 +30,24 @@ symlink_timeout = 5.0
 sync_on_stat = true
 time_granularity = '1s'
 
+[read_cache]
+enabled = false
+cache_manager_address = 'TCP://127.0.0.1:8000'
+service_name = 'fuse'
+service_token = ''
+hint_timeout = '500ms'
+max_concurrent_origin_requests = 32
+max_inflight_origin_bytes = 268435456
+
+[[read_cache.origins]]
+origin_id = 1
+endpoint = 'http://127.0.0.1:9000'
+region = 'us-east-1'
+use_tls = false
+path_style = true
+max_concurrent_requests = 16
+max_inflight_bytes = 268435456
+
 [client]
 default_compression_level = 0
 default_compression_threshold = '128KB'

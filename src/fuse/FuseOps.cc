@@ -1437,6 +1437,15 @@ void hf3fs_open(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
     return;
   }
 
+  if (ptr->inode.isOriginFile() && (fi->flags & O_ACCMODE) != O_RDONLY) {
+    fuse_reply_err(req, EROFS);
+    return;
+  }
+  if (ptr->inode.isOriginFile() && !d.cacheReadPipeline) {
+    fuse_reply_err(req, StatusCode::toErrno(CacheCode::kFeatureDisabled));
+    return;
+  }
+
   // if (ptr->opened.fetch_add(1) != 0) {
   //   auto res = withRequestInfo(req, d.metaClient->sync(userInfo, ino, true, std::nullopt,
   //   std::nullopt)); if (res.hasError()) {
@@ -1446,13 +1455,15 @@ void hf3fs_open(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
   // }
 
   Uuid session;
-  if ((fi->flags & O_ACCMODE) == O_WRONLY || (fi->flags & O_ACCMODE) == O_RDWR) {
+  Inode inodeSnapshot = ptr->inode;
+  if ((fi->flags & O_ACCMODE) == O_WRONLY || (fi->flags & O_ACCMODE) == O_RDWR || ptr->inode.isOriginFile()) {
     session = meta::client::SessionId::random();
     auto res = withRequestInfo(req, d.metaClient->open(userInfo, ino, std::nullopt, session, fi->flags));
     if (res.hasError()) {
       handle_error(req, res);
       return;
     }
+    inodeSnapshot = *res;
 
     //    fi->direct_io = 1;
   }
@@ -1465,7 +1476,11 @@ void hf3fs_open(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
           : 0;
 
   XLOGF(DBG, "{}opened in o direct mode", fi->flags & O_DIRECT ? "" : "not ");
-  fi->fh = (uintptr_t)(new FileHandle{ptr, (bool)(fi->flags & O_DIRECT), session});
+  if (inodeSnapshot.isOriginFile()) {
+    std::lock_guard lock(d.originReadSessionsMutex);
+    d.originReadSessions.emplace(session, std::make_shared<RcInode>(inodeSnapshot));
+  }
+  fi->fh = (uintptr_t)(new FileHandle{ptr, std::move(inodeSnapshot), (bool)(fi->flags & O_DIRECT), session});
   fuse_reply_open(req, fi);
 }
 
@@ -1474,6 +1489,11 @@ void hf3fs_read(fuse_req_t req, fuse_ino_t fino, size_t size, off_t off, struct 
 
   XLOGF(OP_LOG_LEVEL, "hf3fs_read(ino={}, size={}, off={}, pid={})", ino, size, off, fuse_req_ctx(req)->pid);
   record("read", fuse_req_ctx(req)->uid);
+
+  if (off < 0) {
+    fuse_reply_err(req, EINVAL);
+    return;
+  }
 
   auto pi = inodeOf(*fi, ino);
   pi->dynamicAttr.wlock()->atime = UtcClock::now();
@@ -1493,7 +1513,8 @@ void hf3fs_read(fuse_req_t req, fuse_ino_t fino, size_t size, off_t off, struct 
     }
   }
 
-  auto &inode = pi->inode;
+  auto handle = (FileHandle *)fi->fh;
+  auto &inode = handle->inodeSnapshot.isOriginFile() ? handle->inodeSnapshot : pi->inode;
   /*
     if (!d.buf) {
       XLOGF(INFO, "  hf3fs_read register buffer");
@@ -1518,6 +1539,19 @@ void hf3fs_read(fuse_req_t req, fuse_ino_t fino, size_t size, off_t off, struct 
 
   if (d.memsetBeforeRead) {
     memset(memh.data(), 0, size);
+  }
+
+  if (inode.isOriginFile()) {
+    auto session = meta::SessionInfo{d.clientId, ((FileHandle *)fi->fh)->sessionId};
+    auto read = withRequestInfo(
+        req,
+        d.cacheReadPipeline->read(userInfo, inode, session, off, std::span<uint8_t>((uint8_t *)memh.data(), size)));
+    if (read.hasError()) {
+      handle_error(req, read);
+      return;
+    }
+    fuse_reply_buf(req, (char *)memh.data(), *read);
+    return;
   }
 
   std::vector<ssize_t> res(1);
@@ -1742,7 +1776,8 @@ void hf3fs_release(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
 
   SCOPE_EXIT { delete (FileHandle *)fi->fh; };
 
-  auto sessionId = ((FileHandle *)fi->fh)->sessionId;
+  auto handle = (FileHandle *)fi->fh;
+  auto sessionId = handle->sessionId;
   auto ptr = inodeOf(*fi, ino);
   if (!ptr) {
     XLOGF(ERR, "hf3fs_release(ino={}): inode not found in list.", ino);
@@ -1761,7 +1796,19 @@ void hf3fs_release(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
   }
 
   auto userInfo = UserInfo(flat::Uid(fuse_req_ctx(req)->uid), flat::Gid(fuse_req_ctx(req)->gid), d.fuseToken);
-  if ((fi->flags & O_ACCMODE) == O_WRONLY || (fi->flags & O_ACCMODE) == O_RDWR) {
+  if (handle->inodeSnapshot.isOriginFile()) {
+    {
+      std::lock_guard lock(d.originReadSessionsMutex);
+      d.originReadSessions.erase(sessionId);
+    }
+    auto res = withRequestInfo(
+        req,
+        d.metaClient->close(userInfo, handle->inodeSnapshot.id, sessionId, false, std::nullopt, std::nullopt));
+    if (res.hasError()) {
+      handle_error(req, res);
+      return;
+    }
+  } else if ((fi->flags & O_ACCMODE) == O_WRONLY || (fi->flags & O_ACCMODE) == O_RDWR) {
     auto res = withRequestInfo(req, close(userInfo, *ptr, sessionId));
     if (res.hasError()) {
       handle_error(req, res);
@@ -1893,7 +1940,7 @@ void hf3fs_create(fuse_req_t req, fuse_ino_t fparent, const char *name, mode_t m
 
     fi->direct_io = (!d.userConfig.getConfig(userInfo).enable_read_cache() || fi->flags & O_DIRECT) ? 1 : 0;
     // fi->direct_io = 1;  // newly created file, has to write, or read from remote
-    fi->fh = (uintptr_t)(new FileHandle{ptr, (bool)(fi->flags & O_DIRECT), session});
+    fi->fh = (uintptr_t)(new FileHandle{ptr, ptr->inode, (bool)(fi->flags & O_DIRECT), session});
     XLOGF(DBG, "{}created in o direct mode", fi->flags & O_DIRECT ? "" : "not ");
     fuse_reply_create(req, &e, fi);
   }
@@ -2012,8 +2059,23 @@ void hf3fs_ioctl(fuse_req_t req,
         struct iovec iov = {arg, sizeof(uint32_t)};
         fuse_reply_ioctl_retry(req, nullptr, 0, &iov, 1);
       } else {
-        uint32_t version = 1;
+        uint32_t version = 2;
         fuse_reply_ioctl(req, 0, &version, sizeof(version));
+      }
+      break;
+    }
+    case hf3fs::lib::fuse::HF3FS_IOC_GET_ORIGIN_READ_SESSION: {
+      if (!out_bufsz) {
+        struct iovec iov = {arg, sizeof(hf3fs::lib::fuse::Hf3fsIoctlGetOriginReadSessionArg)};
+        fuse_reply_ioctl_retry(req, nullptr, 0, &iov, 1);
+      } else if (!fi || !fi->fh) {
+        fuse_reply_err(req, EBADF);
+      } else {
+        hf3fs::lib::fuse::Hf3fsIoctlGetOriginReadSessionArg ret{};
+        auto handle = (FileHandle *)fi->fh;
+        ret.originFile = handle->inodeSnapshot.isOriginFile();
+        if (ret.originFile) memcpy(ret.session, handle->sessionId.data, sizeof(ret.session));
+        fuse_reply_ioctl(req, 0, &ret, sizeof(ret));
       }
       break;
     }

@@ -6,9 +6,31 @@
 #include "common/app/ApplicationBase.h"
 #include "common/utils/ConfigBase.h"
 #include "common/utils/CoroutinesPool.h"
+#include "common/utils/Duration.h"
 
 namespace hf3fs::fuse {
 struct FuseConfig : public ConfigBase<FuseConfig> {
+  struct CacheOrigin : public ConfigBase<CacheOrigin> {
+    CONFIG_ITEM(origin_id, uint32_t{0});
+    CONFIG_ITEM(endpoint, std::string{});
+    CONFIG_ITEM(region, std::string{"us-east-1"});
+    CONFIG_ITEM(use_tls, true);
+    CONFIG_ITEM(path_style, false);
+    CONFIG_ITEM(max_concurrent_requests, uint32_t{16}, ConfigCheckers::checkPositive);
+    CONFIG_ITEM(max_inflight_bytes, uint64_t{256_MB}, ConfigCheckers::checkPositive);
+  };
+
+  struct ReadCache : public ConfigBase<ReadCache> {
+    CONFIG_ITEM(enabled, false);
+    CONFIG_ITEM(cache_manager_address, std::optional<net::Address>{});
+    CONFIG_ITEM(service_name, std::string{"fuse"});
+    CONFIG_ITEM(service_token, std::string{});
+    CONFIG_ITEM(hint_timeout, 500_ms, [](Duration value) { return value > 0_ns; });
+    CONFIG_ITEM(max_concurrent_origin_requests, uint32_t{32}, ConfigCheckers::checkPositive);
+    CONFIG_ITEM(max_inflight_origin_bytes, uint64_t{256_MB}, ConfigCheckers::checkPositive);
+    CONFIG_OBJ_ARRAY(origins, CacheOrigin, 64, [](auto &) { return 0; });
+  };
+
 #ifdef ENABLE_FUSE_APPLICATION
   CONFIG_OBJ(common, ApplicationBase::Config);
 #else
@@ -66,6 +88,7 @@ struct FuseConfig : public ConfigBase<FuseConfig> {
   CONFIG_HOT_UPDATED_ITEM(io_job_deq_timeout, 1_ms);
 
   CONFIG_OBJ(storage_io, storage::client::IoOptions);
+  CONFIG_OBJ(read_cache, ReadCache);
 
   CONFIG_HOT_UPDATED_ITEM(submit_wait_jitter, 1_ms);
   CONFIG_HOT_UPDATED_ITEM(max_jobs_per_ioring, 32);

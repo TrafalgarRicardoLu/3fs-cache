@@ -15,6 +15,11 @@ struct Hf3fsIoctlGetMountNameArg {
   char str[32];
 };
 
+struct Hf3fsIoctlGetOriginReadSessionArg {
+  uint8_t session[16];
+  bool originFile;
+};
+
 struct Hf3fsIoctlHardlinkArg {
   ino_t ino;
   char str[NAME_MAX];
@@ -46,6 +51,7 @@ enum {
   HF3FS_IOC_GET_PATH_OFFSET = _IOR(HF3FS_IOCTYPE_ID, 1, uint32_t),
   HF3FS_IOC_GET_MAGIC_NUM = _IOR(HF3FS_IOCTYPE_ID, 2, uint32_t),
   HF3FS_IOC_GET_IOCTL_VERSION = _IOR(HF3FS_IOCTYPE_ID, 3, uint32_t),
+  HF3FS_IOC_GET_ORIGIN_READ_SESSION = _IOR(HF3FS_IOCTYPE_ID, 4, Hf3fsIoctlGetOriginReadSessionArg),
 
   HF3FS_IOC_RECURSIVE_RM = _IOR(HF3FS_IOCTYPE_ID, 10, uint32_t),
   HF3FS_IOC_FSYNC = _IOR(HF3FS_IOCTYPE_ID, 11, uint32_t),

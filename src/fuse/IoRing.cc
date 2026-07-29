@@ -117,6 +117,7 @@ CoTask<void> IoRing::process(
     }
 
     lib::agent::PioV ioExec(storageClient, config.chunk_size_limit(), res);
+    std::vector<bool> originReads(toProc, false);
     std::vector<uint64_t> truncateVers;
     if (!forRead_) {
       truncateVers.resize(toProc, 0);
@@ -155,6 +156,28 @@ CoTask<void> IoRing::process(
       } else if (!bufs[i]->ptr() || !*memh) {
         XLOGF(ERR, "{} is null when doing usrbio", *memh ? "buf ptr" : "memh");
         res[i] = -static_cast<ssize_t>(ClientAgentCode::kIovShmFail);
+        continue;
+      }
+
+      if (forRead_ && args.originFile) {
+        originReads[i] = true;
+        auto &clients = getFuseClientsInstance();
+        if (!clients.cacheReadPipeline || !inodes[i]->inode.isOriginFile()) {
+          res[i] = -static_cast<ssize_t>(CacheCode::kFeatureDisabled);
+          continue;
+        }
+        Uuid session;
+        memcpy(session.data, args.openSession, sizeof(session.data));
+        auto read = co_await clients.cacheReadPipeline->read(userInfo_,
+                                                             inodes[i]->inode,
+                                                             meta::SessionInfo{clients.clientId, session},
+                                                             args.fileOff,
+                                                             std::span<uint8_t>((uint8_t *)bufs[i]->ptr(), args.ioLen));
+        if (read.hasError()) {
+          res[i] = -static_cast<ssize_t>(read.error().code());
+        } else {
+          res[i] = *read;
+        }
         continue;
       }
 
@@ -197,9 +220,9 @@ CoTask<void> IoRing::process(
     start = now;
 
     if (!execRes) {
-      for (auto &r : res) {
-        if (r >= 0) {
-          r = -static_cast<ssize_t>(execRes.error().code());
+      for (int i = 0; i < toProc; ++i) {
+        if (!originReads[i] && res[i] >= 0) {
+          res[i] = -static_cast<ssize_t>(execRes.error().code());
         }
       }
     } else {

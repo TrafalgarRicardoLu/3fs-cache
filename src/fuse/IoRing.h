@@ -20,6 +20,8 @@ struct IoArgs {
 
   uint64_t fileIid;
   size_t fileOff;
+  uint8_t openSession[16];
+  bool originFile;
 
   uint64_t ioLen;
 

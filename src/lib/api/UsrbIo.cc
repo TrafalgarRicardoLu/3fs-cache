@@ -1,8 +1,8 @@
 #include <cstdint>
 #include <fcntl.h>
 #include <fmt/format.h>
-#include <folly/logging/xlog.h>
 #include <folly/ScopeGuard.h>
+#include <folly/logging/xlog.h>
 #include <iostream>
 #include <numa.h>
 #include <sys/stat.h>
@@ -529,17 +529,21 @@ void hf3fs_iordestroy(struct hf3fs_ior *ior) {
 }
 
 struct Hf3fsRegisteredFd {
-  Hf3fsRegisteredFd(int f, int df, hf3fs::meta::InodeId i, int s)
+  Hf3fsRegisteredFd(int f, int df, hf3fs::meta::InodeId i, int s, bool origin, hf3fs::Uuid session)
       : fd(f),
         dupfd(df),
         iid(i),
-        status(s) {}
+        status(s),
+        originFile(origin),
+        openSession(session) {}
   ~Hf3fsRegisteredFd() { close(dupfd); }
 
   int fd;
   int dupfd;
   hf3fs::meta::InodeId iid;
   int status;
+  bool originFile;
+  hf3fs::Uuid openSession;
 };
 
 static int noFiles() {
@@ -580,9 +584,21 @@ int hf3fs_reg_fd(int fd, uint64_t flags) {
   }
 
   int status = fcntl(fd, F_GETFL);
+  hf3fs::lib::fuse::Hf3fsIoctlGetOriginReadSessionArg originSession{};
+  if (ioctl(fd, hf3fs::lib::fuse::HF3FS_IOC_GET_ORIGIN_READ_SESSION, &originSession) < 0) {
+    close(dupfd);
+    return errno;
+  }
+  hf3fs::Uuid session = hf3fs::Uuid::zero();
+  if (originSession.originFile) memcpy(session.data, originSession.session, sizeof(session.data));
 
   std::shared_ptr<Hf3fsRegisteredFd> empty;
-  auto regfd = std::make_shared<Hf3fsRegisteredFd>(fd, dupfd, hf3fs::meta::InodeId{stx.stx_ino}, status);
+  auto regfd = std::make_shared<Hf3fsRegisteredFd>(fd,
+                                                   dupfd,
+                                                   hf3fs::meta::InodeId{stx.stx_ino},
+                                                   status,
+                                                   originSession.originFile,
+                                                   session);
   if (!regfds[fd].compare_exchange_strong(empty, regfd)) {
     return EINVAL;  // already registered by another thread
   }
@@ -634,6 +650,9 @@ int hf3fs_prep_io(const struct hf3fs_ior *ior,
   }
 
   int status = regfd->status;
+  if (!read && regfd->originFile) {
+    return -EROFS;
+  }
   if ((read && (status & O_ACCMODE) == O_WRONLY) || (!read && (status & O_ACCMODE) == O_RDONLY)) {
     return -EACCES;
   }
@@ -651,6 +670,8 @@ int hf3fs_prep_io(const struct hf3fs_ior *ior,
   args.bufOff = p - iov->base;
   args.fileIid = regfd->iid.u64();
   args.fileOff = off;
+  memcpy(args.openSession, regfd->openSession.data, sizeof(args.openSession));
+  args.originFile = regfd->originFile;
   args.ioLen = len;
   args.userdata = userdata;
 

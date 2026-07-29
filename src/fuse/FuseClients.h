@@ -38,6 +38,9 @@
 #include "IovTable.h"
 #include "PioV.h"
 #include "UserConfig.h"
+#include "cache/origin/RoutedObjectStore.h"
+#include "client/cache/CacheReadPipeline.h"
+#include "client/cache/ReadPlanner.h"
 #include "client/meta/MetaClient.h"
 #include "client/mgmtd/MgmtdClientForClient.h"
 #include "client/storage/StorageClient.h"
@@ -145,12 +148,9 @@ struct RcInode {
 
 struct FileHandle {
   std::shared_ptr<RcInode> rcinode;
+  Inode inodeSnapshot;
   bool oDirect;
   Uuid sessionId;
-
-  /* FileHandle(std::shared_ptr<RcInode> rcinode, bool oDirect, Uuid sessionId) */
-  /*       : rcinode(rcinode), */
-  /*         sessionId(sessionId) {} */
 };
 
 struct DirHandle {
@@ -196,6 +196,20 @@ struct FuseClients {
   std::shared_ptr<client::MgmtdClientForClient> mgmtdClient;
   std::shared_ptr<storage::client::StorageClient> storageClient;
   std::shared_ptr<meta::client::MetaClient> metaClient;
+  ClientId clientId;
+
+  std::shared_ptr<cache::origin::RoutedObjectStore> originStore;
+  std::unique_ptr<client::cache::LocalMissSingleflight> originSingleflight;
+  std::unique_ptr<client::cache::OriginMissReader> originMissReader;
+  std::shared_ptr<client::cache::MetaReadPlanSource> readPlanSource;
+  std::unique_ptr<client::cache::ReadPlanner> readPlanner;
+  std::unique_ptr<client::cache::StorageCacheHitReader> cacheHitReader;
+  std::unique_ptr<cache_manager::ICacheManagerServiceStub> cacheManagerStub;
+  std::unique_ptr<client::cache::EnsureCachedReporter> cacheReporter;
+  std::unique_ptr<client::cache::CacheReadPipeline> cacheReadPipeline;
+
+  std::unordered_map<Uuid, std::shared_ptr<RcInode>> originReadSessions;
+  std::mutex originReadSessionsMutex;
 
   std::string fuseToken;
   std::string fuseMount;

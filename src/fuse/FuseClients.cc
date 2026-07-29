@@ -11,6 +11,7 @@
 #include <thread>
 #include <utility>
 
+#include "cache/origin/s3/S3ObjectStore.h"
 #include "common/app/ApplicationBase.h"
 #include "common/monitor/Recorder.h"
 #include "common/utils/BackgroundRunner.h"
@@ -21,6 +22,7 @@
 #include "fbs/meta/Common.h"
 #include "fbs/mgmtd/Rpc.h"
 #include "stubs/MetaService/MetaServiceStub.h"
+#include "stubs/cache_manager/CacheManagerServiceStub.h"
 #include "stubs/common/RealStubFactory.h"
 #include "stubs/mgmtd/MgmtdServiceStub.h"
 
@@ -107,7 +109,7 @@ Result<Void> FuseClients::init(const flat::AppInfo &appInfo,
   auto containerHostnameRes = SysResource::hostname(/*physicalMachineName=*/false);
   RETURN_ON_ERROR(containerHostnameRes);
 
-  auto clientId = ClientId::random(*physicalHostnameRes);
+  clientId = ClientId::random(*physicalHostnameRes);
 
   mgmtdClient->setClientSessionPayload({clientId.uuid.toHexString(),
                                         flat::NodeType::FUSE,
@@ -135,6 +137,54 @@ Result<Void> FuseClients::init(const flat::AppInfo &appInfo,
                                                  storageClient,
                                                  true /* dynStripe */);
   metaClient->start(client->tpg().bgThreadPool());
+
+  if (fuseConfig.read_cache().enabled()) {
+    if (!fuseConfig.read_cache().cache_manager_address() || fuseConfig.read_cache().origins_length() == 0) {
+      return makeError(StatusCode::kInvalidConfig,
+                       "read cache requires a cache manager address and at least one origin");
+    }
+    cache::origin::RoutedObjectStore::Stores stores;
+    for (size_t i = 0; i < fuseConfig.read_cache().origins_length(); ++i) {
+      const auto &origin = fuseConfig.read_cache().origins(i);
+      if (origin.origin_id() == 0 || stores.contains(origin.origin_id())) {
+        return makeError(StatusCode::kInvalidConfig, "read cache origin ids must be nonzero and unique");
+      }
+      cache::origin::s3::S3ObjectStoreConfig storeConfig;
+      storeConfig.ioThreads = std::max(uint32_t{1}, origin.max_concurrent_requests());
+      storeConfig.maxConcurrentRequests = origin.max_concurrent_requests();
+      storeConfig.maxInflightBytes = origin.max_inflight_bytes();
+      cache::origin::s3::AwsS3ClientConfig awsConfig;
+      awsConfig.region = origin.region();
+      awsConfig.endpoint = origin.endpoint();
+      awsConfig.useTls = origin.use_tls();
+      awsConfig.pathStyle = origin.path_style();
+      awsConfig.maxConnections = origin.max_concurrent_requests();
+      auto store = cache::origin::s3::S3ObjectStore::createAws(storeConfig, awsConfig);
+      RETURN_ON_ERROR(store);
+      stores.emplace(origin.origin_id(), std::move(*store));
+    }
+    originStore = std::make_shared<cache::origin::RoutedObjectStore>(std::move(stores));
+    originSingleflight = std::make_unique<client::cache::LocalMissSingleflight>();
+    client::cache::OriginMissReaderConfig missConfig;
+    missConfig.maxConcurrentRequests = fuseConfig.read_cache().max_concurrent_origin_requests();
+    missConfig.maxInflightBytes = fuseConfig.read_cache().max_inflight_origin_bytes();
+    originMissReader = std::make_unique<client::cache::OriginMissReader>(*originStore, *originSingleflight, missConfig);
+    readPlanSource = std::make_shared<client::cache::MetaReadPlanSource>(*metaClient);
+    readPlanner = std::make_unique<client::cache::ReadPlanner>(readPlanSource);
+    cacheHitReader = std::make_unique<client::cache::StorageCacheHitReader>(*storageClient);
+    cacheManagerStub = std::make_unique<cache_manager::CacheManagerServiceStub<serde::ClientContext>>(
+        client->serdeCtx(*fuseConfig.read_cache().cache_manager_address()));
+    cache_manager::ServiceIdentity service{fuseConfig.read_cache().service_name(),
+                                           fuseConfig.read_cache().service_token()};
+    RETURN_ON_ERROR(service.valid());
+    cacheReporter = std::make_unique<client::cache::EnsureCachedReporter>(*cacheManagerStub,
+                                                                          std::move(service),
+                                                                          fuseConfig.read_cache().hint_timeout());
+    cacheReadPipeline = std::make_unique<client::cache::CacheReadPipeline>(*originMissReader,
+                                                                           *readPlanner,
+                                                                           *cacheHitReader,
+                                                                           cacheReporter.get());
+  }
 
   iojqs.reserve(3);
   iojqs.emplace_back(new BoundedQueue<IoRingJob>(fuseConfig.io_jobq_sizes().hi()));
@@ -213,6 +263,15 @@ void FuseClients::stop() {
     client->stopAndJoin();
     client.reset();
   }
+  cacheReadPipeline.reset();
+  cacheReporter.reset();
+  cacheManagerStub.reset();
+  cacheHitReader.reset();
+  readPlanner.reset();
+  readPlanSource.reset();
+  originMissReader.reset();
+  originSingleflight.reset();
+  originStore.reset();
 }
 
 CoTask<void> FuseClients::ioRingWorker(int i, int ths) {
@@ -279,16 +338,25 @@ CoTask<void> FuseClients::ioRingWorker(int i, int ths) {
             [this](std::vector<std::shared_ptr<RcInode>> &ins, const IoArgs *args, const IoSqe *sqes, int sqec) {
               auto lastIid = 0ull;
 
-              std::lock_guard lock(inodesMutex);
               for (int i = 0; i < sqec; ++i) {
-                auto idn = args[sqes[i].index].fileIid;
-                if (i && idn == lastIid) {
+                const auto &arg = args[sqes[i].index];
+                auto idn = arg.fileIid;
+                if (arg.originFile) {
+                  Uuid session;
+                  memcpy(session.data, arg.openSession, sizeof(session.data));
+                  std::lock_guard lock(originReadSessionsMutex);
+                  auto it = originReadSessions.find(session);
+                  ins.push_back(it == originReadSessions.end() ? nullptr : it->second);
+                  continue;
+                }
+                if (i && !args[sqes[i - 1].index].originFile && idn == lastIid) {
                   ins.emplace_back(ins.back());
                   continue;
                 }
 
                 lastIid = idn;
                 auto iid = meta::InodeId(idn);
+                std::lock_guard lock(inodesMutex);
                 auto it = inodes.find(iid);
                 ins.push_back(it == inodes.end() ? (std::shared_ptr<RcInode>()) : it->second);
               }
