@@ -1,0 +1,44 @@
+name: Cache AWS S3 qualification
+
+on:
+  workflow_dispatch:
+
+jobs:
+  qualify:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Apply dependency patches
+        run: ./patches/apply.sh
+
+      - name: Configure qualification target
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_CXX_COMPILER=clang++-14
+          -DCMAKE_C_COMPILER=clang-14
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DSHUFFLE_METHOD=g++11
+          -DHF3FS_ENABLE_CACHE=ON
+
+      - name: Build and qualify
+        env:
+          HF3FS_CACHE_AWS_QUALIFICATION: 1
+          HF3FS_CACHE_AWS_REGION: ${{ secrets.HF3FS_CACHE_AWS_REGION }}
+          HF3FS_CACHE_AWS_VERSIONED_BUCKET: ${{ secrets.HF3FS_CACHE_AWS_VERSIONED_BUCKET }}
+          HF3FS_CACHE_AWS_ETAG_BUCKET: ${{ secrets.HF3FS_CACHE_AWS_ETAG_BUCKET }}
+          HF3FS_CACHE_AWS_QUALIFICATION_LOG: ${{ runner.temp }}/cache-aws-qualification.log
+        run: |
+          cmake --build build --target test_cache_aws_s3 -j 32
+          ctest --test-dir build -R '^test_cache_aws_s3$' --output-on-failure | tee "${{ runner.temp }}/cache-aws-ctest.log"
+
+      - name: Archive qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache-aws-qualification
+          path: |
+            ${{ runner.temp }}/cache-aws-qualification.log
+            ${{ runner.temp }}/cache-aws-ctest.log
