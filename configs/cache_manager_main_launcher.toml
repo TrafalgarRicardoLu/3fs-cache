@@ -1,0 +1,8 @@
+allow_dev_version = true
+cluster_id = ""
+
+[ib_devices]
+allow_no_usable_devices = true
+
+[mgmtd_client]
+mgmtd_server_addresses = []

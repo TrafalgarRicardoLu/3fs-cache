@@ -19,6 +19,7 @@ struct ServiceIdentity {
     if (name.empty() || token.empty()) return makeError(StatusCode::kInvalidArg, "invalid service identity");
     return Void{};
   }
+  std::string serdeToReadable() const { return std::string{name} + "@SECRET TOKEN"; }
 };
 
 enum class EnsureReason : uint8_t {

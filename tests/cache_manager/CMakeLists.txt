@@ -1,1 +1,1 @@
-target_add_test(test_cache_manager common)
+target_add_test(test_cache_manager cache-manager common)

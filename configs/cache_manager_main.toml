@@ -1,0 +1,33 @@
+[server]
+service_name = "cache-manager"
+service_token = "replace-with-a-cluster-secret"
+global_concurrency = 64
+max_inflight_bytes = 1073741824
+range_size = 4194304
+load_lease = "30s"
+hint_timeout = "500ms"
+scheduler_interval = "100ms"
+
+[[server.origins]]
+origin_id = 1
+endpoint = "http://127.0.0.1:9000"
+region = "us-east-1"
+use_tls = false
+path_style = true
+max_concurrent_requests = 16
+max_inflight_bytes = 268435456
+
+[[server.base.groups]]
+network_type = "TCP"
+services = ["CacheManagerSerde"]
+
+[server.base.groups.listener]
+listen_port = 8000
+
+[[server.base.groups]]
+network_type = "TCP"
+services = ["Core"]
+use_independent_thread_pool = true
+
+[server.base.groups.listener]
+listen_port = 9000
