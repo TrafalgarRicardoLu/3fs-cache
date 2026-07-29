@@ -1,13 +1,13 @@
 # Phase-one read-cache acceptance record
 
-Record date: 2026-07-28
+Record date: 2026-07-29
 
 ## Delivery status
 
 All 24 implementation tasks, T0 through T23, are represented by focused commits and repository tests. The implementation
-is complete for the approved MVP scope. Formal M5 environment qualification is still pending because this workstation
-does not provide an installed AWS SDK CMake package, a provisioned MinIO endpoint, or AWS qualification credentials.
-The two suites and their manual workflows are present so those results can be attached without code changes.
+is complete for the approved MVP scope. The mandatory MinIO environment qualification has passed. Formal M5 release
+qualification is still pending because this workstation does not provide AWS credentials or the two disposable AWS
+buckets. The AWS suite and its manual workflow are present so that evidence can be attached without code changes.
 
 | Task | Delivered capability | Commit |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ The two suites and their manual workflows are present so those results can be at
 | T20 | Cross-component metrics and safe structured identity tags | `ba88869` |
 | T21 | Real MinIO integration suite and workflow | `1f6b697` |
 | T22 | VersionId/If-Match AWS qualification suite | `05ad959` |
-| T23 | Benchmark, fault matrix, runbook, and final acceptance | current delivery commit |
+| T23 | Benchmark, fault matrix, runbook, and final acceptance | `e0ad965` |
 
 ## Fault-injection evidence
 
@@ -78,24 +78,27 @@ claims, and no phase-one threshold is applied.
 
 | Suite | Local result | Required release evidence |
 | --- | --- | --- |
-| MinIO | Not run: cache-enabled AWS SDK package and provisioned endpoint are unavailable on this workstation. Source was syntax-checked against AWS SDK for C++ 1.10.55 headers. | Run `test_cache_minio`; archive CTest output proving boundary, cold/fill/warm/mixed/refresh/version/capacity/cleanup cases and zero origin requests on the all-hit read. |
-| AWS S3 | Ordinary cache-off registration reports explicit `SKIPPED`; no credentials or disposable buckets were supplied. Source was syntax-checked against AWS SDK for C++ 1.10.55 headers. | Run `test_cache_aws_s3` with explicit qualification enablement; archive CTest output and the sanitized log with both scenarios passing and `cleanup_failures=0`. |
+| MinIO | **Passed 2026-07-29.** Built with AWS SDK for C++ 1.10.55 and ran against MinIO `RELEASE.2025-09-07T16-13-09Z` on an isolated loopback endpoint. `test_cache_minio` passed both tests in 0.21 seconds; the test bucket was removed and only MinIO internal metadata remained in the data root. | Complete. The suite covered the boundary matrix, cold/fill/warm/mixed/refresh/version/capacity/cleanup cases and asserted zero origin requests on the all-hit read. |
+| AWS S3 | The cache-enabled AWS SDK 1.10.55 executable builds and registers normally. Both scenarios explicitly reported `SKIPPED` because qualification was not enabled; no credentials or disposable buckets were supplied. | Run `test_cache_aws_s3` with explicit qualification enablement; archive CTest output and the sanitized log with both scenarios passing and `cleanup_failures=0`. |
 
 An external release must not mark M5 qualified until both rows have real evidence. See the linked procedures in the
 [phase-one runbook](cache-phase-1-runbook.md).
 
 ## Known local validation constraints
 
-- The ordinary build keeps `HF3FS_ENABLE_CACHE=OFF` because the installed environment has no AWS SDK CMake package.
-- The final all-target build stops in the pre-existing jemalloc external project because this workstation does not
-  provide `autoconf`; focused cache, Manager, Client, Metadata, Storage, Admin, and benchmark targets build separately.
-- The full FUSE target is constrained by the workstation's older fuse3 headers, which do not expose the
-  `fuse_loop_cfg_*` API used by the repository. Modified FUSE translation units were compiled individually.
+- The cache-enabled qualification build uses an isolated AWS SDK for C++ 1.10.55 installation under `/tmp`; the SDK is
+  not installed system-wide.
+- An isolated autoconf 2.71 installation lets the jemalloc external project build successfully. The cache-enabled
+  all-target build advances to 83%, including successful `storage`, `mgmtd`, `meta`, `client-cache`, `cache-manager`,
+  and cache test targets, before the full FUSE target encounters the workstation dependency constraint below.
+- The workstation's older fuse3 headers do not expose the `fuse_loop_cfg_create`, `fuse_loop_cfg_destroy`, or
+  `fuse_loop_cfg_set_*` APIs used by `FuseMainLoop.cc`; this is the remaining all-target build blocker.
 - Full `test_client` currently fails the unrelated `MgmtdClientTest.testRetryUnknownAddrs` baseline assertion because an
   additional old-address probe appears in the observed call sequence. Cache-specific Client tests pass.
-- The all-CTest invocation has 16 registered targets: Metadata, cache, Manager, and Admin pass; AWS is skipped as
-  designed; eight binaries are unavailable after the all-target build stops; and the existing Client plus three Storage
-  suites report environment/baseline failures. The focused cache-generation Storage test passes.
+- The cache-enabled configuration registers 17 CTest targets. `test_cache`, `test_cache_manager`, `test_admin_cli`, and
+  `test_meta` pass; both AWS cases skip as designed. Five unrelated binaries remain unavailable after the FUSE build
+  stop. The existing Client and three Storage suites retain their baseline/environment failures; both cache-generation
+  Storage cases pass, while the Storage failures include unavailable `io_uring_register_buffers` resources (`-12`).
 - Repository-wide formatting currently reports unrelated pre-existing failures outside the cache task. Every modified
   cache source is checked separately with the repository clang-format configuration.
 
