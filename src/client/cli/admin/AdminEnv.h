@@ -7,6 +7,7 @@
 #include "client/storage/StorageClient.h"
 #include "common/kv/IKVEngine.h"
 #include "fbs/core/user/User.h"
+#include "stubs/cache_manager/ICacheManagerServiceStub.h"
 
 namespace hf3fs::client::cli {
 struct AdminEnv : IEnv {
@@ -21,5 +22,6 @@ struct AdminEnv : IEnv {
   std::function<std::shared_ptr<IMgmtdClientForAdmin>()> unsafeMgmtdClientGetter;
   std::function<std::shared_ptr<storage::client::StorageClient>()> storageClientGetter;
   std::function<std::shared_ptr<CoreClient>()> coreClientGetter;
+  std::function<std::shared_ptr<cache_manager::ICacheManagerServiceStub>()> cacheManagerStubGetter;
 };
 }  // namespace hf3fs::client::cli

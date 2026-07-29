@@ -17,6 +17,7 @@
 #include "fdb/FDBContext.h"
 #include "fdb/FDBKVEngine.h"
 #include "stubs/MetaService/MetaServiceStub.h"
+#include "stubs/cache_manager/CacheManagerServiceStub.h"
 #include "stubs/common/RealStubFactory.h"
 #include "stubs/core/CoreServiceStub.h"
 #include "stubs/mgmtd/MgmtdServiceStub.h"
@@ -59,6 +60,7 @@ class Config : public ConfigBase<Config> {
   CONFIG_OBJ(meta_client, MetaClient::Config);
   CONFIG_OBJ(storage_client, StorageClient::Config);
   CONFIG_OBJ(monitor, hf3fs::monitor::Monitor::Config);
+  CONFIG_ITEM(cache_manager_address, std::optional<net::Address>{});
 };
 
 flat::UserInfo generateUserInfo(const UserConfig &cfg) {
@@ -99,6 +101,7 @@ int main(int argc, char **argv) {
   std::shared_ptr<MetaClient> metaClient;
   std::shared_ptr<StorageClient> storageClient;
   std::shared_ptr<CoreClient> coreClient;
+  std::shared_ptr<cache_manager::ICacheManagerServiceStub> cacheManagerStub;
   auto clientId = ClientId::random();
 
   auto ensureIbInited = [&] {
@@ -204,6 +207,19 @@ int main(int argc, char **argv) {
       return true;
     }();
     return coreClient;
+  };
+
+  env.cacheManagerStubGetter = [&] {
+    [[maybe_unused]] static bool inited = [&] {
+      ensureClient();
+      if (!config.cache_manager_address()) {
+        throw StatusException(Status(StatusCode::kInvalidConfig, "cache_manager_address is not configured"));
+      }
+      cacheManagerStub = std::make_shared<cache_manager::CacheManagerServiceStub<serde::ClientContext>>(
+          client->serdeCtx(*config.cache_manager_address()));
+      return true;
+    }();
+    return cacheManagerStub;
   };
 
   std::string cmd = argc > 1 ? fmt::format("{}", fmt::join(&argv[1], &argv[argc], " ")) : "";

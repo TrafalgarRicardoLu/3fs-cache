@@ -1,5 +1,6 @@
 break_multi_line_command_on_failure = false
 cluster_id = ''
+cache_manager_address = 'TCP://127.0.0.1:8000'
 log = 'DBG:normal; normal=file:path=/var/log/3fs/cli.log,async=true,sync_level=ERR'
 num_timeout_ms = 1000
 profile = false

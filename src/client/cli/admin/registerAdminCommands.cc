@@ -2,6 +2,11 @@
 
 #include "AdminUserCtrl.h"
 #include "Bench.h"
+#include "CacheCleanup.h"
+#include "CacheImport.h"
+#include "CacheListBlocks.h"
+#include "CacheRefreshOrigin.h"
+#include "CacheStatus.h"
 #include "Chdir.h"
 #include "Checksum.h"
 #include "Create.h"
@@ -117,6 +122,11 @@ CoTryTask<void> registerAdminCommands(Dispatcher &dispatcher) {
   CO_RETURN_ON_ERROR(co_await registerGetLastConfigUpdateRecordHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerSetPermissionHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerDropUserCacheHandler(dispatcher));
+  CO_RETURN_ON_ERROR(co_await registerCacheImportHandler(dispatcher));
+  CO_RETURN_ON_ERROR(co_await registerCacheRefreshOriginHandler(dispatcher));
+  CO_RETURN_ON_ERROR(co_await registerCacheStatusHandler(dispatcher));
+  CO_RETURN_ON_ERROR(co_await registerCacheListBlocksHandler(dispatcher));
+  CO_RETURN_ON_ERROR(co_await registerCacheCleanupHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerRotateLastSrvHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerRotateAsPreferredOrderHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerDumpSessionHandler(dispatcher));
