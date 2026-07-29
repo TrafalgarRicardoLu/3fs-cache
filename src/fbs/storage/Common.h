@@ -15,6 +15,7 @@
 #include "common/utils/Result.h"
 #include "common/utils/StrongType.h"
 #include "common/utils/Uuid.h"
+#include "fbs/cache/Common.h"
 #include "fbs/core/user/User.h"
 #include "fbs/mgmtd/MgmtdTypes.h"
 #include "fbs/mgmtd/NodeInfo.h"
@@ -224,6 +225,7 @@ struct IOResult {
   SERDE_STRUCT_FIELD(updateVer, ChunkVer{});
   SERDE_STRUCT_FIELD(checksum, ChecksumInfo{});
   SERDE_STRUCT_FIELD(commitChainVer, ChainVer{});
+  SERDE_STRUCT_FIELD(cacheGeneration, cache::CacheGeneration{});
 
  public:
   IOResult() = default;
@@ -648,6 +650,13 @@ enum class RecycleState : uint8_t {
   REMOVAL_IN_RETRYING,
 };
 
+enum class CacheChunkState : uint8_t {
+  NONE,
+  WRITING,
+  ACTIVE,
+  RETIRED,
+};
+
 // Metadata of chunk. The order of members has been adjusted for smaller size.
 struct ChunkMetadata {
   bool operator==(const ChunkMetadata &o) const = default;
@@ -670,6 +679,9 @@ struct ChunkMetadata {
 
   SERDE_STRUCT_FIELD(lastClientUuid, Uuid{});
   SERDE_STRUCT_FIELD(timestamp, UtcTime{});
+  SERDE_STRUCT_FIELD(cacheGeneration, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(cacheOperationId, Uuid::zero());
+  SERDE_STRUCT_FIELD(cacheState, CacheChunkState::NONE);
 
  public:
   bool readyToRemove() const { return recycleState != RecycleState::NORMAL; }
@@ -700,6 +712,7 @@ struct Target {
   SERDE_STRUCT_FIELD(chainId, ChainId{});
   SERDE_STRUCT_FIELD(offlineUponUserRequest, false);
   SERDE_STRUCT_FIELD(useChunkEngine, false);
+  SERDE_STRUCT_FIELD(cacheData, false);
 
  public:
   Result<net::Address> getSuccessorAddr() const;

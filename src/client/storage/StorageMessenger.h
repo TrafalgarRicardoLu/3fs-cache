@@ -8,6 +8,7 @@
 #include "common/utils/Address.h"
 #include "common/utils/Coroutine.h"
 #include "common/utils/Result.h"
+#include "fbs/storage/Cache.h"
 #include "fbs/storage/Common.h"
 
 namespace hf3fs::storage::client {
@@ -89,6 +90,20 @@ class StorageMessenger {
                                                         const GetAllChunkMetadataReq &request,
                                                         const net::UserRequestOptions *options = nullptr,
                                                         serde::Timestamp *timestamp = nullptr);
+
+  CoTryTask<ReplaceCacheChunksRsp> replaceCacheChunks(const hf3fs::net::Address &address,
+                                                      const ReplaceCacheChunksReq &request,
+                                                      const net::UserRequestOptions *options = nullptr,
+                                                      serde::Timestamp *timestamp = nullptr);
+  CoTryTask<RetireCacheChunkGenerationsRsp> retireCacheChunkGenerations(
+      const hf3fs::net::Address &address,
+      const RetireCacheChunkGenerationsReq &request,
+      const net::UserRequestOptions *options = nullptr,
+      serde::Timestamp *timestamp = nullptr);
+  CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(const hf3fs::net::Address &address,
+                                                                      const QueryCacheChunkGenerationsReq &request,
+                                                                      const net::UserRequestOptions *options = nullptr,
+                                                                      serde::Timestamp *timestamp = nullptr);
 
  private:
   hf3fs::net::Client client_;

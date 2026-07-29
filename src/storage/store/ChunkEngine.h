@@ -4,6 +4,7 @@
 
 #include "chunk_engine/src/cxx.rs.h"
 #include "common/utils/UtcTime.h"
+#include "fbs/storage/Cache.h"
 #include "fbs/storage/Common.h"
 #include "storage/aio/BatchReadJob.h"
 #include "storage/update/UpdateJob.h"
@@ -11,6 +12,17 @@
 namespace hf3fs::storage {
 
 struct ChunkEngine {
+  static constexpr std::string_view kCacheTagMagic = "3FSC";
+
+  struct CacheTag {
+    CacheChunkState state = CacheChunkState::NONE;
+    cache::CacheGeneration generation{};
+    Uuid operationId = Uuid::zero();
+  };
+
+  static std::string encodeCacheTag(CacheTag tag);
+  static std::optional<CacheTag> decodeCacheTag(rust::Slice<const uint8_t> tag);
+
   static void copyMeta(const chunk_engine::RawMeta &in, ChunkMetadata &out) {
     out.commitVer = ChunkVer{in.chunk_ver};
     out.updateVer = ChunkVer{in.chunk_ver};
@@ -58,6 +70,11 @@ struct ChunkEngine {
 
     auto &result = job.result();
     auto &meta = state.chunkEngineJob.chunk()->raw_meta();
+    auto cacheTag = decodeCacheTag(state.chunkEngineJob.chunk()->raw_etag());
+    if (cacheTag && cacheTag->state != CacheChunkState::ACTIVE) {
+      return makeError(CacheCode::kNotFound, "cache chunk has no active generation");
+    }
+    if (cacheTag) result.cacheGeneration = cacheTag->generation;
     result.commitVer = ChunkVer{meta.chunk_ver};
     result.updateVer = ChunkVer{meta.chunk_ver};
     result.commitChainVer = ChainVer{meta.chain_ver};
@@ -75,6 +92,18 @@ struct ChunkEngine {
   static Result<uint32_t> update(chunk_engine::Engine &engine, UpdateJob &job);
 
   static Result<uint32_t> commit(chunk_engine::Engine &engine, UpdateJob &job, bool sync);
+
+  static Result<CacheChunkGenerationInfo> replaceCacheChunk(chunk_engine::Engine &engine,
+                                                            const ReplaceCacheChunkItem &item,
+                                                            ChainId chainId,
+                                                            bool sync);
+  static Result<CacheChunkGenerationInfo> retireCacheChunk(chunk_engine::Engine &engine,
+                                                           const RetireCacheChunkItem &item,
+                                                           ChainId chainId,
+                                                           bool sync);
+  static Result<CacheChunkGenerationInfo> queryCacheChunk(chunk_engine::Engine &engine,
+                                                          const ChunkId &chunkId,
+                                                          ChainId chainId);
 
   static Result<ChunkMetadata> queryChunk(chunk_engine::Engine &engine, const ChunkId &chunkId, ChainId chainId) {
     std::string key;

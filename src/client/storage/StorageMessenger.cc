@@ -220,4 +220,45 @@ CoTryTask<GetAllChunkMetadataRsp> StorageMessenger::getAllChunkMetadata(const hf
       timestamp);
 }
 
+CoTryTask<ReplaceCacheChunksRsp> StorageMessenger::replaceCacheChunks(const hf3fs::net::Address &address,
+                                                                      const ReplaceCacheChunksReq &request,
+                                                                      const net::UserRequestOptions *options,
+                                                                      serde::Timestamp *timestamp) {
+  co_return co_await callSerdeRpcMethod<ReplaceCacheChunksReq,
+                                        ReplaceCacheChunksRsp,
+                                        StorageSerde<>::replaceCacheChunks<serde::ClientContext>>(client_,
+                                                                                                  address,
+                                                                                                  request,
+                                                                                                  options,
+                                                                                                  timestamp);
+}
+
+CoTryTask<RetireCacheChunkGenerationsRsp> StorageMessenger::retireCacheChunkGenerations(
+    const hf3fs::net::Address &address,
+    const RetireCacheChunkGenerationsReq &request,
+    const net::UserRequestOptions *options,
+    serde::Timestamp *timestamp) {
+  co_return co_await callSerdeRpcMethod<RetireCacheChunkGenerationsReq,
+                                        RetireCacheChunkGenerationsRsp,
+                                        StorageSerde<>::retireCacheChunkGenerations<serde::ClientContext>>(client_,
+                                                                                                           address,
+                                                                                                           request,
+                                                                                                           options,
+                                                                                                           timestamp);
+}
+
+CoTryTask<QueryCacheChunkGenerationsRsp> StorageMessenger::queryCacheChunkGenerations(
+    const hf3fs::net::Address &address,
+    const QueryCacheChunkGenerationsReq &request,
+    const net::UserRequestOptions *options,
+    serde::Timestamp *timestamp) {
+  co_return co_await callSerdeRpcMethod<QueryCacheChunkGenerationsReq,
+                                        QueryCacheChunkGenerationsRsp,
+                                        StorageSerde<>::queryCacheChunkGenerations<serde::ClientContext>>(client_,
+                                                                                                          address,
+                                                                                                          request,
+                                                                                                          options,
+                                                                                                          timestamp);
+}
+
 }  // namespace hf3fs::storage::client

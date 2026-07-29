@@ -56,6 +56,10 @@ monitor::OperationRecorder syncDoneRecorder{"storage.sync_done"};
 
 monitor::OperationRecorder storageReqRemoveChunksRecorder{"storage.req_remove_chunks"};
 monitor::OperationRecorder storageRemoveRangeRecorder{"storage.remove_range"};
+monitor::CountRecorder storageCacheReplaceCount{"storage.cache.replace"};
+monitor::CountRecorder storageCacheStaleReplaceCount{"storage.cache.replace_stale"};
+monitor::CountRecorder storageCacheRetireCount{"storage.cache.retire"};
+monitor::CountRecorder storageCacheTombstoneCount{"storage.cache.tombstone"};
 
 Result<Void> StorageOperator::init(uint32_t numberOfDisks) {
   storageReadAvgBytes.setLambda([&] {
@@ -1203,6 +1207,96 @@ CoTryTask<GetAllChunkMetadataRsp> StorageOperator::getAllChunkMetadata(const Get
   }
 
   co_return Result<GetAllChunkMetadataRsp>(std::move(response));
+}
+
+CoTryTask<ReplaceCacheChunksRsp> StorageOperator::replaceCacheChunks(const ReplaceCacheChunksReq &req) {
+  ReplaceCacheChunksRsp response;
+  response.results.reserve(req.items.size());
+  for (const auto &item : req.items) {
+    auto valid = item.valid();
+    if (!valid) {
+      response.results.push_back(makeError(std::move(valid.error())));
+      continue;
+    }
+    auto targetResult = components_.targetMap.getByChainId(item.key.vChainId);
+    if (!targetResult) {
+      response.results.push_back(makeError(std::move(targetResult.error())));
+      continue;
+    }
+    auto target = std::move(*targetResult);
+    if (!target->cacheData) {
+      response.results.push_back(makeError(CacheCode::kStateConflict, "chain is not CACHE_DATA"));
+      continue;
+    }
+
+    folly::coro::Baton baton;
+    auto lock = target->storageTarget->lockChunk(baton, item.key.chunkId, "replaceCacheChunk");
+    if (!lock.locked()) co_await lock.lock();
+    auto result = target->storageTarget->replaceCacheChunk(item, updateWorker_.backgroundExecutor());
+    if (!result && result.error().code() == CacheCode::kStaleGeneration) storageCacheStaleReplaceCount.addSample(1);
+    if (result) storageCacheReplaceCount.addSample(1);
+    response.results.push_back(std::move(result));
+  }
+  co_return response;
+}
+
+CoTryTask<RetireCacheChunkGenerationsRsp> StorageOperator::retireCacheChunkGenerations(
+    const RetireCacheChunkGenerationsReq &req) {
+  RetireCacheChunkGenerationsRsp response;
+  response.results.reserve(req.items.size());
+  for (const auto &item : req.items) {
+    auto valid = item.valid();
+    if (!valid) {
+      response.results.push_back(makeError(std::move(valid.error())));
+      continue;
+    }
+    auto targetResult = components_.targetMap.getByChainId(item.key.vChainId);
+    if (!targetResult) {
+      response.results.push_back(makeError(std::move(targetResult.error())));
+      continue;
+    }
+    auto target = std::move(*targetResult);
+    if (!target->cacheData) {
+      response.results.push_back(makeError(CacheCode::kStateConflict, "chain is not CACHE_DATA"));
+      continue;
+    }
+
+    folly::coro::Baton baton;
+    auto lock = target->storageTarget->lockChunk(baton, item.key.chunkId, "retireCacheChunk");
+    if (!lock.locked()) co_await lock.lock();
+    auto result = target->storageTarget->retireCacheChunk(item);
+    if (result) {
+      storageCacheRetireCount.addSample(1);
+      storageCacheTombstoneCount.addSample(1);
+    }
+    response.results.push_back(std::move(result));
+  }
+  co_return response;
+}
+
+CoTryTask<QueryCacheChunkGenerationsRsp> StorageOperator::queryCacheChunkGenerations(
+    const QueryCacheChunkGenerationsReq &req) {
+  QueryCacheChunkGenerationsRsp response;
+  response.results.reserve(req.keys.size());
+  for (const auto &key : req.keys) {
+    auto valid = key.valid();
+    if (!valid) {
+      response.results.push_back(makeError(std::move(valid.error())));
+      continue;
+    }
+    auto targetResult = components_.targetMap.getByChainId(key.vChainId);
+    if (!targetResult) {
+      response.results.push_back(makeError(std::move(targetResult.error())));
+      continue;
+    }
+    auto target = std::move(*targetResult);
+    if (!target->cacheData) {
+      response.results.push_back(makeError(CacheCode::kStateConflict, "chain is not CACHE_DATA"));
+      continue;
+    }
+    response.results.push_back(target->storageTarget->queryCacheChunk(key.chunkId));
+  }
+  co_return response;
 }
 
 }  // namespace hf3fs::storage

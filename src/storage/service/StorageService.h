@@ -99,18 +99,21 @@ class StorageService : public serde::ServiceWrapper<StorageService, storage::Sto
     return storageOperator_.getAllChunkMetadata(req);
   }
 
-  CoTryTask<ReplaceCacheChunksRsp> replaceCacheChunks(serde::CallContext &, const ReplaceCacheChunksReq &) {
-    co_return makeError(CacheCode::kFeatureDisabled);
+  CoTryTask<ReplaceCacheChunksRsp> replaceCacheChunks(serde::CallContext &ctx, const ReplaceCacheChunksReq &req) {
+    reportDefaultQueueLatency(ctx);
+    return storageOperator_.replaceCacheChunks(req);
   }
 
-  CoTryTask<RetireCacheChunkGenerationsRsp> retireCacheChunkGenerations(serde::CallContext &,
-                                                                        const RetireCacheChunkGenerationsReq &) {
-    co_return makeError(CacheCode::kFeatureDisabled);
+  CoTryTask<RetireCacheChunkGenerationsRsp> retireCacheChunkGenerations(serde::CallContext &ctx,
+                                                                        const RetireCacheChunkGenerationsReq &req) {
+    reportDefaultQueueLatency(ctx);
+    return storageOperator_.retireCacheChunkGenerations(req);
   }
 
-  CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(serde::CallContext &,
-                                                                      const QueryCacheChunkGenerationsReq &) {
-    co_return makeError(CacheCode::kFeatureDisabled);
+  CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(serde::CallContext &ctx,
+                                                                      const QueryCacheChunkGenerationsReq &req) {
+    reportDefaultQueueLatency(ctx);
+    return storageOperator_.queryCacheChunkGenerations(req);
   }
 
  private:

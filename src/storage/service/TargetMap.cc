@@ -156,6 +156,7 @@ Result<Void> TargetMap::updateRouting(std::shared_ptr<hf3fs::client::RoutingInfo
     target.isHead = false;
     target.isTail = false;
     target.vChainId = VersionedChainId{};
+    target.cacheData = false;
     target.publicState = flat::PublicTargetState::INVALID;
     target.successor = std::nullopt;
   }
@@ -165,6 +166,13 @@ Result<Void> TargetMap::updateRouting(std::shared_ptr<hf3fs::client::RoutingInfo
       XLOGF(CRITICAL, "invalid routing info: {}", *routingInfo);
     }
   });
+
+  robin_hood::unordered_set<ChainId> cacheDataChains;
+  for (const auto &[_, versions] : routingInfo->chainTables) {
+    if (!versions.empty() && versions.rbegin()->second.isCacheData()) {
+      cacheDataChains.insert(versions.rbegin()->second.chains.begin(), versions.rbegin()->second.chains.end());
+    }
+  }
 
   // 2. iterate routing info.
   for (auto &[id, chain] : routingInfo->chains) {
@@ -192,6 +200,7 @@ Result<Void> TargetMap::updateRouting(std::shared_ptr<hf3fs::client::RoutingInfo
     auto previousLocalState = target->localState;
     target->isHead = (targetIsServing && it == chain.targets.begin());
     target->vChainId = VersionedChainId{chain.chainId, chain.chainVersion};
+    target->cacheData = cacheDataChains.contains(chain.chainId);
     if (target->storageTarget != nullptr) {
       if (target->storageTarget->chainId() == ChainId{}) {
         RETURN_AND_LOG_ON_ERROR(target->storageTarget->setChainId(chain.chainId));

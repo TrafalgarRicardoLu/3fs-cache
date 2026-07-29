@@ -32,6 +32,8 @@ class UpdateWorker {
     co_await queueVec_[job->target()->diskIndex()]->co_enqueue(job);
   }
 
+  folly::CPUThreadPoolExecutor &backgroundExecutor() { return bgExecutors_; }
+
  protected:
   using Queue = BoundedQueue<UpdateJob *>;
   void run(Queue &queue);

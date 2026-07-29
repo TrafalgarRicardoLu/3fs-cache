@@ -51,10 +51,15 @@ Result<Void> ChunkReplica::aioPrepareRead(ChunkStore &store, AioReadJob &job) {
   auto &chunkInfo = (*metaResult)->second;
   const ChunkMetadata &meta = chunkInfo.meta;
 
+  if (meta.cacheState != CacheChunkState::NONE && meta.cacheState != CacheChunkState::ACTIVE) {
+    return makeError(CacheCode::kNotFound, "cache chunk has no active generation");
+  }
+
   // 2. check meta info.
   result.commitVer = meta.commitVer;
   result.updateVer = meta.updateVer;
   result.commitChainVer = meta.chainVer;
+  result.cacheGeneration = meta.cacheGeneration;
   state.chunkLen = meta.size;
   state.chunkChecksum = meta.checksum();
 
@@ -119,6 +124,10 @@ static Result<uint32_t> doRealWrite(const ChunkId &chunkId,
 #endif
 
   ChunkMetadata &meta = chunkInfo.meta;
+
+  if (meta.cacheState != CacheChunkState::NONE) {
+    return makeError(CacheCode::kStateConflict, "cache chunk requires generation-fenced update");
+  }
   auto writeResult = chunkInfo.view.write(writeData, writeSize, writeOffset, meta);
   if (LIKELY(bool(writeResult))) {
     meta.size = std::max(uint32_t(meta.size), writeOffset + writeResult.value());

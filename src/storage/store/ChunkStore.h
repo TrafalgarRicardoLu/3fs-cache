@@ -10,6 +10,7 @@
 #include "common/utils/Path.h"
 #include "common/utils/Result.h"
 #include "common/utils/RobinHood.h"
+#include "fbs/storage/Cache.h"
 #include "storage/store/ChunkFileStore.h"
 #include "storage/store/ChunkMetaStore.h"
 #include "storage/store/ChunkMetadata.h"
@@ -71,6 +72,13 @@ class ChunkStore {
 
   // remove a chunk file.
   Result<Void> remove(ChunkId chunkId, ChunkInfo &chunkInfo);
+
+  Result<CacheChunkGenerationInfo> replaceCacheChunk(const ReplaceCacheChunkItem &item,
+                                                     folly::CPUThreadPoolExecutor &executor);
+
+  Result<CacheChunkGenerationInfo> retireCacheChunk(const RetireCacheChunkItem &item);
+
+  Result<CacheChunkGenerationInfo> queryCacheChunk(const ChunkId &chunkId);
 
   // recycle a batch of chunks.
   Result<bool> punchHole() { return metaStore_.punchHole(); }

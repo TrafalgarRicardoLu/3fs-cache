@@ -97,6 +97,10 @@ class StorageOperator {
 
   CoTryTask<GetAllChunkMetadataRsp> getAllChunkMetadata(const GetAllChunkMetadataReq &req);
 
+  CoTryTask<ReplaceCacheChunksRsp> replaceCacheChunks(const ReplaceCacheChunksReq &req);
+  CoTryTask<RetireCacheChunkGenerationsRsp> retireCacheChunkGenerations(const RetireCacheChunkGenerationsReq &req);
+  CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(const QueryCacheChunkGenerationsReq &req);
+
  protected:
   using ChunkMetadataProcessor = std::function<CoTryTask<void>(const ChunkId &, const ChunkMetadata &)>;
 

@@ -27,7 +27,7 @@ TEST(ServiceContracts, RejectsOversizedMetadataBatch) {
 
 TEST(ServiceContracts, RejectsOversizedStorageBatch) {
   storage::QueryCacheChunkGenerationsReq request;
-  request.chunkIds.resize(storage::kMaxCacheStorageBatchItems + 1);
+  request.keys.resize(storage::kMaxCacheStorageBatchItems + 1);
   EXPECT_TRUE(request.valid().hasError());
 }
 

@@ -80,6 +80,11 @@ class StorageTarget : public enable_shared_from_this<StorageTarget> {
   // query chunk.
   Result<ChunkMetadata> queryChunk(const ChunkId &chunkId);
 
+  Result<CacheChunkGenerationInfo> replaceCacheChunk(const ReplaceCacheChunkItem &item,
+                                                     folly::CPUThreadPoolExecutor &executor);
+  Result<CacheChunkGenerationInfo> retireCacheChunk(const RetireCacheChunkItem &item);
+  Result<CacheChunkGenerationInfo> queryCacheChunk(const ChunkId &chunkId);
+
   // recycle a batch of chunks. return true if all holes are punched.
   Result<bool> punchHole() {
     if (useChunkEngine()) {

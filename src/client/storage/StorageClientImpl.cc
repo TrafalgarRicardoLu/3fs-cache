@@ -2557,4 +2557,107 @@ CoTryTask<ChunkMetaVector> StorageClientImpl::getAllChunkMetadata(const ChainId 
   co_return response->chunkMetaVec;
 }
 
+namespace {
+
+bool sameCacheGenerationInfo(const CacheChunkGenerationInfo &lhs, const CacheChunkGenerationInfo &rhs) {
+  return lhs.cacheGeneration == rhs.cacheGeneration && lhs.retired == rhs.retired && lhs.length == rhs.length &&
+         lhs.checksum == rhs.checksum;
+}
+
+}  // namespace
+
+template <typename Req, typename Rsp, auto MessengerMethod>
+CoTryTask<Rsp> StorageClientImpl::cacheRequestAllTargets(MethodType methodType,
+                                                         VersionedChainId vChainId,
+                                                         const Req &req) {
+  ClientRequestContext
+      requestCtx(methodType, req.userInfo, DebugOptions(), config_, 1, 0, config_.retry().max_wait_time());
+  auto routingInfo = getCurrentRoutingInfo();
+  auto chainInfoResult = getChainInfo(routingInfo, vChainId.chainId);
+  CO_RETURN_ON_ERROR(chainInfoResult);
+  auto &chainInfo = *chainInfoResult;
+  if (chainInfo.chainVersion != vChainId.chainVer) {
+    co_return makeError(StorageClientCode::kRoutingVersionMismatch, "cache request chain version mismatch");
+  }
+
+  std::optional<Rsp> merged;
+  for (const auto &target : chainInfo.targets) {
+    auto targetInfoResult = getTargetInfo(routingInfo, target.targetId);
+    CO_RETURN_ON_ERROR(targetInfoResult);
+    auto &targetInfo = *targetInfoResult;
+    if (!targetInfo.nodeId) co_return makeError(StorageClientCode::kRoutingError, "cache target has no node");
+    auto nodeInfoResult = getNodeInfo(routingInfo, *targetInfo.nodeId);
+    CO_RETURN_ON_ERROR(nodeInfoResult);
+    auto &nodeInfo = *nodeInfoResult;
+    auto response = co_await callMessengerMethod<Req, Rsp, MessengerMethod>(messenger_, requestCtx, nodeInfo, req);
+    CO_RETURN_ON_ERROR(response);
+    if (!merged) {
+      merged = std::move(*response);
+      continue;
+    }
+    if (merged->results.size() != response->results.size()) {
+      co_return makeError(CacheCode::kInvalidResponse, "cache replica result count mismatch");
+    }
+    for (size_t i = 0; i < merged->results.size(); ++i) {
+      auto &current = merged->results[i];
+      auto &replica = response->results[i];
+      if (!current) continue;
+      if (!replica) {
+        current = makeError(replica.error());
+      } else if (!sameCacheGenerationInfo(*current, *replica)) {
+        current = makeError(CacheCode::kInvalidResponse, "cache replica generation mismatch");
+      }
+    }
+  }
+  if (!merged) co_return makeError(StorageClientCode::kRoutingError, "cache chain has no targets");
+  co_return std::move(*merged);
+}
+
+CoTryTask<ReplaceCacheChunksRsp> StorageClientImpl::replaceCacheChunks(const ReplaceCacheChunksReq &req) {
+  if (req.items.empty()) co_return ReplaceCacheChunksRsp{};
+  auto vChainId = req.items.front().key.vChainId;
+  if (std::any_of(req.items.begin(), req.items.end(), [&](const auto &item) {
+        return item.key.vChainId != vChainId;
+      })) {
+    co_return makeError(StatusCode::kInvalidArg, "cache batch spans multiple chains");
+  }
+  co_return co_await cacheRequestAllTargets<ReplaceCacheChunksReq,
+                                            ReplaceCacheChunksRsp,
+                                            &StorageMessenger::replaceCacheChunks>(MethodType::replaceCacheChunks,
+                                                                                   vChainId,
+                                                                                   req);
+}
+
+CoTryTask<RetireCacheChunkGenerationsRsp> StorageClientImpl::retireCacheChunkGenerations(
+    const RetireCacheChunkGenerationsReq &req) {
+  if (req.items.empty()) co_return RetireCacheChunkGenerationsRsp{};
+  auto vChainId = req.items.front().key.vChainId;
+  if (std::any_of(req.items.begin(), req.items.end(), [&](const auto &item) {
+        return item.key.vChainId != vChainId;
+      })) {
+    co_return makeError(StatusCode::kInvalidArg, "cache batch spans multiple chains");
+  }
+  co_return co_await cacheRequestAllTargets<RetireCacheChunkGenerationsReq,
+                                            RetireCacheChunkGenerationsRsp,
+                                            &StorageMessenger::retireCacheChunkGenerations>(
+      MethodType::retireCacheChunkGenerations,
+      vChainId,
+      req);
+}
+
+CoTryTask<QueryCacheChunkGenerationsRsp> StorageClientImpl::queryCacheChunkGenerations(
+    const QueryCacheChunkGenerationsReq &req) {
+  if (req.keys.empty()) co_return QueryCacheChunkGenerationsRsp{};
+  auto vChainId = req.keys.front().vChainId;
+  if (std::any_of(req.keys.begin(), req.keys.end(), [&](const auto &key) { return key.vChainId != vChainId; })) {
+    co_return makeError(StatusCode::kInvalidArg, "cache batch spans multiple chains");
+  }
+  co_return co_await cacheRequestAllTargets<QueryCacheChunkGenerationsReq,
+                                            QueryCacheChunkGenerationsRsp,
+                                            &StorageMessenger::queryCacheChunkGenerations>(
+      MethodType::queryCacheChunkGenerations,
+      vChainId,
+      req);
+}
+
 }  // namespace hf3fs::storage::client

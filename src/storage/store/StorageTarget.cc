@@ -388,6 +388,26 @@ Result<ChunkMetadata> StorageTarget::queryChunk(const ChunkId &chunkId) {
   return (*getResult)->second.meta;
 }
 
+Result<CacheChunkGenerationInfo> StorageTarget::replaceCacheChunk(const ReplaceCacheChunkItem &item,
+                                                                  folly::CPUThreadPoolExecutor &executor) {
+  if (useChunkEngine()) {
+    return ChunkEngine::replaceCacheChunk(*engine_, item, chainId(), config_.kv_store().sync_when_write());
+  }
+  return chunkStore_.replaceCacheChunk(item, executor);
+}
+
+Result<CacheChunkGenerationInfo> StorageTarget::retireCacheChunk(const RetireCacheChunkItem &item) {
+  if (useChunkEngine()) {
+    return ChunkEngine::retireCacheChunk(*engine_, item, chainId(), config_.kv_store().sync_when_write());
+  }
+  return chunkStore_.retireCacheChunk(item);
+}
+
+Result<CacheChunkGenerationInfo> StorageTarget::queryCacheChunk(const ChunkId &chunkId) {
+  if (useChunkEngine()) return ChunkEngine::queryCacheChunk(*engine_, chunkId, chainId());
+  return chunkStore_.queryCacheChunk(chunkId);
+}
+
 Result<Void> StorageTarget::reportUnrecycledSize() {
   targetUsedSize_->set(usedSize());
 

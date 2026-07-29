@@ -12,6 +12,7 @@
 #include "common/utils/Result.h"
 #include "common/utils/Semaphore.h"
 #include "fbs/mgmtd/RoutingInfo.h"
+#include "fbs/storage/Cache.h"
 #include "fbs/storage/Common.h"
 
 namespace hf3fs::storage::client {
@@ -356,6 +357,9 @@ class StorageClient : public folly::MoveOnly {
     removeTarget,
     queryChunk,
     getAllChunkMetadata,
+    replaceCacheChunks,
+    retireCacheChunkGenerations,
+    queryCacheChunkGenerations,
   };
 
   class RetryConfig : public hf3fs::ConfigBase<RetryConfig> {
@@ -562,6 +566,12 @@ class StorageClient : public folly::MoveOnly {
   virtual CoTryTask<std::vector<Result<QueryChunkRsp>>> queryChunk(const QueryChunkReq &req) = 0;
 
   virtual CoTryTask<ChunkMetaVector> getAllChunkMetadata(const ChainId &chainId, const TargetId &targetId) = 0;
+
+  virtual CoTryTask<ReplaceCacheChunksRsp> replaceCacheChunks(const ReplaceCacheChunksReq &req) = 0;
+  virtual CoTryTask<RetireCacheChunkGenerationsRsp> retireCacheChunkGenerations(
+      const RetireCacheChunkGenerationsReq &req) = 0;
+  virtual CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(
+      const QueryCacheChunkGenerationsReq &req) = 0;
 
  protected:
   static const Config kDefaultConfig;

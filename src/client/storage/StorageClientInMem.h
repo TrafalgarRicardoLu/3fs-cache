@@ -71,6 +71,17 @@ class StorageClientInMem : public StorageClient {
 
   CoTryTask<std::vector<Result<QueryChunkRsp>>> queryChunk(const QueryChunkReq &req) override;
 
+  CoTryTask<ReplaceCacheChunksRsp> replaceCacheChunks(const ReplaceCacheChunksReq &) override {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+  CoTryTask<RetireCacheChunkGenerationsRsp> retireCacheChunkGenerations(
+      const RetireCacheChunkGenerationsReq &) override {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+  CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(const QueryCacheChunkGenerationsReq &) override {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+
   CoTryTask<ChunkMetaVector> getAllChunkMetadata(const ChainId &chainId, const TargetId &targetId) override;
 
   // for meta test
