@@ -186,6 +186,9 @@ CoTryTask<Void> CacheBlockStore::finishClean(kv::IReadWriteTransaction &txn,
   if (terminalState == cache::CleanupTerminalState::REENQUEUE) {
     auto requeued = co_await enqueue(txn, key, chainId, blockLength);
     CO_RETURN_ON_ERROR(requeued);
+    requeued->cleanupEpoch = record.cleanupEpoch;
+    requeued->terminalState = cache::CleanupTerminalState::REENQUEUE;
+    CO_RETURN_ON_ERROR(co_await store(txn, *requeued));
   }
   co_return Void{};
 }

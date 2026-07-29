@@ -40,7 +40,9 @@ Result<Void> OriginCleanupJobRecord::valid() const {
   if (state == OriginCleanupJobState::PENDING && cursor != beginBlock) {
     return makeError(StatusCode::kInvalidArg, "pending cleanup job has advanced its cursor");
   }
-  if (lastBatchBegin > lastBatchEnd || lastBatchBegin < beginBlock || lastBatchEnd > cursor) {
+  const bool wrappedRetry = state == OriginCleanupJobState::RUNNING && cursor == beginBlock &&
+                            lastBatchEnd == endBlock && remainingNonTerminalBlocks != 0;
+  if (lastBatchBegin > lastBatchEnd || lastBatchBegin < beginBlock || (!wrappedRetry && lastBatchEnd > cursor)) {
     return makeError(StatusCode::kInvalidArg, "invalid cleanup batch range");
   }
   auto lastBatchItems = lastBatchEnd - lastBatchBegin;

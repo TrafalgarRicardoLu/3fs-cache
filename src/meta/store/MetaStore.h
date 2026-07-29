@@ -151,6 +151,10 @@ class MetaStore {
 
   OpPtr<FailCacheBlocksRsp> failCacheBlocks(const FailCacheBlocksReq &req);
 
+  OpPtr<BeginCleanCacheBlocksRsp> beginCleanCacheBlocks(const BeginCleanCacheBlocksReq &req);
+
+  OpPtr<FinishCleanCacheBlocksRsp> finishCleanCacheBlocks(const FinishCleanCacheBlocksReq &req);
+
  private:
   template <typename>
   FRIEND_TEST(TestRemove, GC);

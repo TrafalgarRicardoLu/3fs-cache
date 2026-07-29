@@ -566,6 +566,8 @@ META_CACHE_MUTATION_METHOD(enqueueCacheBlocks, EnqueueCacheBlocksReq, EnqueueCac
 META_CACHE_MUTATION_METHOD(acquireCacheBlocks, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
 META_CACHE_MUTATION_METHOD(commitCacheBlocks, CommitCacheBlocksReq, CommitCacheBlocksRsp);
 META_CACHE_MUTATION_METHOD(failCacheBlocks, FailCacheBlocksReq, FailCacheBlocksRsp);
+META_CACHE_MUTATION_METHOD(beginCleanCacheBlocks, BeginCleanCacheBlocksReq, BeginCleanCacheBlocksRsp);
+META_CACHE_MUTATION_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
 
 #undef META_CACHE_MUTATION_METHOD
 

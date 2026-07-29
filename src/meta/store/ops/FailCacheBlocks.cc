@@ -53,7 +53,7 @@ class FailCacheBlocksOp : public Operation<FailCacheBlocksRsp> {
     }
     if (record.state == cache::CacheBlockState::CLEANING &&
         record.terminalState == cache::CleanupTerminalState::FAILED && record.loaderId == item.loaderId &&
-        record.loadEpoch == item.loadEpoch) {
+        item.loadEpoch != std::numeric_limits<uint64_t>::max() && record.loadEpoch == item.loadEpoch + 1) {
       co_return CacheBlockMutationResult{record.key, record.state};
     }
     if (record.state != cache::CacheBlockState::LOADING || record.loaderId != item.loaderId ||
@@ -63,7 +63,11 @@ class FailCacheBlocksOp : public Operation<FailCacheBlocksRsp> {
     if (record.cleanupEpoch.toUnderType() == std::numeric_limits<uint64_t>::max()) {
       co_return makeError(CacheCode::kStateConflict, "cache cleanup epoch exhausted");
     }
+    if (record.loadEpoch == std::numeric_limits<uint64_t>::max()) {
+      co_return makeError(CacheCode::kStateConflict, "cache load epoch exhausted");
+    }
     record.state = cache::CacheBlockState::CLEANING;
+    ++record.loadEpoch;
     ++record.cleanupEpoch;
     record.terminalState = cache::CleanupTerminalState::FAILED;
     record.deleteGeneration = record.cacheGeneration;

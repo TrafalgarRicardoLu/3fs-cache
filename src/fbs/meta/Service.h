@@ -928,7 +928,18 @@ struct BeginCleanCacheBlockItem {
   SERDE_STRUCT_FIELD(terminalState, cache::CleanupTerminalState::NONE);
 
  public:
-  Result<Void> valid() const { return key.valid(); }
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    if (terminalState != cache::CleanupTerminalState::NONE && terminalState != cache::CleanupTerminalState::FAILED &&
+        terminalState != cache::CleanupTerminalState::REENQUEUE) {
+      return INVALID("invalid cleanup terminal state");
+    }
+    if (expectedReady.has_value()) RETURN_ON_ERROR(expectedReady->valid());
+    if (observedGeneration.has_value() && *observedGeneration == cache::CacheGeneration{}) {
+      return INVALID("invalid observed generation");
+    }
+    return VALID;
+  }
 };
 CACHE_BOUNDED_REQ(BeginCleanCacheBlocks, BeginCleanCacheBlockItem);
 struct BeginCleanCacheBlockResult {
@@ -943,9 +954,17 @@ struct BeginCleanCacheBlocksRsp : RspBase {
 struct FinishCleanCacheBlockItem {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(cleanupEpoch, cache::CleanupEpoch{});
+  SERDE_STRUCT_FIELD(retiredGeneration, std::optional<cache::CacheGeneration>{});
 
  public:
-  Result<Void> valid() const { return key.valid(); }
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    if (cleanupEpoch == cache::CleanupEpoch{}) return INVALID("cleanupEpoch not set");
+    if (retiredGeneration.has_value() && *retiredGeneration == cache::CacheGeneration{}) {
+      return INVALID("invalid retired generation");
+    }
+    return VALID;
+  }
 };
 CACHE_BOUNDED_REQ(FinishCleanCacheBlocks, FinishCleanCacheBlockItem);
 struct FinishCleanCacheBlocksRsp : RspBase {

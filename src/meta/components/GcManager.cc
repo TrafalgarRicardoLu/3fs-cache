@@ -48,6 +48,7 @@
 #include "fmt/format.h"
 #include "foundationdb/fdb_c_types.h"
 #include "meta/components/FileHelper.h"
+#include "meta/components/OriginNamespaceManager.h"
 #include "meta/event/Event.h"
 #include "meta/store/DirEntry.h"
 #include "meta/store/FileSession.h"
@@ -464,15 +465,29 @@ CoTryTask<void> GcManager::GcTask::gcFile(GcManager &manager) {
 }
 
 CoTryTask<void> GcManager::GcTask::gcOriginFile(GcManager &manager) {
-  auto session =
-      co_await manager.runReadOnly([&](auto &txn) { return FileSession::snapshotCheckExists(txn, taskEntry.id); });
-  CO_RETURN_ON_ERROR(session);
-  if (*session) {
-    co_return makeError(MetaCode::kBusy, "origin file still has an open session");
-  }
-  // Origin chunks must be retired through the generation-fenced cleanup workflow.
-  // Until that workflow marks the cleanup job complete, generic GC must never call FileHelper::remove().
-  co_return makeError(MetaCode::kBusy, "origin file cache cleanup is not complete");
+  auto ready = co_await manager.runReadOnly([&](auto &txn) -> CoTryTask<bool> {
+    auto [inode, session] = co_await folly::coro::collectAll(Inode::snapshotLoad(txn, taskEntry.id),
+                                                             FileSession::snapshotCheckExists(txn, taskEntry.id));
+    CO_RETURN_ON_ERROR(inode);
+    CO_RETURN_ON_ERROR(session);
+    if (*session) co_return makeError(MetaCode::kBusy, "origin file still has an open session");
+    if (!inode->has_value()) co_return true;
+    if (!(**inode).isOriginFile() || (**inode).nlink != 0) {
+      co_return makeError(MetaCode::kFoundBug, "invalid OriginFile GC inode");
+    }
+    auto jobId = (**inode).asOriginFile().cleanupJobId;
+    if (jobId == Uuid::zero()) co_return makeError(MetaCode::kBusy, "origin file has no cleanup job");
+    auto cleanup = co_await OriginNamespaceManager::snapshotLoadCleanup(txn, jobId);
+    CO_RETURN_ON_ERROR(cleanup);
+    co_return cleanup->has_value() && (**cleanup).complete();
+  });
+  CO_RETURN_ON_ERROR(ready);
+  if (!*ready) co_return makeError(MetaCode::kBusy, "origin file cache cleanup is not complete");
+
+  // Cache blocks have already been retired by Cache Manager. Generic GC only
+  // removes namespace metadata and must never issue ordinary chunk removals.
+  co_return co_await manager.runReadWrite(
+      [&](IReadWriteTransaction &txn) { return removeGcEntryAndInode(manager, txn); });
 }
 
 CoTryTask<void> GcManager::GcTask::removeEntry(GcManager &manager,
