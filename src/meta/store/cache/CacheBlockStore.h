@@ -1,6 +1,8 @@
 #pragma once
 
 #include <optional>
+#include <span>
+#include <vector>
 
 #include "common/kv/ITransaction.h"
 #include "common/utils/Coroutine.h"
@@ -12,6 +14,9 @@ class CacheBlockStore {
  public:
   static CoTryTask<std::optional<CacheBlockRecord>> snapshotLoad(kv::IReadOnlyTransaction &txn,
                                                                  const cache::CacheBlockKey &key);
+  static CoTryTask<std::vector<std::optional<CacheBlockRecord>>> snapshotLoadBatch(
+      kv::IReadOnlyTransaction &txn,
+      std::span<const cache::CacheBlockKey> keys);
   static CoTryTask<std::optional<CacheBlockRecord>> load(kv::IReadWriteTransaction &txn,
                                                          const cache::CacheBlockKey &key);
   static CoTryTask<Void> store(kv::IReadWriteTransaction &txn, const CacheBlockRecord &record);

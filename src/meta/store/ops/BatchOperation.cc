@@ -237,9 +237,10 @@ CoTryTask<bool> BatchedOp::close(Inode &inode,
     co_return makeError(MetaCode::kFoundBug, "Invalid batchOp");
   }
 
-  if ((req.session || req.updateLength) && !inode.isFile()) {
+  if (req.updateLength && !inode.isFile()) {
     co_return makeError(MetaCode::kNotFile);
   }
+  if (req.session && !inode.isRegularFileLike()) co_return makeError(MetaCode::kNotFile);
 
   bool dirty = false;
   dirty |= SetAttr::update(inode.atime, req.atime, config().time_granularity(), true /* cmp */);
@@ -696,7 +697,7 @@ void BatchedOp::Waiter<CloseReq, CloseRsp>::finish(BatchedOp &op, const Result<I
   }
   if (req.session && !hasError()) {
     auto &inode = result.value()->stat;
-    XLOGF_IF(DFATAL, !inode.isFile(), "req {} success, but inode {} is not file", req, inode);
+    XLOGF_IF(DFATAL, !inode.isRegularFileLike(), "req {} success, but inode {} is not file-like", req, inode);
     if (inode.isFile()) {
       op.addEvent(Event::Type::CloseWrite)
           .addField("inode", inode.id.toHexString())

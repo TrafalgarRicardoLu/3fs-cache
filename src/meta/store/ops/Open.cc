@@ -92,13 +92,13 @@ class OpenOp : public Operation<Rsp> {
       case InodeType::File:
         co_return co_await openExistsFile(txn, entry, inode, checkHole);
       case InodeType::OriginFile:
-        co_return co_await openExistsOriginFile(inode);
+        co_return co_await openExistsOriginFile(txn, inode);
       default:
         XLOGF(FATAL, "inode {} invalid type {}", inode, (int)inode.getType());
     }
   }
 
-  CoTryTask<Rsp> openExistsOriginFile(Inode &inode) {
+  CoTryTask<Rsp> openExistsOriginFile(IReadOnlyTransaction &txn, Inode &inode) {
     XLOGF_IF(FATAL, !inode.isOriginFile(), "Inode {} is not an origin file", inode);
     if constexpr (std::is_same_v<Req, CreateReq>) {
       co_return makeError(CacheCode::kReadOnlyOriginFile);
@@ -110,6 +110,11 @@ class OpenOp : public Operation<Rsp> {
       co_return makeError(MetaCode::kNotDirectory);
     }
     CO_RETURN_ON_ERROR(inode.acl.checkPermission(req_.user, AccessType::READ));
+    if (req_.session.has_value()) {
+      BEGIN_WRITE();
+      auto session = FileSession::create(inode.id, *req_.session);
+      CO_RETURN_ON_ERROR(co_await session.store(rwTxn));
+    }
     co_return Rsp(std::move(inode), false);
   }
 

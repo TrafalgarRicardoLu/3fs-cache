@@ -538,4 +538,11 @@ CoTryTask<RefreshOriginFileRsp> MetaOperator::refreshOriginFile(RefreshOriginFil
   co_return co_await runOp(&MetaStore::refreshOriginFile, req);
 }
 
+CoTryTask<GetFileReadPlanRsp> MetaOperator::getFileReadPlan(GetFileReadPlanReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheFeature(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::getFileReadPlan, req);
+}
+
 }  // namespace hf3fs::meta::server

@@ -1,5 +1,6 @@
 #include "meta/store/cache/CacheBlockStore.h"
 
+#include <folly/experimental/coro/Collect.h>
 #include <limits>
 
 #include "common/kv/KeyPrefix.h"
@@ -43,6 +44,22 @@ std::string CacheBlockStore::generationKey(const cache::CacheBlockKey &key) {
 CoTryTask<std::optional<CacheBlockRecord>> CacheBlockStore::snapshotLoad(kv::IReadOnlyTransaction &txn,
                                                                          const cache::CacheBlockKey &key) {
   co_return co_await loadRecord(txn, key, true);
+}
+
+CoTryTask<std::vector<std::optional<CacheBlockRecord>>> CacheBlockStore::snapshotLoadBatch(
+    kv::IReadOnlyTransaction &txn,
+    std::span<const cache::CacheBlockKey> keys) {
+  std::vector<CoTryTask<std::optional<CacheBlockRecord>>> tasks;
+  tasks.reserve(keys.size());
+  for (const auto &key : keys) tasks.push_back(snapshotLoad(txn, key));
+  auto results = co_await folly::coro::collectAllRange(std::move(tasks));
+  std::vector<std::optional<CacheBlockRecord>> records;
+  records.reserve(results.size());
+  for (auto &result : results) {
+    CO_RETURN_ON_ERROR(result);
+    records.push_back(std::move(*result));
+  }
+  co_return records;
 }
 
 CoTryTask<std::optional<CacheBlockRecord>> CacheBlockStore::load(kv::IReadWriteTransaction &txn,

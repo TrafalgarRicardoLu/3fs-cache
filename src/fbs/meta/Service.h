@@ -357,6 +357,7 @@ struct OpenReq : ReqBase {
   Result<Void> valid() const {
     RETURN_ON_ERROR(flags.valid());
     if (flags.accessType() != AccessType::READ) CHECK_SESSION(session);
+    if (session.has_value() && !session->valid()) return INVALID("session invalid");
     if (flags.accessType() == AccessType::READ && (flags.contains(O_TRUNC) || flags.contains(O_APPEND)))
       return INVALID("O_RDONLY with O_TRUNC or O_APPEND");
     if (flags.contains(O_TRUNC) && removeChunksBatchSize == 0) return INVALID("removeChunksBatchSize == 0");
@@ -805,6 +806,7 @@ struct GetFileReadPlanReq : ReqBase {
  public:
   Result<Void> valid() const {
     if (openSessionId == Uuid::zero()) return INVALID("openSessionId not set");
+    if (inode == InodeId{}) return INVALID("inode not set");
     if (length && offset > std::numeric_limits<uint64_t>::max() - length) return INVALID("read range overflow");
     return VALID;
   }

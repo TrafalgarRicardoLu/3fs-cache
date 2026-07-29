@@ -1467,6 +1467,7 @@ struct MockMetaService : public meta::MockMetaService {
     std::mutex mutex;
     std::atomic<bool> enableInject{false};
     std::set<InodeId> closed;
+    std::set<Uuid> opened;
     std::set<Uuid> pruned;
 
     bool checkClosed(InodeId inode) {
@@ -1476,6 +1477,10 @@ struct MockMetaService : public meta::MockMetaService {
     bool checkPruned(Uuid session) {
       std::lock_guard<std::mutex> lock(mutex);
       return pruned.count(session);
+    }
+    bool checkOpened(Uuid session) {
+      std::lock_guard<std::mutex> lock(mutex);
+      return opened.count(session);
     }
   };
 
@@ -1501,6 +1506,10 @@ struct MockMetaService : public meta::MockMetaService {
     if (doInject()) {
       XLOGF(WARN, "Inject fault in open.");
       co_return makeError(RPCCode::kTimeout);
+    }
+    if (req.session.has_value()) {
+      std::lock_guard<std::mutex> lock(state->mutex);
+      state->opened.emplace(req.session->session);
     }
     Inode inode({InodeId(folly::Random::rand64()), meta::InodeData{File()}});
     co_return OpenRsp(inode, false);
@@ -1576,6 +1585,19 @@ TEST(TestMetaClientMock, Retry) {
   };
 
   magic_enum::enum_for_each<ServerSelectionMode>([&](auto mode) { folly::coro::blockingWait(doTest(mode)); });
+}
+
+TEST(TestMetaClientMock, PreservesReadOnlyOpenSession) {
+  MetaClient::Config config;
+  config.set_selection_mode(ServerSelectionMode::UniformRandom);
+  auto state = std::make_shared<MockMetaService::State>();
+  auto meta = createInjectedMeta(config, state);
+
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto session = Uuid::random();
+    CO_ASSERT_OK(co_await meta->open({}, InodeId::root(), "origin", session, O_RDONLY));
+    CO_ASSERT_TRUE(state->checkOpened(session));
+  }());
 }
 
 TEST(TestMetaClientMock, CloseAndPruneSession) {

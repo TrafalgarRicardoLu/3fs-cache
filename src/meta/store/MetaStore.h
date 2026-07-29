@@ -141,6 +141,8 @@ class MetaStore {
 
   OpPtr<RefreshOriginFileRsp> refreshOriginFile(const RefreshOriginFileReq &req);
 
+  OpPtr<GetFileReadPlanRsp> getFileReadPlan(const GetFileReadPlanReq &req);
+
  private:
   template <typename>
   FRIEND_TEST(TestRemove, GC);

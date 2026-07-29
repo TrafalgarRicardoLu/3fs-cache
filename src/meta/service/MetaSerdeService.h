@@ -39,11 +39,11 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
   META_SERVICE_METHOD(importOriginFile, ImportOriginFileReq, ImportOriginFileRsp);
   META_SERVICE_METHOD(batchImportOriginFiles, BatchImportOriginFilesReq, BatchImportOriginFilesRsp);
   META_SERVICE_METHOD(refreshOriginFile, RefreshOriginFileReq, RefreshOriginFileRsp);
+  META_SERVICE_METHOD(getFileReadPlan, GetFileReadPlanReq, GetFileReadPlanRsp);
 #undef META_SERVICE_METHOD
 
 #define CACHE_SERVICE_STUB(NAME, REQ, RESP) \
   CoTryTask<RESP> NAME(serde::CallContext &, const REQ &) { co_return makeError(CacheCode::kFeatureDisabled); }
-  CACHE_SERVICE_STUB(getFileReadPlan, GetFileReadPlanReq, GetFileReadPlanRsp);
   CACHE_SERVICE_STUB(enqueueCacheBlocks, EnqueueCacheBlocksReq, EnqueueCacheBlocksRsp);
   CACHE_SERVICE_STUB(acquireCacheBlocks, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
   CACHE_SERVICE_STUB(commitCacheBlocks, CommitCacheBlocksReq, CommitCacheBlocksRsp);

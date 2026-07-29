@@ -635,7 +635,6 @@ CoTryTask<Inode> MetaClient::open(const UserInfo &userInfo,
                                   const std::optional<Path> &path,
                                   std::optional<SessionId> sessionId,
                                   int flags) {
-  if ((flags & O_ACCMODE) == O_RDONLY) sessionId = std::nullopt;
   auto req = OpenReq(userInfo,
                      PathAt(inodeId, path),
                      OPTIONAL_SESSION(sessionId),

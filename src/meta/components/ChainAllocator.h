@@ -126,9 +126,9 @@ class ChainAllocator {
     co_return Void{};
   }
 
- private:
   std::shared_ptr<client::RoutingInfo> getRoutingInfo() { return mgmtdClient_->getRoutingInfo(); }
 
+ private:
   using AllocType = std::pair<flat::ChainTableId, size_t>;
   folly::Synchronized<std::map<AllocType, uint32_t>, std::mutex> roundRobin_;
   std::shared_ptr<client::ICommonMgmtdClient> mgmtdClient_;

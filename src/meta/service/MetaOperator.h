@@ -109,6 +109,8 @@ class MetaOperator : public folly::NonCopyableNonMovable {
 
   CoTryTask<RefreshOriginFileRsp> refreshOriginFile(RefreshOriginFileReq req);
 
+  CoTryTask<GetFileReadPlanRsp> getFileReadPlan(GetFileReadPlanReq req);
+
  private:
   friend class MockMeta;
 
