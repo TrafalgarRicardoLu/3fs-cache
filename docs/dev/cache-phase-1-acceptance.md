@@ -86,19 +86,16 @@ An external release must not mark M5 qualified until both rows have real evidenc
 
 ## Known local validation constraints
 
-- The cache-enabled qualification build uses an isolated AWS SDK for C++ 1.10.55 installation under `/tmp`; the SDK is
-  not installed system-wide.
-- An isolated autoconf 2.71 installation lets the jemalloc external project build successfully. The cache-enabled
-  all-target build advances to 83%, including successful `storage`, `mgmtd`, `meta`, `client-cache`, `cache-manager`,
-  and cache test targets, before the full FUSE target encounters the workstation dependency constraint below.
-- The workstation's older fuse3 headers do not expose the `fuse_loop_cfg_create`, `fuse_loop_cfg_destroy`, or
-  `fuse_loop_cfg_set_*` APIs used by `FuseMainLoop.cc`; this is the remaining all-target build blocker.
+- The cache-enabled qualification build uses isolated AWS SDK for C++ 1.10.55, autoconf 2.71, and the repository CI's
+  pinned libfuse 3.16.2 under `/tmp`; these dependencies are not installed system-wide. With them, the cache-enabled
+  all-target build completes successfully, including FUSE, services, tests, benchmarks, and Python bindings.
 - Full `test_client` currently fails the unrelated `MgmtdClientTest.testRetryUnknownAddrs` baseline assertion because an
   additional old-address probe appears in the observed call sequence. Cache-specific Client tests pass.
-- The cache-enabled configuration registers 17 CTest targets. `test_cache`, `test_cache_manager`, `test_admin_cli`, and
-  `test_meta` pass; both AWS cases skip as designed. Five unrelated binaries remain unavailable after the FUSE build
-  stop. The existing Client and three Storage suites retain their baseline/environment failures; both cache-generation
-  Storage cases pass, while the Storage failures include unavailable `io_uring_register_buffers` resources (`-12`).
+- The complete cache-enabled CTest run executes all 17 registered targets in 253.74 seconds: nine pass, including
+  analytics, Metadata, KV, mgmtd, cache, MinIO, AWS qualification registration, Cache Manager, and Admin CLI. Both AWS
+  cases skip as designed. Eight baseline/environment targets fail: Common and Migration require an available RDMA
+  device; Client retains the unrelated retry-sequence assertion; and the Storage suites require RDMA or available
+  `io_uring_register_buffers` resources. Both cache-generation Storage cases pass.
 - Repository-wide formatting currently reports unrelated pre-existing failures outside the cache task. Every modified
   cache source is checked separately with the repository clang-format configuration.
 
