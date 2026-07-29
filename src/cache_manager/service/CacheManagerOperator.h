@@ -5,6 +5,9 @@
 #include <mutex>
 
 #include "cache_manager/config/Config.h"
+#include "cache_manager/loader/CacheLoader.h"
+#include "cache_manager/scheduler/LoaderScheduler.h"
+#include "cache_manager/service/EnsureCached.h"
 #include "common/utils/BackgroundRunner.h"
 #include "fbs/cache_manager/Service.h"
 
@@ -17,7 +20,9 @@ class CacheManagerOperator {
 
   CacheManagerOperator(const Config &config,
                        std::shared_ptr<meta::client::MetaClient> metaClient,
-                       std::shared_ptr<storage::client::StorageClient> storageClient);
+                       std::shared_ptr<storage::client::StorageClient> storageClient,
+                       std::shared_ptr<client::ICommonMgmtdClient> mgmtdClient = nullptr,
+                       RealCacheManagerBackend::Stores stores = {});
   ~CacheManagerOperator();
 
   Result<Void> start(CPUExecutorGroup &executor);
@@ -37,6 +42,12 @@ class CacheManagerOperator {
   const Config &config_;
   std::shared_ptr<meta::client::MetaClient> metaClient_;
   std::shared_ptr<storage::client::StorageClient> storageClient_;
+  std::shared_ptr<CacheManagerBackend> backend_;
+  HintCoalescer hints_;
+  std::unique_ptr<CapacityGate> capacityGate_;
+  std::unique_ptr<CacheLoader> loader_;
+  std::unique_ptr<LoaderScheduler> loaderScheduler_;
+  std::unique_ptr<EnsureCached> ensureCached_;
   std::unique_ptr<BackgroundRunner> scheduler_;
   SchedulerStopHook schedulerStopHook_;
   mutable std::mutex mutex_;

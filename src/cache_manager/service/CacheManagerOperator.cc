@@ -6,19 +6,42 @@ namespace hf3fs::cache_manager {
 
 CacheManagerOperator::CacheManagerOperator(const Config &config,
                                            std::shared_ptr<meta::client::MetaClient> metaClient,
-                                           std::shared_ptr<storage::client::StorageClient> storageClient)
+                                           std::shared_ptr<storage::client::StorageClient> storageClient,
+                                           std::shared_ptr<client::ICommonMgmtdClient> mgmtdClient,
+                                           RealCacheManagerBackend::Stores stores)
     : config_(config),
       metaClient_(std::move(metaClient)),
-      storageClient_(std::move(storageClient)) {}
+      storageClient_(std::move(storageClient)) {
+  if (metaClient_ && storageClient_ && mgmtdClient) {
+    backend_ = std::make_shared<RealCacheManagerBackend>(config_,
+                                                         metaClient_,
+                                                         storageClient_,
+                                                         std::move(mgmtdClient),
+                                                         std::move(stores));
+  }
+}
 
 CacheManagerOperator::~CacheManagerOperator() { stop(); }
 
 Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
   RETURN_ON_ERROR(config_.validateRuntime());
+  if (!backend_) return makeError(StatusCode::kInvalidConfig, "cache manager backend is not configured");
+  std::map<cache::OriginId, CapacityGate::Limit> originLimits;
+  for (size_t i = 0; i < config_.origins_length(); ++i) {
+    const auto &origin = config_.origins(i);
+    originLimits.emplace(cache::OriginId{origin.origin_id()},
+                         CapacityGate::Limit{origin.max_concurrent_requests(), origin.max_inflight_bytes()});
+  }
+  capacityGate_ =
+      std::make_unique<CapacityGate>(CapacityGate::Limit{config_.global_concurrency(), config_.max_inflight_bytes()},
+                                     std::move(originLimits));
+  loader_ = std::make_unique<CacheLoader>(backend_, *capacityGate_);
+  loaderScheduler_ = std::make_unique<LoaderScheduler>(hints_, *loader_, config_.range_size());
+  ensureCached_ = std::make_unique<EnsureCached>(backend_, hints_);
   auto scheduler = std::make_unique<BackgroundRunner>(executor);
   if (!scheduler->start(
           "CacheManagerScheduler",
-          []() -> CoTask<void> { co_return; },
+          [this]() -> CoTask<void> { co_await loaderScheduler_->runOne(); },
           [this] { return config_.scheduler_interval(); })) {
     return makeError(StatusCode::kQueueConflict, "failed to start cache manager scheduler");
   }
@@ -88,7 +111,8 @@ CoTryTask<EnsureCachedRsp> CacheManagerOperator::ensureCached(const EnsureCached
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkProtocol(req.cacheProtocolVersion));
   CO_RETURN_ON_ERROR(checkService(req.service));
-  co_return EnsureCachedRsp{EnsureCachedStatus::BYPASSED};
+  if (!ensureCached_) co_return EnsureCachedRsp{EnsureCachedStatus::BYPASSED};
+  co_return co_await ensureCached_->run(req);
 }
 
 CoTryTask<ReportCacheBlockInvalidRsp> CacheManagerOperator::reportCacheBlockInvalid(

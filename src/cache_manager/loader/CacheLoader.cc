@@ -1,0 +1,286 @@
+#include "cache_manager/loader/CacheLoader.h"
+
+#include <algorithm>
+#include <limits>
+
+namespace hf3fs::cache_manager {
+
+RealCacheManagerBackend::RealCacheManagerBackend(const Config &config,
+                                                 std::shared_ptr<meta::client::MetaClient> metaClient,
+                                                 std::shared_ptr<storage::client::StorageClient> storageClient,
+                                                 std::shared_ptr<client::ICommonMgmtdClient> mgmtdClient,
+                                                 Stores stores)
+    : config_(config),
+      metaClient_(std::move(metaClient)),
+      storageClient_(std::move(storageClient)),
+      mgmtdClient_(std::move(mgmtdClient)),
+      stores_(std::move(stores)) {}
+
+meta::CacheServiceIdentity RealCacheManagerBackend::service() const {
+  return {config_.service_name(), config_.service_token()};
+}
+
+CoTryTask<meta::Inode> RealCacheManagerBackend::stat(meta::InodeId inode) {
+  co_return co_await metaClient_->stat(flat::UserInfo{}, inode, std::nullopt, false);
+}
+
+CoTryTask<meta::EnqueueCacheBlocksRsp> RealCacheManagerBackend::enqueue(
+    std::vector<meta::CacheBlockRequestBase> items) {
+  meta::EnqueueCacheBlocksReq req;
+  req.service = service();
+  req.items = std::move(items);
+  co_return co_await metaClient_->enqueueCacheBlocks(std::move(req));
+}
+
+CoTryTask<meta::CacheBlockLease> RealCacheManagerBackend::acquire(const meta::CacheBlockRequestBase &item) {
+  meta::AcquireCacheBlocksReq req;
+  req.service = service();
+  req.items.push_back(item);
+  auto result = co_await metaClient_->acquireCacheBlocks(std::move(req));
+  CO_RETURN_ON_ERROR(result);
+  if (result->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid acquire result count");
+  CO_RETURN_ON_ERROR(result->results.front());
+  co_return result->results.front()->lease;
+}
+
+CoTryTask<std::vector<uint8_t>> RealCacheManagerBackend::getRange(const cache::ImmutableObjectIdentity &object,
+                                                                  cache::ByteRange range) {
+  auto store = stores_.find(object.originId);
+  if (store == stores_.end()) co_return makeError(StatusCode::kInvalidConfig, "origin is not configured");
+  co_return co_await store->second->getRange(object, range);
+}
+
+CoTryTask<storage::CacheChunkGenerationInfo> RealCacheManagerBackend::replace(const meta::Inode &inode,
+                                                                              cache::CacheBlockIndex block,
+                                                                              const meta::CacheBlockLease &lease,
+                                                                              std::vector<uint8_t> data) {
+  auto routing = mgmtdClient_->getRoutingInfo();
+  if (!routing || !routing->raw()) co_return makeError(CacheCode::kUnavailable, "routing info is unavailable");
+  const auto blockSize = inode.fileLayout().chunkSize;
+  if (block.toUnderType() > std::numeric_limits<uint64_t>::max() / blockSize) {
+    co_return makeError(StatusCode::kInvalidArg, "cache block offset overflow");
+  }
+  auto offset = uint64_t{block.toUnderType()} * blockSize;
+  auto chunkId = inode.getChunkId(inode.id, offset);
+  CO_RETURN_ON_ERROR(chunkId);
+  auto chainId = inode.getChainId(inode, offset, *routing->raw());
+  CO_RETURN_ON_ERROR(chainId);
+  auto chain = routing->getChain(*chainId);
+  if (!chain) co_return makeError(CacheCode::kUnavailable, "cache chain is unavailable");
+  auto table = routing->raw()->getChainTable(inode.fileLayout().tableId);
+  if (!table || table->checksumType != flat::ChainTableChecksumType::CRC32C) {
+    co_return makeError(CacheCode::kFeatureDisabled, "cache loader requires a CRC32C CACHE_DATA table");
+  }
+
+  storage::ReplaceCacheChunksReq req;
+  req.userInfo = flat::UserInfo{};
+  storage::ReplaceCacheChunkItem item;
+  item.key = {{*chainId, chain->chainVersion}, storage::ChunkId(chunkId->pack())};
+  item.cacheGeneration = lease.cacheGeneration;
+  item.operationId = Uuid::random();
+  item.data = std::move(data);
+  item.chunkSize = blockSize;
+  item.checksumType = storage::ChecksumType::CRC32C;
+  req.items.push_back(std::move(item));
+  auto result = co_await storageClient_->replaceCacheChunks(req);
+  CO_RETURN_ON_ERROR(result);
+  if (result->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid replace result count");
+  CO_RETURN_ON_ERROR(result->results.front());
+  const auto &stored = *result->results.front();
+  if (stored.cacheGeneration != lease.cacheGeneration || stored.retired || stored.length != req.items[0].data.size()) {
+    co_return makeError(CacheCode::kInvalidResponse, "storage returned an unexpected cache generation");
+  }
+  co_return stored;
+}
+
+CoTryTask<void> RealCacheManagerBackend::commit(const meta::CacheBlockRequestBase &item,
+                                                const meta::CacheBlockLease &lease,
+                                                const storage::CacheChunkGenerationInfo &stored) {
+  meta::CommitCacheBlocksReq req;
+  req.service = service();
+  req.items.push_back({item.key,
+                       lease.loaderId,
+                       lease.loadEpoch,
+                       lease.cacheGeneration,
+                       item.blockLength,
+                       static_cast<uint8_t>(stored.checksum.type),
+                       stored.checksum.value});
+  auto result = co_await metaClient_->commitCacheBlocks(std::move(req));
+  CO_RETURN_ON_ERROR(result);
+  if (result->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid commit result count");
+  CO_RETURN_ON_ERROR(result->results.front());
+  co_return Void{};
+}
+
+CoTryTask<void> RealCacheManagerBackend::fail(const cache::CacheBlockKey &key, const meta::CacheBlockLease &lease) {
+  meta::FailCacheBlocksReq req;
+  req.service = service();
+  req.items.push_back({key, lease.loaderId, lease.loadEpoch});
+  auto result = co_await metaClient_->failCacheBlocks(std::move(req));
+  CO_RETURN_ON_ERROR(result);
+  if (result->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid fail result count");
+  CO_RETURN_ON_ERROR(result->results.front());
+  co_return Void{};
+}
+
+Result<std::vector<cache::ByteRange>> CacheLoader::mergeRanges(std::span<const LoadHint> hints, uint64_t blockSize) {
+  if (blockSize == 0) return makeError(StatusCode::kInvalidArg, "block size is zero");
+  std::vector<cache::ByteRange> ranges;
+  ranges.reserve(hints.size());
+  for (const auto &hint : hints) {
+    if (hint.blockLength == 0 || hint.block.toUnderType() > std::numeric_limits<uint64_t>::max() / blockSize) {
+      return makeError(StatusCode::kInvalidArg, "invalid cache load hint");
+    }
+    ranges.push_back({uint64_t{hint.block.toUnderType()} * blockSize, hint.blockLength});
+  }
+  std::sort(ranges.begin(), ranges.end(), [](const auto &lhs, const auto &rhs) { return lhs.offset < rhs.offset; });
+  std::vector<cache::ByteRange> merged;
+  for (const auto &range : ranges) {
+    auto end = range.end();
+    RETURN_ON_ERROR(end);
+    if (merged.empty()) {
+      merged.push_back(range);
+      continue;
+    }
+    auto mergedEnd = merged.back().end();
+    RETURN_ON_ERROR(mergedEnd);
+    if (*mergedEnd == range.offset) {
+      merged.back().length += range.length;
+    } else {
+      merged.push_back(range);
+    }
+  }
+  return merged;
+}
+
+CoTryTask<void> CacheLoader::fail(const cache::CacheBlockKey &key, const meta::CacheBlockLease &lease, Status error) {
+  (void)co_await backend_->fail(key, lease);
+  co_return makeError(std::move(error));
+}
+
+CoTryTask<void> CacheLoader::load(const LoadHint &hint) { co_return co_await loadBatch({hint}); }
+
+CoTryTask<void> CacheLoader::loadBatch(std::vector<LoadHint> hints) {
+  if (hints.empty()) co_return Void{};
+  std::sort(hints.begin(), hints.end(), [](const auto &lhs, const auto &rhs) { return lhs.block < rhs.block; });
+  if (std::any_of(hints.begin(), hints.end(), [&](const auto &hint) { return hint.inode != hints.front().inode; })) {
+    co_return makeError(StatusCode::kInvalidArg, "cache load batch spans multiple inodes");
+  }
+  auto inode = co_await backend_->stat(hints.front().inode);
+  CO_RETURN_ON_ERROR(inode);
+  if (!inode->isOriginFile()) co_return makeError(MetaCode::kNotFile, "cache hint inode is not an OriginFile");
+  const auto &origin = inode->asOriginFile();
+  if (origin.superseded || origin.cacheAdmissionDisabled) {
+    co_return makeError(CacheCode::kStateConflict, "OriginFile cache admission is disabled");
+  }
+  auto object = origin.object;
+  auto blockSize = uint64_t{inode->fileLayout().chunkSize};
+  struct Work {
+    LoadHint hint;
+    meta::CacheBlockRequestBase item;
+    std::optional<meta::CacheBlockLease> lease;
+    std::optional<storage::CacheChunkGenerationInfo> stored;
+  };
+  std::vector<Work> work;
+  work.reserve(hints.size());
+  std::optional<Status> firstError;
+  auto remember = [&](const Status &error) {
+    if (!firstError) firstError = error;
+  };
+
+  for (auto &hint : hints) {
+    auto offset = uint64_t{hint.block.toUnderType()} * blockSize;
+    if (offset >= inode->fileLength()) {
+      remember(Status(StatusCode::kInvalidArg, "cache block is beyond EOF"));
+      continue;
+    }
+    auto blockLength = std::min(blockSize, inode->fileLength() - offset);
+    if (hint.blockLength != blockLength) {
+      remember(Status(CacheCode::kStateConflict, "cache block length changed"));
+      continue;
+    }
+    Work item{hint, {hint.key(), blockLength}, std::nullopt, std::nullopt};
+    auto lease = co_await backend_->acquire(item.item);
+    if (lease.hasError()) {
+      remember(lease.error());
+    } else {
+      item.lease = std::move(*lease);
+    }
+    work.push_back(std::move(item));
+  }
+
+  for (size_t begin = 0; begin < work.size();) {
+    while (begin < work.size() && !work[begin].lease) ++begin;
+    if (begin == work.size()) break;
+    size_t end = begin + 1;
+    uint64_t rangeLength = work[begin].item.blockLength;
+    while (end < work.size() && work[end].lease &&
+           work[end].hint.block.toUnderType() == work[end - 1].hint.block.toUnderType() + 1) {
+      rangeLength += work[end].item.blockLength;
+      ++end;
+    }
+    auto offset = uint64_t{work[begin].hint.block.toUnderType()} * blockSize;
+    auto permit = capacityGate_.tryAcquire(object.originId, rangeLength);
+    while (permit.hasError() && permit.error().code() == CacheCode::kCapacityExceeded && end > begin + 1) {
+      --end;
+      rangeLength -= work[end].item.blockLength;
+      permit = capacityGate_.tryAcquire(object.originId, rangeLength);
+    }
+    if (permit.hasError()) {
+      remember(permit.error());
+      for (size_t i = begin; i < end; ++i) (void)co_await backend_->fail(work[i].item.key, *work[i].lease);
+      begin = end;
+      continue;
+    }
+    auto data = co_await backend_->getRange(object, {offset, rangeLength});
+    if (data.hasError() || data->size() != rangeLength) {
+      auto error = data.hasError() ? data.error() : Status(CacheCode::kInvalidResponse, "origin range length mismatch");
+      remember(error);
+      for (size_t i = begin; i < end; ++i) (void)co_await backend_->fail(work[i].item.key, *work[i].lease);
+      begin = end;
+      continue;
+    }
+    size_t dataOffset = 0;
+    for (size_t i = begin; i < end; ++i) {
+      auto length = work[i].item.blockLength;
+      std::vector<uint8_t> blockData(data->begin() + dataOffset, data->begin() + dataOffset + length);
+      dataOffset += length;
+      auto stored = co_await backend_->replace(*inode, work[i].hint.block, *work[i].lease, std::move(blockData));
+      if (stored.hasError()) {
+        remember(stored.error());
+        (void)co_await backend_->fail(work[i].item.key, *work[i].lease);
+      } else {
+        work[i].stored = std::move(*stored);
+      }
+    }
+    begin = end;
+  }
+
+  auto hasStored = std::any_of(work.begin(), work.end(), [](const auto &item) { return item.stored.has_value(); });
+  if (hasStored) {
+    auto current = co_await backend_->stat(hints.front().inode);
+    auto currentError = current.hasError() || !current->isOriginFile() || current->asOriginFile().object != object ||
+                        current->asOriginFile().superseded || current->asOriginFile().cacheAdmissionDisabled;
+    if (currentError) {
+      auto error = current.hasError() ? current.error()
+                                      : Status(CacheCode::kVersionMismatch, "OriginFile changed while loading");
+      remember(error);
+      for (auto &item : work) {
+        if (item.stored) (void)co_await backend_->fail(item.item.key, *item.lease);
+      }
+    } else {
+      for (auto &item : work) {
+        if (!item.stored) continue;
+        auto committed = co_await backend_->commit(item.item, *item.lease, *item.stored);
+        if (committed.hasError()) {
+          remember(committed.error());
+          (void)co_await backend_->fail(item.item.key, *item.lease);
+        }
+      }
+    }
+  }
+  if (firstError) co_return makeError(std::move(*firstError));
+  co_return Void{};
+}
+
+}  // namespace hf3fs::cache_manager

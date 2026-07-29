@@ -36,7 +36,7 @@ class Config : public ConfigBase<Config> {
     std::set<uint32_t> ids;
     for (size_t i = 0; i < origins_length(); ++i) {
       const auto &origin = origins(i);
-      if (origin.origin_id() == 0 || origin.endpoint().empty()) {
+      if (origin.origin_id() == 0) {
         return makeError(StatusCode::kInvalidConfig, "invalid origin mapping");
       }
       if (!ids.emplace(origin.origin_id()).second) {

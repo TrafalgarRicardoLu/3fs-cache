@@ -1,6 +1,6 @@
 [server]
 service_name = "cache-manager"
-service_token = "replace-with-a-cluster-secret"
+service_token = ""
 global_concurrency = 64
 max_inflight_bytes = 1073741824
 range_size = 4194304
