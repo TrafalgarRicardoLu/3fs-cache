@@ -1,1 +1,2 @@
 add_subdirectory(storage_bench)
+add_subdirectory(cache_bench)

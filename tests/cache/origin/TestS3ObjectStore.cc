@@ -130,6 +130,22 @@ TEST(S3ObjectStore, RetriesOnlyTransientFailuresAndPreservesTerminalError) {
   ASSERT_ERROR(invalid, CacheCode::kInvalidResponse);
 }
 
+TEST(S3ObjectStore, RecoversFromTimeoutThrottleAndServerFaults) {
+  auto executor = std::make_unique<FakeExecutor>();
+  auto *fake = executor.get();
+  fake->headOutcomes.emplace_back(S3Failure{S3FailureKind::TIMEOUT, 0, "timeout"});
+  fake->headOutcomes.emplace_back(S3Failure{S3FailureKind::THROTTLED, 429, "throttled"});
+  fake->headOutcomes.emplace_back(S3Failure{S3FailureKind::SERVER, 500, "server error"});
+  fake->headOutcomes.emplace_back(HeadResponse{10, "version-1", std::nullopt});
+  auto config = testConfig();
+  config.maxRetries = 3;
+  S3ObjectStore store(config, std::move(executor));
+
+  auto recovered = folly::coro::blockingWait(store.head(objectRef()));
+  ASSERT_OK(recovered);
+  ASSERT_EQ(fake->headCalls, uint32_t{4});
+}
+
 TEST(S3ObjectStore, DoesNotRetryPermanentFailureAndBoundsInflightBytes) {
   auto executor = std::make_unique<FakeExecutor>();
   auto *fake = executor.get();
