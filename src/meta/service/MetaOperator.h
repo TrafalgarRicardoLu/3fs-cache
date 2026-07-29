@@ -111,6 +111,11 @@ class MetaOperator : public folly::NonCopyableNonMovable {
 
   CoTryTask<GetFileReadPlanRsp> getFileReadPlan(GetFileReadPlanReq req);
 
+  CoTryTask<EnqueueCacheBlocksRsp> enqueueCacheBlocks(EnqueueCacheBlocksReq req);
+  CoTryTask<AcquireCacheBlocksRsp> acquireCacheBlocks(AcquireCacheBlocksReq req);
+  CoTryTask<CommitCacheBlocksRsp> commitCacheBlocks(CommitCacheBlocksReq req);
+  CoTryTask<FailCacheBlocksRsp> failCacheBlocks(FailCacheBlocksReq req);
+
  private:
   friend class MockMeta;
 
@@ -196,6 +201,7 @@ class MetaOperator : public folly::NonCopyableNonMovable {
 
   CoTryTask<void> authenticate(UserInfo &userInfo);
   CoTryTask<Void> requireCacheAdmin(const UserInfo &userInfo);
+  Result<Void> checkCacheService(const CacheServiceIdentity &service) const;
   Result<Void> checkCacheFeature(uint32_t protocolVersion) const;
   Result<Void> checkCacheTable(flat::ChainTableId tableId) const;
 

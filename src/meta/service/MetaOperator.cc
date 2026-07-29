@@ -302,6 +302,15 @@ Result<Void> MetaOperator::checkCacheFeature(uint32_t protocolVersion) const {
   return Void{};
 }
 
+Result<Void> MetaOperator::checkCacheService(const CacheServiceIdentity &service) const {
+  RETURN_ON_ERROR(service.valid());
+  if (config_.cache_service_token().empty() || service.name != config_.cache_service_name() ||
+      service.token != config_.cache_service_token()) {
+    return makeError(MetaCode::kNoPermission, "invalid cache service identity");
+  }
+  return Void{};
+}
+
 Result<Void> MetaOperator::checkCacheTable(flat::ChainTableId tableId) const {
   auto routing = mgmtd_->getRoutingInfo();
   auto table = routing && routing->raw() ? routing->raw()->getChainTable(tableId) : nullptr;
@@ -544,5 +553,20 @@ CoTryTask<GetFileReadPlanRsp> MetaOperator::getFileReadPlan(GetFileReadPlanReq r
   CO_RETURN_ON_ERROR(checkCacheFeature(req.cacheProtocolVersion));
   co_return co_await runOp(&MetaStore::getFileReadPlan, req);
 }
+
+#define META_CACHE_MUTATION_METHOD(NAME, REQ, RSP)                       \
+  CoTryTask<RSP> MetaOperator::NAME(REQ req) {                           \
+    CO_RETURN_ON_ERROR(req.valid());                                     \
+    CO_RETURN_ON_ERROR(checkCacheService(req.service));                  \
+    CO_RETURN_ON_ERROR(checkCacheFeature(cache::kCacheProtocolVersion)); \
+    co_return co_await runOp(&MetaStore::NAME, req);                     \
+  }
+
+META_CACHE_MUTATION_METHOD(enqueueCacheBlocks, EnqueueCacheBlocksReq, EnqueueCacheBlocksRsp);
+META_CACHE_MUTATION_METHOD(acquireCacheBlocks, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
+META_CACHE_MUTATION_METHOD(commitCacheBlocks, CommitCacheBlocksReq, CommitCacheBlocksRsp);
+META_CACHE_MUTATION_METHOD(failCacheBlocks, FailCacheBlocksReq, FailCacheBlocksRsp);
+
+#undef META_CACHE_MUTATION_METHOD
 
 }  // namespace hf3fs::meta::server

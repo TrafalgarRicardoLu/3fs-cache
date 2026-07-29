@@ -120,6 +120,10 @@ struct Config : ConfigBase<Config> {
 
   CONFIG_HOT_UPDATED_ITEM(operation_timeout, 5_s);
 
+  CONFIG_HOT_UPDATED_ITEM(cache_service_name, std::string("cache-manager"));
+  CONFIG_HOT_UPDATED_ITEM(cache_service_token, std::string{});
+  CONFIG_HOT_UPDATED_ITEM(cache_load_lease, 1_min);
+
   CONFIG_OBJ(retry_transaction, TransactionRetry);
   CONFIG_OBJ(retry_remove_chunks, storage::client::RetryOptions, [](auto &c) {
     c.set_init_wait_time(10_s);

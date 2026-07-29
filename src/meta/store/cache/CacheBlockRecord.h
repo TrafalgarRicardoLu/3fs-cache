@@ -4,6 +4,7 @@
 
 #include "common/serde/Serde.h"
 #include "common/utils/Result.h"
+#include "common/utils/UtcTime.h"
 #include "common/utils/Uuid.h"
 #include "fbs/cache/Common.h"
 #include "fbs/mgmtd/MgmtdTypes.h"
@@ -18,6 +19,7 @@ struct CacheBlockRecord {
   SERDE_STRUCT_FIELD(loaderId, Uuid::zero());
   SERDE_STRUCT_FIELD(loadEpoch, uint64_t{0});
   SERDE_STRUCT_FIELD(cacheGeneration, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(leaseExpiresAt, UtcTime{});
   SERDE_STRUCT_FIELD(ready, std::optional<cache::ReadyIdentity>{});
   SERDE_STRUCT_FIELD(chargeKind, cache::ChargeKind::NONE);
   SERDE_STRUCT_FIELD(chargedBytes, uint64_t{0});

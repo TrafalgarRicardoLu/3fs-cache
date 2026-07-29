@@ -136,6 +136,7 @@ TEST_F(TestCacheCapacity, ReservedCleaningReleasesOnceIntoFailed) {
     record->loaderId = Uuid::random();
     record->loadEpoch = 1;
     record->cacheGeneration = cache::CacheGeneration{1};
+    record->leaseExpiresAt = UtcClock::now() + (1_min).asUs();
     CO_ASSERT_OK(co_await CacheBlockStore::store(*txn, *record));
     record->state = cache::CacheBlockState::CLEANING;
     CO_ASSERT_OK(co_await CacheBlockStore::store(*txn, *record));

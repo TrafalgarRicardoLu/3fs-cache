@@ -827,6 +827,7 @@ struct CacheServiceIdentity {
     if (name.empty() || token.empty()) return INVALID("invalid service identity");
     return VALID;
   }
+  std::string serdeToReadable() const { return std::string{name} + "@SECRET TOKEN"; }
 };
 
 struct CacheBlockRequestBase {
@@ -834,7 +835,11 @@ struct CacheBlockRequestBase {
   SERDE_STRUCT_FIELD(blockLength, uint64_t{0});
 
  public:
-  Result<Void> valid() const { return key.valid(); }
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    if (blockLength == 0) return INVALID("blockLength not set");
+    return VALID;
+  }
 };
 
 struct CacheBlockLease {
@@ -858,7 +863,6 @@ struct CacheBlockMutationResult {
       RETURN_ON_ERROR(service.valid());                                              \
       if (items.size() > kMaxCacheBatchItems)                                        \
         return makeError(CacheCode::kRequestTooLarge, "too many cache block items"); \
-      for (const auto &item : items) RETURN_ON_ERROR(item.valid());                  \
       return VALID;                                                                  \
     }                                                                                \
   }
@@ -887,7 +891,13 @@ struct CommitCacheBlockItem {
   SERDE_STRUCT_FIELD(checksumValue, uint32_t{0});
 
  public:
-  Result<Void> valid() const { return key.valid(); }
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    if (loaderId == Uuid::zero() || loadEpoch == 0 || cacheGeneration == cache::CacheGeneration{} || blockLength == 0) {
+      return INVALID("invalid cache commit fence");
+    }
+    return VALID;
+  }
 };
 CACHE_BOUNDED_REQ(CommitCacheBlocks, CommitCacheBlockItem);
 struct CommitCacheBlocksRsp : RspBase {
@@ -900,7 +910,11 @@ struct FailCacheBlockItem {
   SERDE_STRUCT_FIELD(loadEpoch, uint64_t{0});
 
  public:
-  Result<Void> valid() const { return key.valid(); }
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    if (loaderId == Uuid::zero() || loadEpoch == 0) return INVALID("invalid cache failure fence");
+    return VALID;
+  }
 };
 CACHE_BOUNDED_REQ(FailCacheBlocks, FailCacheBlockItem);
 struct FailCacheBlocksRsp : RspBase {

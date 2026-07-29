@@ -39,6 +39,11 @@ Result<Void> CacheBlockRecord::valid() const {
   if (state == cache::CacheBlockState::READY && chargeKind != cache::ChargeKind::COMMITTED) {
     return makeError(StatusCode::kInvalidArg, "READY record requires a committed charge");
   }
+  if (state == cache::CacheBlockState::LOADING &&
+      (loaderId == Uuid::zero() || loadEpoch == 0 || cacheGeneration == cache::CacheGeneration{} ||
+       leaseExpiresAt.isZero())) {
+    return makeError(StatusCode::kInvalidArg, "LOADING record requires a complete lease fence");
+  }
   if (ready.has_value() && state != cache::CacheBlockState::READY && state != cache::CacheBlockState::CLEANING) {
     return makeError(StatusCode::kInvalidArg, "ready identity is not valid for this state");
   }

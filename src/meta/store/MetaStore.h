@@ -143,6 +143,14 @@ class MetaStore {
 
   OpPtr<GetFileReadPlanRsp> getFileReadPlan(const GetFileReadPlanReq &req);
 
+  OpPtr<EnqueueCacheBlocksRsp> enqueueCacheBlocks(const EnqueueCacheBlocksReq &req);
+
+  OpPtr<AcquireCacheBlocksRsp> acquireCacheBlocks(const AcquireCacheBlocksReq &req);
+
+  OpPtr<CommitCacheBlocksRsp> commitCacheBlocks(const CommitCacheBlocksReq &req);
+
+  OpPtr<FailCacheBlocksRsp> failCacheBlocks(const FailCacheBlocksReq &req);
+
  private:
   template <typename>
   FRIEND_TEST(TestRemove, GC);
