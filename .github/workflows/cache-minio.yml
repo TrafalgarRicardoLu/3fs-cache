@@ -1,0 +1,54 @@
+name: Cache MinIO integration
+
+on:
+  workflow_dispatch:
+
+jobs:
+  minio-integration:
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Apply dependency patches
+        run: ./patches/apply.sh
+
+      - name: Start isolated MinIO
+        run: |
+          docker run --detach --rm --name hf3fs-cache-minio \
+            --publish 9000:9000 \
+            --env MINIO_ROOT_USER=hf3fs-integration \
+            --env MINIO_ROOT_PASSWORD=hf3fs-integration-secret \
+            minio/minio:RELEASE.2025-07-23T15-54-02Z server /data
+          for attempt in $(seq 1 20); do
+            curl --fail --silent http://localhost:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Configure integration target
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_CXX_COMPILER=clang++-14
+          -DCMAKE_C_COMPILER=clang-14
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DSHUFFLE_METHOD=g++11
+          -DHF3FS_ENABLE_CACHE=ON
+          -DHF3FS_ENABLE_CACHE_INTEGRATION_TESTS=ON
+
+      - name: Build and run MinIO suite
+        env:
+          HF3FS_CACHE_MINIO_ENDPOINT: localhost:9000
+          HF3FS_CACHE_MINIO_ACCESS_KEY: hf3fs-integration
+          HF3FS_CACHE_MINIO_SECRET_KEY: hf3fs-integration-secret
+          HF3FS_CACHE_MINIO_REGION: us-east-1
+          HF3FS_CACHE_MINIO_USE_TLS: 0
+        run: |
+          cmake --build build --target test_cache_minio -j 32
+          ctest --test-dir build -R '^test_cache_minio$' --output-on-failure
+
+      - name: Stop MinIO
+        if: always()
+        run: docker stop hf3fs-cache-minio || true

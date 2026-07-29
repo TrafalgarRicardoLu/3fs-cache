@@ -5,7 +5,11 @@
 #include <aws/core/Aws.h>
 #include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/auth/AWSCredentialsProviderChain.h>
+#if __has_include(<aws/core/client/AWSAuthSigner.h>)
 #include <aws/core/client/AWSAuthSigner.h>
+#else
+#include <aws/core/auth/AWSAuthSigner.h>
+#endif
 #include <aws/core/client/AWSError.h>
 #include <aws/core/http/HttpTypes.h>
 #include <aws/s3/S3Client.h>
