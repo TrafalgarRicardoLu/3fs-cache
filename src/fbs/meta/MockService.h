@@ -38,5 +38,17 @@ class MockMetaService : public serde::ServiceWrapper<MockMetaService, MetaSerde>
   META_MOCK_SERVICE_METHOD(testRpc, TestRpcReq, TestRpcRsp);
   META_MOCK_SERVICE_METHOD(batchStat, BatchStatReq, BatchStatRsp);
   META_MOCK_SERVICE_METHOD(batchStatByPath, BatchStatByPathReq, BatchStatByPathRsp);
+  META_MOCK_SERVICE_METHOD(importOriginFile, ImportOriginFileReq, ImportOriginFileRsp);
+  META_MOCK_SERVICE_METHOD(batchImportOriginFiles, BatchImportOriginFilesReq, BatchImportOriginFilesRsp);
+  META_MOCK_SERVICE_METHOD(refreshOriginFile, RefreshOriginFileReq, RefreshOriginFileRsp);
+  META_MOCK_SERVICE_METHOD(getFileReadPlan, GetFileReadPlanReq, GetFileReadPlanRsp);
+  META_MOCK_SERVICE_METHOD(enqueueCacheBlocks, EnqueueCacheBlocksReq, EnqueueCacheBlocksRsp);
+  META_MOCK_SERVICE_METHOD(acquireCacheBlocks, AcquireCacheBlocksReq, AcquireCacheBlocksRsp);
+  META_MOCK_SERVICE_METHOD(commitCacheBlocks, CommitCacheBlocksReq, CommitCacheBlocksRsp);
+  META_MOCK_SERVICE_METHOD(failCacheBlocks, FailCacheBlocksReq, FailCacheBlocksRsp);
+  META_MOCK_SERVICE_METHOD(beginCleanCacheBlocks, BeginCleanCacheBlocksReq, BeginCleanCacheBlocksRsp);
+  META_MOCK_SERVICE_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
+  META_MOCK_SERVICE_METHOD(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
+  META_MOCK_SERVICE_METHOD(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
 };
 }  // namespace hf3fs::meta
