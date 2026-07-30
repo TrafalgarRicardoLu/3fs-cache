@@ -1,11 +1,72 @@
 #include "fbs/storage/Common.h"
 
+#include <algorithm>
 #include <fmt/format.h>
 
 #include "common/utils/Result.h"
 #include "scn/tuple_return/tuple_return.h"
 
 namespace hf3fs::storage {
+
+Result<Void> PhysicalDiskId::valid() const {
+  if (uuid == Uuid::zero()) {
+    return makeError(StatusCode::kInvalidArg, "empty physical disk id");
+  }
+  return Void{};
+}
+
+Result<PlacementIdentity> PlacementIdentity::create(VersionedChainId versionedChain,
+                                                    std::vector<TargetId> expectedReplicaTargets,
+                                                    TargetId coordinatorTargetId,
+                                                    Uuid admissionAttemptId) {
+  std::sort(expectedReplicaTargets.begin(), expectedReplicaTargets.end());
+  expectedReplicaTargets.erase(std::unique(expectedReplicaTargets.begin(), expectedReplicaTargets.end()),
+                               expectedReplicaTargets.end());
+  PlacementIdentity placement{versionedChain,
+                              std::move(expectedReplicaTargets),
+                              coordinatorTargetId,
+                              admissionAttemptId};
+  RETURN_ON_ERROR(placement.valid());
+  return placement;
+}
+
+Result<Void> PlacementIdentity::valid() const {
+  if (versionedChain.chainId == ChainId{} || versionedChain.chainVer == ChainVer{}) {
+    return makeError(StatusCode::kInvalidArg, "empty placement chain identity");
+  }
+  if (expectedReplicaTargets.empty() || coordinatorTargetId == TargetId{} || admissionAttemptId == Uuid::zero()) {
+    return makeError(StatusCode::kInvalidArg, "empty placement identity");
+  }
+  if (!std::is_sorted(expectedReplicaTargets.begin(), expectedReplicaTargets.end()) ||
+      std::adjacent_find(expectedReplicaTargets.begin(), expectedReplicaTargets.end()) !=
+          expectedReplicaTargets.end()) {
+    return makeError(CacheCode::kPlacementMismatch, "placement replica targets must be sorted and unique");
+  }
+  if (!std::binary_search(expectedReplicaTargets.begin(), expectedReplicaTargets.end(), coordinatorTargetId)) {
+    return makeError(CacheCode::kPlacementMismatch, "placement coordinator is not a replica target");
+  }
+  if (expectedReplicaTargets.front() == TargetId{}) {
+    return makeError(StatusCode::kInvalidArg, "empty placement replica target");
+  }
+  return Void{};
+}
+
+Result<Void> PermitIdentity::valid() const {
+  if (managerEpoch == Uuid::zero() || permitGeneration == 0) {
+    return makeError(StatusCode::kInvalidArg, "empty permit identity");
+  }
+  RETURN_ON_ERROR(placement.valid());
+  if (footprintByTarget.size() != placement.expectedReplicaTargets.size()) {
+    return makeError(CacheCode::kPermitConflict, "permit footprint does not cover the placement");
+  }
+  for (const auto target : placement.expectedReplicaTargets) {
+    auto footprint = footprintByTarget.find(target);
+    if (footprint == footprintByTarget.end() || footprint->second == 0) {
+      return makeError(CacheCode::kPermitConflict, "permit footprint is missing or empty");
+    }
+  }
+  return Void{};
+}
 
 ChunkId::ChunkId(uint64_t high, uint64_t low) {
   data_.resize(sizeof(high) + sizeof(low));

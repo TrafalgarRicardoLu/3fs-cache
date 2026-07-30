@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <folly/hash/Checksum.h>
 #include <iterator>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,22 @@ using ChainId = ::hf3fs::flat::ChainId;
 using ChainVer = ::hf3fs::flat::ChainVersion;
 using TargetId = ::hf3fs::flat::TargetId;
 using NodeId = ::hf3fs::flat::NodeId;
+
+struct PhysicalDiskId {
+  SERDE_STRUCT_FIELD(uuid, Uuid::zero());
+
+ public:
+  Result<Void> valid() const;
+  bool operator==(const PhysicalDiskId &) const = default;
+  bool operator<(const PhysicalDiskId &other) const { return uuid < other.uuid; }
+};
+static_assert(serde::Serializable<PhysicalDiskId>);
+
+enum class StorageRole : uint8_t {
+  INVALID = 0,
+  USER_DATA = 1,
+  CACHE_ONLY = 2,
+};
 
 STRONG_TYPEDEF(uint32_t, ChunkVer);
 STRONG_TYPEDEF(uint64_t, RequestId);
@@ -257,6 +274,36 @@ struct VersionedChainId {
   SERDE_STRUCT_FIELD(chainVer, ChainVer{});
 };
 static_assert(serde::Serializable<VersionedChainId>);
+
+struct PlacementIdentity {
+  SERDE_STRUCT_FIELD(versionedChain, VersionedChainId{});
+  SERDE_STRUCT_FIELD(expectedReplicaTargets, std::vector<TargetId>{});
+  SERDE_STRUCT_FIELD(coordinatorTargetId, TargetId{});
+  SERDE_STRUCT_FIELD(admissionAttemptId, Uuid::zero());
+
+ public:
+  static Result<PlacementIdentity> create(VersionedChainId versionedChain,
+                                          std::vector<TargetId> expectedReplicaTargets,
+                                          TargetId coordinatorTargetId,
+                                          Uuid admissionAttemptId);
+  Result<Void> valid() const;
+  bool operator==(const PlacementIdentity &) const = default;
+};
+static_assert(serde::Serializable<PlacementIdentity>);
+
+using FootprintByTarget = std::map<TargetId, uint64_t>;
+
+struct PermitIdentity {
+  SERDE_STRUCT_FIELD(managerEpoch, Uuid::zero());
+  SERDE_STRUCT_FIELD(placement, PlacementIdentity{});
+  SERDE_STRUCT_FIELD(permitGeneration, uint64_t{0});
+  SERDE_STRUCT_FIELD(footprintByTarget, FootprintByTarget{});
+
+ public:
+  Result<Void> valid() const;
+  bool operator==(const PermitIdentity &) const = default;
+};
+static_assert(serde::Serializable<PermitIdentity>);
 
 struct GlobalKey {
   SERDE_STRUCT_FIELD(vChainId, VersionedChainId{});

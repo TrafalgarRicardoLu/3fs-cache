@@ -10,13 +10,41 @@
 
 namespace hf3fs::cache {
 
-inline constexpr uint32_t kCacheSchemaVersion = 1;
-inline constexpr uint32_t kCacheProtocolVersion = 1;
+inline constexpr uint32_t kCacheSchemaVersion = 2;
+inline constexpr uint32_t kCacheProtocolVersion = 2;
 
 STRONG_TYPEDEF(uint32_t, OriginId);
 STRONG_TYPEDEF(uint32_t, CacheBlockIndex);
 STRONG_TYPEDEF(uint64_t, CacheGeneration);
 STRONG_TYPEDEF(uint64_t, CleanupEpoch);
+STRONG_TYPEDEF(uint64_t, EvictionEpoch);
+
+enum class EvictionReason : uint8_t {
+  INVALID = 0,
+  CAPACITY_WATERMARK = 1,
+  LOCAL_SAFETY = 2,
+};
+
+enum class CacheStorageEventType : uint8_t {
+  DELETED = 0,
+  EMERGENCY_EVICTED = 1,
+  LOST = 2,
+  CORRUPTED = 3,
+};
+
+enum class CacheStorageEventState : uint8_t {
+  INVALID = 0,
+  PREPARED = 1,
+  DELIVERABLE = 2,
+};
+
+enum class CachePermitState : uint8_t {
+  INVALID = 0,
+  RESERVED = 1,
+  PINNED = 2,
+};
+
+Result<EvictionEpoch> nextEvictionEpoch(EvictionEpoch current);
 
 enum class VersionSelectorType : uint8_t {
   VERSION_ID,

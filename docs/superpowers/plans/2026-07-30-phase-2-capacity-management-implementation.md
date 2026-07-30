@@ -788,7 +788,7 @@ cmake --build build --target check-format
 | 任务 | 里程碑 | 状态 | 主要交付 |
 | --- | --- | --- | --- |
 | T0 | M0 | completed | 基线与测试矩阵 |
-| T1 | M0 | pending | 公共身份与协议版本 |
+| T1 | M0 | completed | 公共身份与协议版本 |
 | T2 | M0 | pending | Storage 磁盘角色 |
 | T3 | M0 | pending | Mgmtd 角色隔离 |
 | T4 | M0 | pending | Phase-2 wire contract |

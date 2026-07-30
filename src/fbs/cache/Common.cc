@@ -7,6 +7,13 @@
 
 namespace hf3fs::cache {
 
+Result<EvictionEpoch> nextEvictionEpoch(EvictionEpoch current) {
+  if (current == EvictionEpoch{std::numeric_limits<uint64_t>::max()}) {
+    return makeError(CacheCode::kStateConflict, "cache eviction epoch overflow");
+  }
+  return EvictionEpoch{current.toUnderType() + 1};
+}
+
 Result<Void> VersionSelector::valid() const {
   if (!magic_enum::enum_contains(type)) {
     return makeError(StatusCode::kInvalidArg, fmt::format("invalid version selector type {}", static_cast<int>(type)));
