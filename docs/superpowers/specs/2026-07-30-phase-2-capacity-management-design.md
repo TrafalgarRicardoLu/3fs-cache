@@ -180,11 +180,21 @@ The existing foreground `EnsureCached` call becomes the only miss signal in Phas
 send `ORIGIN_MISS` through `ReportCacheAccess`, preventing double counting. `ReportCacheAccess` carries READY hits; its
 ORIGIN_MISS enum value is reserved for a future replacement of `EnsureCached`.
 
-Each admission attempt has a stable `admissionAttemptId`. Metadata enqueue stores this ID and returns whether the call
-created QUEUED work or attached to existing QUEUED/LOADING/READY state. A Storage permit is transferred to the loader
-only for newly created QUEUED work. Attachment, state conflict, scheduler failure, and definitive RPC failure release it
-immediately. An ambiguous enqueue timeout is retried with the same attempt ID before the permit is released or
-transferred.
+Each admission attempt has a stable `admissionAttemptId`. Metadata enqueue stores its complete PermitIdentity and
+returns whether the call created work or found READY, QUEUED, or LOADING.
+
+- READY releases the newly prepared permit immediately.
+- Newly created QUEUED transfers its permit to the scheduler.
+- QUEUED with a valid permit is attached and renewed. QUEUED with an invalid permit prepares a new-epoch permit and uses
+  Metadata CAS to replace the PermitIdentity; a loser releases its new permit.
+- LOADING with an executing write retains the original permit and cannot be attached or replaced. LOADING that has not
+  started replace may replace an invalid permit only after Storage proves no write is executing and Metadata CAS matches
+  the loader lease and old permit generation.
+
+An ambiguous enqueue timeout is retried with the same attempt ID. Scheduler attachment failure calls a fenced
+`CancelQueuedAdmission` that atomically changes that exact QUEUED attempt to FAILED/NONE and releases its logical
+reservation, then releases the Storage permit. If cancellation is ambiguous, restart recovery resolves the persisted
+QUEUED/PermitIdentity pair; it must never leave an ordinary QUEUED record that cannot acquire a permit.
 
 READY hits do not trigger admission. Prefetch and pin exceptions are deferred to Phase 3.
 
@@ -248,6 +258,23 @@ The projected post-write usage must stay below the normal high watermark on ever
 
 ### 6.4 Storage physical permits
 
+The immutable placement and replace authorization are:
+
+```cpp
+struct PlacementIdentity {
+  VersionedChainId versionedChain;
+  std::vector<TargetId> expectedReplicaTargets;  // sorted and unique
+  Uuid admissionAttemptId;
+};
+
+struct PermitIdentity {
+  Uuid managerEpoch;
+  PlacementIdentity placement;
+  uint64_t permitGeneration;
+  std::map<TargetId, uint64_t> footprintByTarget;
+};
+```
+
 The final authority is a Storage-side per-disk `CacheSpaceGate`. Before Metadata enqueue, Cache Manager submits a stable
 `managerEpoch` and `admissionAttemptId` to a chain-level prepare operation. The coordinator requests one permit per
 replica Target; each Target atomically checks its CACHE_ONLY role and current allocatable space, reserves the calculated
@@ -262,8 +289,13 @@ wrong-footprint permits. A permit remains counted while a write is executing, is
 failure or cancellation.
 
 While newly created work remains QUEUED or LOADING, Cache Manager renews the permit with the same attempt identity. If
-renewal fails or the permit expires before replace begins, the loader must fail through the existing fenced cleanup path;
-it may not write without preparing a new permit tied to the same Metadata attempt.
+renewal fails or the permit expires before replace begins, it follows the CAS replacement rules in Section 5.3. If safe
+replacement cannot be proven, the attempt is cancelled or failed through the fenced cleanup path. It may never write
+without a current permit persisted on the same Metadata attempt.
+
+Metadata persists PermitIdentity in QUEUED and LOADING. Replacing it requires CAS on block state, load lease when
+present, and old permit generation. Storage's prepare and release calls are idempotent by PermitIdentity. An executing
+replace pins its permit so expiry cannot free bytes underneath the write.
 
 Manager preflight reservations prevent avoidable RPCs but are not a correctness mechanism. After Manager restart, the
 new epoch stops admission until Storage space responses include all active permits from prior epochs and any executing
@@ -287,10 +319,18 @@ Extend `CacheBlockRecord` with:
 ```cpp
 UtcTime readyAt;
 UtcTime lastAccessAt;
+std::optional<PermitIdentity> permit;       // QUEUED or LOADING
+std::optional<PlacementIdentity> placement; // READY and later physical states
 ```
 
-Commit to READY initializes both fields. Cache Manager periodically sends coalesced access updates containing block key,
-observed generation, and Manager receive time. Metadata applies:
+Replace and Commit carry the same PlacementIdentity. Commit validates it against the LOADING PermitIdentity, clears the
+permit, persists the immutable placement on READY, and initializes both time fields. Descriptor creation persists that
+same complete placement on every replica. RoutingInfo changes do not rewrite READY placement. A placement may change
+only through a future protocol that proves migration of the generation on every old and new replica; Phase 2 has no such
+protocol and therefore fails eviction closed if the recorded placement cannot be reached.
+
+Cache Manager periodically sends coalesced access updates containing block key, observed generation, and Manager receive
+time. Metadata applies:
 
 ```text
 record.state == READY
@@ -357,8 +397,6 @@ Add a dedicated Metadata mutation equivalent to:
 struct BeginEvictCacheBlockItem {
   CacheBlockKey key;
   ReadyIdentity expectedReady;
-  VersionedChainId versionedChain;
-  std::vector<TargetId> expectedReplicaTargets;
   EvictionReason reason;
 };
 ```
@@ -380,9 +418,10 @@ Uuid retireOperationId;
 EvictionReason reason;
 ```
 
-Cache Manager derives the unique nonempty replica set from the same RoutingInfo version and validates that the
-versioned chain's ChainId equals the block record's ChainId before calling Metadata. For local safety, the descriptor
-supplies this identity in EMERGENCY_EVICTED and Metadata persists it during the READY-to-EVICTING transaction.
+BeginEvict copies versioned chain and replica set only from the immutable READY PlacementIdentity; it must never rebuild
+them from current RoutingInfo. For local safety, EMERGENCY_EVICTED carries the descriptor's complete placement. Metadata
+requires it to equal the READY placement, then generates a new eviction epoch and logical retire operation ID. The local
+delete operation ID remains only the Storage event identity and cannot be reused as the logical retire operation ID.
 
 All fields persist on the EVICTING record. Eviction epoch is monotonic per block; overflow fails closed. Repeating
 BeginEvict with the same expected identity returns the existing operation, while a different identity conflicts.
@@ -404,7 +443,7 @@ chunk metadata:
 struct CacheChunkDescriptor {
   CacheBlockKey logicalKey;
   CacheGeneration generation;
-  VersionedChainId versionedChain;
+  PlacementIdentity placement;
   TargetId targetId;
   UtcTime createdAt;
   UtcTime lastAccessAt;
@@ -486,12 +525,12 @@ struct CacheStorageEvent {
   Uuid sourceId;
   uint64_t sequence;
   CacheStorageEventType type;
-  Uuid operationId;
+  Uuid storageOperationId;
+  std::optional<Uuid> logicalRetireOperationId;
   CacheBlockKey logicalKey;
   CacheChunkKey storageKey;
   CacheGeneration generation;
-  VersionedChainId versionedChain;
-  std::vector<TargetId> expectedReplicaTargets;
+  PlacementIdentity placement;
   std::optional<EvictionEpoch> evictionEpoch;
   PhysicalDiskId diskId;
   UtcTime timestamp;
@@ -502,19 +541,22 @@ struct CacheStorageEvent {
 
 ### 13.2 Delete outbox
 
-Deletion uses this local protocol:
+Every Phase-2 event-producing deletion uses an operation journal plus a separate delivery outbox:
 
 ```text
 persist PREPARED intent
   -> execute generation-fenced delete
   -> verify the generation is retired
-  -> mark DELIVERABLE
+  -> atomically allocate the next delivery sequence and create DELIVERABLE
   -> report until Metadata ACKs
   -> reclaim the journal record
 ```
 
-The operation ID is stable across retries. On Storage restart, PREPARED records re-run or query the fenced deletion;
-DELIVERABLE records resume reporting.
+PREPARED operations do not own a delivery sequence. The Storage operation ID is stable across retries. On Storage
+restart, PREPARED records re-run or query the fenced deletion; DELIVERABLE records resume reporting. A permanently stuck
+PREPARED operation therefore cannot create a sequence gap or block later completed operations from delivery.
+
+This protocol does not change Phase-1 CLEANING retirement, which produces no Phase-2 logical DELETED event.
 
 The outbox must use reserved metadata space or another bounded mechanism that remains writable at the local safety
 watermark. If the outbox cannot prepare an intent, Storage must not start a new cache deletion. It stops new cache
@@ -530,12 +572,10 @@ struct RetireOperation {
   Uuid operationId;
   CacheBlockKey logicalKey;
   ReadyIdentity expectedReady;
-  VersionedChainId versionedChain;
+  PlacementIdentity placement;
   EvictionEpoch evictionEpoch;
-  std::vector<TargetId> expectedReplicaTargets;
   std::set<TargetId> retiredReplicaTargets;
   RetireOperationState state;  // PREPARED or DELIVERABLE
-  uint64_t eventSequence;
 };
 ```
 
@@ -544,10 +584,11 @@ route. The coordinator sends the stable operation ID and generation to each reco
 only after its tombstone is durable and a query proves that generation cannot be read or replaced. Partial success stays
 PREPARED and is retried. Coordinator restart reloads the operation and its per-replica progress.
 
-Only after every expected Target is durably retired may the coordinator atomically change the RetireOperation to
-DELIVERABLE and expose its preallocated logical `DELETED` event. No synchronous response, quorum, preferred replica, or
-single local delete substitutes for this condition. An independently deleted local replica produces
-`EMERGENCY_EVICTED`, never `DELETED`.
+Only after every expected Target is durably retired may the coordinator, in one local transaction, allocate the next
+contiguous source sequence, create the logical DELETED event in the delivery outbox, and mark the RetireOperation
+DELIVERABLE. Local emergency intents allocate their sequence at the same transition. No synchronous response, quorum,
+preferred replica, or single local delete substitutes for this condition. An independently deleted local replica
+produces EMERGENCY_EVICTED, never DELETED.
 
 Phase-1 CLEANING deliberately retains its current owner in Phase 2: `CacheCleanupWorker` fans out fenced retires, verifies
 the synchronous per-Target results, and calls FinishClean. Those retires do not create a logical DELETED operation.
@@ -567,10 +608,10 @@ in one transaction:
 It returns an ACK only after the transaction commits. Duplicate events return the persisted ACK. A gap does not advance
 the cursor. Storage retries from the first unacknowledged sequence.
 
-For DELETED, Metadata must match block key, generation, versioned chain, eviction epoch, and retire operation ID before
-releasing logical counters. Semantic errors never block later events from the same source: they are persisted to a
-dead-letter record, alerted, and ACKed without an unsafe state mutation. Only a transport-level sequence gap prevents
-cursor advancement.
+For DELETED, Metadata must match block key, generation, complete PlacementIdentity, eviction epoch, and retire operation
+ID before releasing logical counters. Semantic errors never block later events from the same source: they are persisted
+to a dead-letter record, alerted, and ACKed without an unsafe state mutation. Only a transport-level sequence gap
+prevents cursor advancement.
 
 The state/event matrix for a matching generation is:
 
@@ -595,9 +636,10 @@ the inconsistent record for explicit verification or the Phase-4 Reconciler.
 On restart Cache Manager allocates a new persistent-process epoch, discards admission and preflight memory,
 force-refreshes RoutingInfo, and queries every related Storage disk for old-epoch permits and executing writes. It keeps
 admission stopped until all are included in cacheReservedBytes or have durably completed/expired. It then scans
-EVICTING records in stable key order and resumes their exact persisted RetireOperation. The scan cursor is ephemeral and
-may restart from the beginning because one Cache Manager and stable operation IDs make replay idempotent; no distributed
-claim lease is required. Access history for second-miss admission starts empty.
+QUEUED records to renew, CAS-replace, or cancel their persisted permits; it never replaces a permit for an executing
+LOADING write. It also scans EVICTING records in stable key order and resumes their exact persisted RetireOperation. Scan
+cursors are ephemeral and may restart from the beginning because one Cache Manager and stable identities make replay
+idempotent; no distributed claim lease is required. Access history for second-miss admission starts empty.
 
 This is deliberately limited recovery. Full LOADING lease recovery, orphan inventory cleanup, and cross-version repair
 remain Phase 4 work.
@@ -614,8 +656,9 @@ remain Phase 4 work.
 
 ### 14.3 Routing changes
 
-Eviction work, RetireOperation, and Events carry `VersionedChainId` and the recorded replica set. A route change must not
-be interpreted as proof that the old generation disappeared. Cache Manager resumes the persisted coordinator operation.
+READY, Eviction work, RetireOperation, descriptor, and Events carry the same immutable PlacementIdentity from the actual
+write. A route change must not be interpreted as proof that the old generation disappeared, and current RoutingInfo may
+not replace this identity. Cache Manager resumes the persisted coordinator operation against the recorded replica set.
 If a recorded replica or coordinator cannot be reached, the block remains EVICTING and its logical bytes remain counted.
 Cross-version inventory repair is deferred to Phase 4.
 
@@ -716,6 +759,8 @@ and sequence. They must not include tokens or Origin credentials.
   stale snapshots measured by Manager monotonic time, and per-disk preflight reservation.
 - Storage gate atomicity, partial multi-replica permit rollback, permit consumption/expiry, old Manager epoch, and an
   executing write that crosses Manager restart.
+- QUEUED permit renew/CAS replacement/cancellation, scheduler failure after enqueue, expiry before scheduling, and two
+  recovery attempts racing to replace one permit.
 - Persistent CACHE_ONLY/USER_DATA roles; old data mismatch; routing-role change; same-disk mixed Target rejection; and
   ordinary write/truncate/remove attempts against cache Targets.
 - LRU selection, protection period, per-disk deficits, factory validation, and fake/malicious policy indexes that are
@@ -723,7 +768,10 @@ and sequence. They must not include tokens or Origin credentials.
 - READY access generation CAS and READY-to-EVICTING state transitions.
 - Logical counters update correctly without enforcing logical capacity.
 - Storage descriptor persistence and coalesced local access updates.
-- Event sequence, contiguous ACK, compaction, restart recovery, and journal bound.
+- READY placement persistence across route changes and exact equality among permit, replace, descriptor, Commit, and
+  EVICTING identity.
+- Event sequence allocation only at DELIVERABLE, contiguous ACK, compaction, restart recovery, and journal bound. A
+  permanently PREPARED operation A must not prevent completed operations B and C from receiving consecutive sequences.
 - Duplicate, delayed, stale-generation, future-generation, DELETED, and EMERGENCY_EVICTED consumption across every row
   of the READY/EVICTING/CLEANING/LOADING/QUEUED/INVALID/FAILED/NONE matrix.
 - All configuration relations and boundary values.
@@ -745,14 +793,17 @@ and sequence. They must not include tokens or Origin credentials.
 11. Cache Targets and their physical disks reject ordinary user-data chains and every ordinary I/O entry point.
 12. BeginEvict versus BeginClean and local safety versus CLEANING preserve one completion owner and ACK all events.
 13. Existing Phase-1 READY data is drained and verified empty before Phase 2 can enable.
-14. MinIO Origin miss, admission, hit, eviction, and later Origin fallback form a complete loop.
+14. After a READY block's route changes, eviction uses its original placement; while any original replica remains ACTIVE,
+    no DELETED event or logical release is possible.
+15. MinIO Origin miss, admission, hit, eviction, and later Origin fallback form a complete loop.
 
 ### 17.3 Crash injection
 
 Inject a crash after each of these points:
 
 - each replica permit before and after durable reservation;
-- Manager crash after permit prepare, during replace, and before/after Metadata enqueue result resolution;
+- Manager crash after permit prepare, after enqueue before schedule, during replace, and before/after Metadata enqueue
+  result resolution;
 - coordinator RetireOperation PREPARED, before the first replica retire;
 - before and after every replica's durable tombstone acknowledgement;
 - coordinator crash after the last replica retires but before logical DELIVERABLE;
@@ -804,10 +855,12 @@ Phase 2 is complete when:
 - Storage-calculated physical footprint and atomic per-disk permits, not logical capacity or Manager snapshots, control
   admission;
 - CACHE_ONLY roles are persisted and enforced by Mgmtd, Storage routing, and every I/O entry point;
+- READY persists the exact write placement and eviction never substitutes current routing;
 - normal and local high/low watermarks are configurable and provide hysteresis;
 - eviction policy selection is pluggable and LRU is the default implementation;
 - normal and local safety triggers converge through one fenced delete and event protocol;
 - logical DELETED is impossible until every replica recorded by the exact RetireOperation is durably retired;
+- stuck PREPARED operations do not consume event sequence numbers or block completed-event delivery;
 - Storage Events survive the defined crash windows and are delivered at least once;
 - Metadata applies every logical deletion exactly once;
 - Cache Manager restart resumes EVICTING work;
