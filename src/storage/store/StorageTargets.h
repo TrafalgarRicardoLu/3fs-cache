@@ -22,6 +22,7 @@ class StorageTargets {
  public:
   class Config : public ConfigBase<Config> {
     CONFIG_ITEM(target_paths, std::vector<Path>{}, [](auto &vec) { return !vec.empty(); });
+    CONFIG_ITEM(disk_roles, std::vector<StorageRole>{});
     CONFIG_ITEM(target_num_per_path, 0u);
     CONFIG_HOT_UPDATED_ITEM(collect_all_fds, true);
     CONFIG_HOT_UPDATED_ITEM(space_info_cache_timeout, 5_s);
@@ -91,6 +92,7 @@ class StorageTargets {
 
   std::vector<Path> targetPaths_;
   std::vector<std::string> manufacturers_;
+  std::vector<PhysicalDiskConfig> diskConfigs_;
   std::map<Path, uint32_t> pathToDiskIndex_;
   std::vector<rust::Box<chunk_engine::Engine>> engines_;
 

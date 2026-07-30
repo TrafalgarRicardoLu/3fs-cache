@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "common/monitor/Recorder.h"
+#include "common/utils/MagicEnum.hpp"
 #include "common/utils/RobinHood.h"
 #include "fbs/mgmtd/MgmtdTypes.h"
 
@@ -86,6 +87,8 @@ Result<Void> TargetMap::addStorageTarget(const std::shared_ptr<StorageTarget> &s
   target.localState = flat::LocalTargetState::ONLINE;
   target.diskIndex = storageTarget->diskIndex();
   target.useChunkEngine = storageTarget->useChunkEngine();
+  target.physicalDiskId = storageTarget->physicalDiskId();
+  target.storageRole = storageTarget->storageRole();
   auto [it, succ] = targets_.emplace(targetId, target);
   if (UNLIKELY(!succ)) {
     if (it->second.localState == flat::LocalTargetState::OFFLINE) {
@@ -136,6 +139,38 @@ Result<Void> TargetMap::updateRouting(std::shared_ptr<hf3fs::client::RoutingInfo
   }
   XLOGF(INFO, "routing info updated, {} -> {}", routingInfoVersion_, routingInfo->routingInfoVersion);
 
+  robin_hood::unordered_set<ChainId> cacheDataChains;
+  for (const auto &[_, versions] : routingInfo->chainTables) {
+    if (!versions.empty() && versions.rbegin()->second.isCacheData()) {
+      cacheDataChains.insert(versions.rbegin()->second.chains.begin(), versions.rbegin()->second.chains.end());
+    }
+  }
+
+  // Validate disk roles before mutating the current routing snapshot. Legacy targets
+  // have INVALID role and remain compatible while phase two is disabled.
+  for (const auto &[_, chain] : routingInfo->chains) {
+    auto it = std::find_if(chain.targets.begin(), chain.targets.end(), [&](const flat::ChainTargetInfo &targetInfo) {
+      return targets_.contains(targetInfo.targetId);
+    });
+    if (it == chain.targets.end()) {
+      continue;
+    }
+    const auto &target = targets_.find(it->targetId)->second;
+    if (target.storageRole == StorageRole::INVALID) {
+      continue;
+    }
+    auto expectedRole = cacheDataChains.contains(chain.chainId) ? StorageRole::CACHE_ONLY : StorageRole::USER_DATA;
+    if (target.storageRole != expectedRole) {
+      auto msg = fmt::format("reject routing chain {} target {}: disk role {}, expected {}",
+                             chain.chainId,
+                             target.targetId,
+                             magic_enum::enum_name(target.storageRole),
+                             magic_enum::enum_name(expectedRole));
+      XLOG(CRITICAL, msg);
+      return makeError(CacheCode::kRoleMismatch, std::move(msg));
+    }
+  }
+
   // 1. reset current state.
   routingInfoVersion_ = routingInfo->routingInfoVersion;
   chainToTarget_.clear();
@@ -166,13 +201,6 @@ Result<Void> TargetMap::updateRouting(std::shared_ptr<hf3fs::client::RoutingInfo
       XLOGF(CRITICAL, "invalid routing info: {}", *routingInfo);
     }
   });
-
-  robin_hood::unordered_set<ChainId> cacheDataChains;
-  for (const auto &[_, versions] : routingInfo->chainTables) {
-    if (!versions.empty() && versions.rbegin()->second.isCacheData()) {
-      cacheDataChains.insert(versions.rbegin()->second.chains.begin(), versions.rbegin()->second.chains.end());
-    }
-  }
 
   // 2. iterate routing info.
   for (auto &[id, chain] : routingInfo->chains) {

@@ -107,6 +107,12 @@ Result<Void> StorageTarget::create(const PhysicalConfig &config) {
       XLOG(ERR, msg);
       return makeError(StorageCode::kStorageInitFailed, std::move(msg));
     }
+    if (config.storage_role != StorageRole::INVALID && (targetConfig_.physical_disk_id != config.physical_disk_id ||
+                                                        targetConfig_.storage_role != config.storage_role)) {
+      auto msg = fmt::format("target {} physical disk identity or role changed", config.target_id);
+      XLOG(CRITICAL, msg);
+      return makeError(CacheCode::kRoleMismatch, std::move(msg));
+    }
     RETURN_AND_LOG_ON_ERROR(addChunkSize(config.chunk_size_list));
     XLOGF(INFO, "Target config file {} check passed", targetConfigFilePath.string());
     return Void{};
@@ -162,6 +168,14 @@ Result<Void> StorageTarget::create(const PhysicalConfig &config) {
 
 Result<Void> StorageTarget::load(const Path &path) {
   RETURN_AND_LOG_ON_ERROR(serde::fromTomlFile(targetConfig_, path / kPhysicalConfigFileName));
+  const bool hasDiskId = targetConfig_.physical_disk_id != PhysicalDiskId{};
+  const bool hasStorageRole = targetConfig_.storage_role != StorageRole::INVALID;
+  if (hasDiskId != hasStorageRole || (hasStorageRole && targetConfig_.storage_role != StorageRole::USER_DATA &&
+                                      targetConfig_.storage_role != StorageRole::CACHE_ONLY)) {
+    auto msg = fmt::format("target {} has invalid physical disk identity or storage role", path);
+    XLOG(CRITICAL, msg);
+    return makeError(CacheCode::kRoleMismatch, std::move(msg));
+  }
   if (path != targetConfig_.path) {
     auto msg = fmt::format("Path config mismatch {} != real {}", targetConfig_.path, path);
     XLOG(ERR, msg);

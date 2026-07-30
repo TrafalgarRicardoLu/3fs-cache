@@ -50,6 +50,10 @@ class StorageTarget : public enable_shared_from_this<StorageTarget> {
   // get disk index.
   uint32_t diskIndex() const { return diskIndex_; }
 
+  // get persistent physical disk identity and role.
+  const PhysicalDiskId &physicalDiskId() const { return targetConfig_.physical_disk_id; }
+  StorageRole storageRole() const { return targetConfig_.storage_role; }
+
   // get target path. [guaranteed loaded]
   Path path() const { return targetConfig_.path; }
 

@@ -5,6 +5,7 @@
 #include <folly/experimental/coro/Collect.h>
 #include <folly/experimental/coro/Sleep.h>
 #include <folly/experimental/coro/Task.h>
+#include <fstream>
 #include <memory>
 #include <sys/statvfs.h>
 #include <unordered_map>
@@ -14,17 +15,79 @@
 #include "common/utils/CPUExecutorGroup.h"
 #include "common/utils/Duration.h"
 #include "common/utils/LogCommands.h"
+#include "common/utils/MagicEnum.hpp"
 #include "common/utils/Result.h"
 #include "common/utils/SysResource.h"
 #include "storage/service/Components.h"
 
 namespace hf3fs::storage {
+namespace {
+
+Result<Void> writePhysicalDiskConfig(const Path &diskPath, const PhysicalDiskConfig &config) {
+  auto configPath = diskPath / kPhysicalDiskConfigFileName;
+  auto tempPath = diskPath / fmt::format("{}.tmp", kPhysicalDiskConfigFileName);
+  {
+    std::ofstream file(tempPath, std::ios::out | std::ios::trunc);
+    if (!file || !(file << serde::toTomlString(config))) {
+      return makeError(StorageCode::kStorageInitFailed, fmt::format("write physical disk config {} failed", tempPath));
+    }
+  }
+  boost::system::error_code ec;
+  boost::filesystem::rename(tempPath, configPath, ec);
+  if (UNLIKELY(ec.failed())) {
+    return makeError(StorageCode::kStorageInitFailed,
+                     fmt::format("install physical disk config {} failed: {}", configPath, ec.message()));
+  }
+  return Void{};
+}
+
+Result<PhysicalDiskConfig> loadOrCreatePhysicalDiskConfig(const Path &diskPath, StorageRole expectedRole) {
+  if (expectedRole != StorageRole::USER_DATA && expectedRole != StorageRole::CACHE_ONLY) {
+    return makeError(CacheCode::kRoleMismatch, fmt::format("invalid configured storage role for {}", diskPath));
+  }
+
+  auto configPath = diskPath / kPhysicalDiskConfigFileName;
+  PhysicalDiskConfig config;
+  if (boost::filesystem::exists(configPath)) {
+    RETURN_AND_LOG_ON_ERROR(serde::fromTomlFile(config, configPath));
+    RETURN_AND_LOG_ON_ERROR(config.physical_disk_id.valid());
+    if (config.storage_role != expectedRole) {
+      auto msg = fmt::format("physical disk {} role mismatch: persisted {}, configured {}",
+                             diskPath,
+                             magic_enum::enum_name(config.storage_role),
+                             magic_enum::enum_name(expectedRole));
+      XLOG(CRITICAL, msg);
+      return makeError(CacheCode::kRoleMismatch, std::move(msg));
+    }
+    return config;
+  }
+
+  if (!boost::filesystem::is_empty(diskPath)) {
+    auto msg = fmt::format("physical disk {} contains legacy data but has no {}; migration is required",
+                           diskPath,
+                           kPhysicalDiskConfigFileName);
+    XLOG(CRITICAL, msg);
+    return makeError(CacheCode::kRoleMismatch, std::move(msg));
+  }
+
+  config.physical_disk_id.uuid = Uuid::random();
+  config.storage_role = expectedRole;
+  RETURN_AND_LOG_ON_ERROR(writePhysicalDiskConfig(diskPath, config));
+  return config;
+}
+
+}  // namespace
 
 using namespace std::chrono_literals;
 
 StorageTargets::~StorageTargets() { void(); }
 
 Result<Void> StorageTargets::init(CPUExecutorGroup &executor) {
+  manufacturers_.clear();
+  pathToDiskIndex_.clear();
+  diskConfigs_.clear();
+  engines_.clear();
+
   auto diskInfoResult = SysResource::scanDiskInfo();
   RETURN_AND_LOG_ON_ERROR(diskInfoResult);
   std::unordered_map<uint32_t, std::string> deviceIdToManufacturer;
@@ -33,6 +96,13 @@ Result<Void> StorageTargets::init(CPUExecutorGroup &executor) {
   }
 
   targetPaths_ = config_.target_paths();
+  auto &diskRoles = config_.disk_roles();
+  if (!diskRoles.empty() && diskRoles.size() != targetPaths_.size()) {
+    auto msg =
+        fmt::format("disk_roles size {} does not match target_paths size {}", diskRoles.size(), targetPaths_.size());
+    XLOG(ERR, msg);
+    return makeError(StorageCode::kStorageInitFailed, std::move(msg));
+  }
   for (auto &path : targetPaths_) {
     struct stat st;
     int succ = ::stat(path.c_str(), &st);
@@ -42,6 +112,14 @@ Result<Void> StorageTargets::init(CPUExecutorGroup &executor) {
       return makeError(StorageCode::kStorageStatFailed, std::move(msg));
     }
     manufacturers_.push_back(deviceIdToManufacturer[st.st_dev]);
+  }
+
+  diskConfigs_.resize(targetPaths_.size());
+  if (!diskRoles.empty()) {
+    for (size_t index = 0; index < targetPaths_.size(); ++index) {
+      CHECK_RESULT(config, loadOrCreatePhysicalDiskConfig(targetPaths_[index], diskRoles[index]));
+      diskConfigs_[index] = std::move(config);
+    }
   }
 
   uint32_t i = 0;
@@ -110,6 +188,8 @@ Result<Void> StorageTargets::create(const CreateConfig &createConfig) {
     targetConfig.target_id = targetId;
     targetConfig.allow_disk_without_uuid = createConfig.allow_disk_without_uuid();
     targetConfig.allow_existing_targets = createConfig.allow_existing_targets();
+    targetConfig.physical_disk_id = diskConfigs_[diskIndex].physical_disk_id;
+    targetConfig.storage_role = diskConfigs_[diskIndex].storage_role;
     targetConfig.physical_file_count = createConfig.physical_file_count();
     targetConfig.chunk_size_list = createConfig.chunk_size_list();
     targetConfig.only_chunk_engine = createConfig.only_chunk_engine();
@@ -183,6 +263,8 @@ Result<Void> StorageTargets::create(const CreateTargetReq &req) {
   targetConfig.chain_id = req.chainId;
   targetConfig.allow_disk_without_uuid = config_.allow_disk_without_uuid();
   targetConfig.allow_existing_targets = req.allowExistingTarget;
+  targetConfig.physical_disk_id = diskConfigs_[req.diskIndex].physical_disk_id;
+  targetConfig.storage_role = diskConfigs_[req.diskIndex].storage_role;
   targetConfig.physical_file_count = req.physicalFileCount;
   targetConfig.chunk_size_list = req.chunkSizeList;
   targetConfig.kv_store_type = config_.storage_target().kv_store().type();
@@ -235,6 +317,14 @@ Result<Void> StorageTargets::loadTarget(const Path &targetPath) {
                                                                       diskIndex,
                                                                       &*engines_[diskIndex]);
   RETURN_AND_LOG_ON_ERROR(storageTarget->load(targetPath));
+  const auto &diskConfig = diskConfigs_[diskIndex];
+  if (diskConfig.storage_role != StorageRole::INVALID &&
+      (storageTarget->physicalDiskId() != diskConfig.physical_disk_id ||
+       storageTarget->storageRole() != diskConfig.storage_role)) {
+    auto msg = fmt::format("target {} identity does not match physical disk {}", targetPath, diskPath);
+    XLOG(CRITICAL, msg);
+    return makeError(CacheCode::kRoleMismatch, std::move(msg));
+  }
   XLOGF(INFO, "Load storage target {} at {}", storageTarget->targetId(), targetPath.string());
   auto targetId = storageTarget->targetId();
   if (UNLIKELY(targetPath.filename().string() != fmt::format("{}", targetId.toUnderType()))) {

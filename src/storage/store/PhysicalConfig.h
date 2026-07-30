@@ -3,9 +3,18 @@
 #include "common/serde/Serde.h"
 #include "common/utils/Path.h"
 #include "common/utils/Size.h"
+#include "fbs/storage/Common.h"
 #include "kv/KVStore.h"
 
 namespace hf3fs::storage {
+
+// Physical disk identity and role. Store once at the root of each configured disk.
+static inline constexpr auto kPhysicalDiskConfigFileName = "disk.toml";
+
+class PhysicalDiskConfig {
+  SERDE_STRUCT_FIELD(physical_disk_id, PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(storage_role, StorageRole::INVALID);
+};
 
 // Physical configuration of the storage target. Store in `target.toml`.
 static inline constexpr auto kPhysicalConfigFileName = "target.toml";
@@ -16,6 +25,8 @@ class PhysicalConfig {
   SERDE_STRUCT_FIELD(block_device_uuid, std::string{});
   SERDE_STRUCT_FIELD(allow_disk_without_uuid, false);
   SERDE_STRUCT_FIELD(allow_existing_targets, false);
+  SERDE_STRUCT_FIELD(physical_disk_id, PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(storage_role, StorageRole::INVALID);
 
   SERDE_STRUCT_FIELD(physical_file_count, 256u);
   SERDE_STRUCT_FIELD(chunk_size_list, (std::vector<Size>{512_KB, 1_MB, 2_MB, 4_MB, 16_MB, 64_MB}));

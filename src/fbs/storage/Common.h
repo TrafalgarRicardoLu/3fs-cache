@@ -760,6 +760,8 @@ struct Target {
   SERDE_STRUCT_FIELD(offlineUponUserRequest, false);
   SERDE_STRUCT_FIELD(useChunkEngine, false);
   SERDE_STRUCT_FIELD(cacheData, false);
+  SERDE_STRUCT_FIELD(physicalDiskId, PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(storageRole, StorageRole::INVALID);
 
  public:
   Result<net::Address> getSuccessorAddr() const;
