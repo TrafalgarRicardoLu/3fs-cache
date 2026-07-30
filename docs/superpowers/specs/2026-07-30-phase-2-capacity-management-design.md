@@ -2,7 +2,7 @@
 
 Date: 2026-07-30
 
-Status: Approved in conversation; revised after independent review
+Status: Approved after independent review
 
 ## 1. Purpose
 
@@ -264,6 +264,7 @@ The immutable placement and replace authorization are:
 struct PlacementIdentity {
   VersionedChainId versionedChain;
   std::vector<TargetId> expectedReplicaTargets;  // sorted and unique
+  TargetId coordinatorTargetId;                  // member of expectedReplicaTargets
   Uuid admissionAttemptId;
 };
 
@@ -279,6 +280,9 @@ The final authority is a Storage-side per-disk `CacheSpaceGate`. Before Metadata
 `managerEpoch` and `admissionAttemptId` to a chain-level prepare operation. The coordinator requests one permit per
 replica Target; each Target atomically checks its CACHE_ONLY role and current allocatable space, reserves the calculated
 footprint under its disk gate, and persists an expiring permit.
+
+The prepare operation chooses and persists coordinatorTargetId while the routing version is available. All later
+replace and retire retries use that value; they never depend on recovering a historical preferred-target order.
 
 The gate enforces the Storage-configured normal high watermark, not a caller-supplied value. SpaceInfo advertises that
 value and Cache Manager fails the disk closed if it differs from `capacity_high_watermark`.
@@ -433,6 +437,10 @@ Normal capacity eviction does not reuse `CLEANING`. `CLEANING` remains the inval
 
 BeginEvict and BeginClean are mutually exclusive CAS transitions from READY. BeginClean against EVICTING and BeginEvict
 against CLEANING return state conflict. The operation that wins owns completion and logical-counter release.
+
+Any QUEUED/LOADING/READY transition into CLEANING copies the persisted PermitIdentity placement or READY placement into
+the cleanup record before clearing the permit. Phase-2 cleanup always retires against this original placement, including
+partial replace cases; it never reconstructs targets from current routing.
 
 ## 10. Storage Cache Descriptor and Local LRU
 
@@ -642,7 +650,8 @@ cursors are ephemeral and may restart from the beginning because one Cache Manag
 idempotent; no distributed claim lease is required. Access history for second-miss admission starts empty.
 
 This is deliberately limited recovery. Full LOADING lease recovery, orphan inventory cleanup, and cross-version repair
-remain Phase 4 work.
+remain Phase 4 work. A non-executing LOADING record whose permit is invalid is recoverable only when the existing lease
+or a later miss reaches the fenced failure/retry path; Phase 2 does not add a full startup scan for all LOADING leases.
 
 ### 14.2 Storage and network failures
 
