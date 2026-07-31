@@ -33,6 +33,9 @@ class Config : public ConfigBase<Config> {
     if (range_size() == 0 || max_inflight_bytes() < range_size()) {
       return makeError(StatusCode::kInvalidConfig, "invalid cache manager range or inflight byte limit");
     }
+    if (admission_policy() != "second_miss") {
+      return makeError(StatusCode::kInvalidConfig, "unknown cache admission policy");
+    }
     std::set<uint32_t> ids;
     for (size_t i = 0; i < origins_length(); ++i) {
       const auto &origin = origins(i);
@@ -75,6 +78,9 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(load_lease, 30_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(hint_timeout, 500_ms, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(scheduler_interval, 100_ms, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(admission_policy, std::string{"second_miss"});
+  CONFIG_ITEM(second_miss_window, 30_s, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(second_miss_max_entries, uint32_t{65536}, ConfigCheckers::checkPositive);
   CONFIG_OBJ_ARRAY(origins, OriginConfig, 64, [](auto &) { return 0; });
 };
 
