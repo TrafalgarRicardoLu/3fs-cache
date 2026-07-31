@@ -48,6 +48,8 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
   META_SERVICE_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
   META_SERVICE_METHOD(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
   META_SERVICE_METHOD(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
+  META_SERVICE_METHOD(listRecoverableCachePermits, ListRecoverableCachePermitsReq, ListRecoverableCachePermitsRsp);
+  META_SERVICE_METHOD(cancelQueuedAdmissions, CancelQueuedAdmissionsReq, CancelQueuedAdmissionsRsp);
   META_SERVICE_METHOD(updateCacheBlockAccess, UpdateCacheBlockAccessReq, UpdateCacheBlockAccessRsp);
   META_SERVICE_METHOD(beginEvictCacheBlocks, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
   META_SERVICE_METHOD(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);

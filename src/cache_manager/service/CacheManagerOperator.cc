@@ -49,6 +49,9 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     RETURN_ON_ERROR(admissionPolicy);
     admissionPolicy_ = std::move(*admissionPolicy);
     managerEpoch_ = Uuid::random();
+    permitRecovery_ = std::make_unique<PermitRecovery>(backend_, hints_, managerEpoch_, config_.storage_permit_ttl());
+    auto recovered = folly::coro::blockingWait(permitRecovery_->run());
+    RETURN_ON_ERROR(recovered);
     physicalTopology_ = std::make_unique<PhysicalTopology>();
     spacePoller_ = std::make_unique<SpacePoller>(
         *physicalTopology_,

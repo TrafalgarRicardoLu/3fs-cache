@@ -1063,6 +1063,76 @@ struct ListCacheBlocksRsp : RspBase {
   SERDE_STRUCT_FIELD(more, false);
 };
 
+struct RecoverableCachePermit {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(state, cache::CacheBlockState::NONE);
+  SERDE_STRUCT_FIELD(blockLength, uint64_t{0});
+  SERDE_STRUCT_FIELD(permit, storage::PermitIdentity{});
+  SERDE_STRUCT_FIELD(loaderId, Uuid::zero());
+  SERDE_STRUCT_FIELD(loadEpoch, uint64_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    RETURN_ON_ERROR(permit.valid());
+    if (blockLength == 0 || (state != cache::CacheBlockState::QUEUED && state != cache::CacheBlockState::LOADING)) {
+      return INVALID("invalid recoverable cache permit");
+    }
+    if (state == cache::CacheBlockState::QUEUED && (loaderId != Uuid::zero() || loadEpoch != 0)) {
+      return INVALID("queued recovery item has a loader fence");
+    }
+    if (state == cache::CacheBlockState::LOADING && (loaderId == Uuid::zero() || loadEpoch == 0)) {
+      return INVALID("loading recovery item is missing its loader fence");
+    }
+    return VALID;
+  }
+};
+struct ListRecoverableCachePermitsReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(after, std::optional<cache::CacheBlockKey>{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{1000});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (after) RETURN_ON_ERROR(after->valid());
+    if (limit == 0 || limit > kMaxCacheBatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "invalid recovery page limit");
+    return VALID;
+  }
+};
+struct ListRecoverableCachePermitsRsp : RspBase {
+  SERDE_STRUCT_FIELD(items, std::vector<RecoverableCachePermit>{});
+  SERDE_STRUCT_FIELD(more, false);
+};
+
+struct CancelQueuedAdmissionItem {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(expectedPermit, storage::PermitIdentity{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    return expectedPermit.valid();
+  }
+};
+struct CancelQueuedAdmissionsReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(items, std::vector<CancelQueuedAdmissionItem>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (items.size() > kMaxCacheBatchItems) return makeError(CacheCode::kRequestTooLarge, "too many cache block items");
+    return VALID;
+  }
+};
+struct CancelQueuedAdmissionsRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CacheBlockMutationResult>>{});
+};
+
 struct UpdateCacheBlockAccessItem {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(generation, cache::CacheGeneration{});
@@ -1276,6 +1346,8 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(listEvictingCacheBlocks, 36, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);
   META_SERVICE_METHOD(reportCacheStorageEvents, 37, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
   META_SERVICE_METHOD(listCacheEventDeadLetters, 38, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
+  META_SERVICE_METHOD(listRecoverableCachePermits, 39, ListRecoverableCachePermitsReq, ListRecoverableCachePermitsRsp);
+  META_SERVICE_METHOD(cancelQueuedAdmissions, 40, CancelQueuedAdmissionsReq, CancelQueuedAdmissionsRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

@@ -31,6 +31,8 @@ CoTryTask<meta::Inode> RealCacheManagerBackend::stat(meta::InodeId inode) {
 
 std::shared_ptr<client::RoutingInfo> RealCacheManagerBackend::routingInfo() { return mgmtdClient_->getRoutingInfo(); }
 
+CoTryTask<void> RealCacheManagerBackend::refreshRouting() { co_return co_await mgmtdClient_->refreshRoutingInfo(true); }
+
 CoTryTask<storage::QueryCacheSpaceRsp> RealCacheManagerBackend::queryCacheSpace(
     const storage::QueryCacheSpaceReq &req) {
   co_return co_await storageClient_->queryCacheSpace(req);
@@ -127,6 +129,31 @@ CoTryTask<void> RealCacheManagerBackend::releasePermit(const storage::PermitIden
   CO_RETURN_ON_ERROR(response);
   if (response->results.size() != 1)
     co_return makeError(CacheCode::kInvalidResponse, "invalid permit release response");
+  CO_RETURN_ON_ERROR(response->results.front());
+  co_return Void{};
+}
+
+CoTryTask<meta::ListRecoverableCachePermitsRsp> RealCacheManagerBackend::listRecoverablePermits(
+    std::optional<cache::CacheBlockKey> after,
+    uint32_t limit) {
+  meta::ListRecoverableCachePermitsReq request;
+  request.service = service();
+  request.after = after;
+  request.limit = limit;
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  co_return co_await metaClient_->listRecoverableCachePermits(std::move(request));
+}
+
+CoTryTask<void> RealCacheManagerBackend::cancelQueuedAdmission(const cache::CacheBlockKey &key,
+                                                               const storage::PermitIdentity &expectedPermit) {
+  meta::CancelQueuedAdmissionsReq request;
+  request.service = service();
+  request.items.push_back({key, expectedPermit});
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  auto response = co_await metaClient_->cancelQueuedAdmissions(std::move(request));
+  CO_RETURN_ON_ERROR(response);
+  if (response->results.size() != 1)
+    co_return makeError(CacheCode::kInvalidResponse, "invalid queued cancellation result count");
   CO_RETURN_ON_ERROR(response->results.front());
   co_return Void{};
 }

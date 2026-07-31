@@ -119,6 +119,8 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   CoTryTask<FinishCleanCacheBlocksRsp> finishCleanCacheBlocks(FinishCleanCacheBlocksReq req);
   CoTryTask<GetCacheStatusRsp> getCacheStatus(GetCacheStatusReq req);
   CoTryTask<ListCacheBlocksRsp> listCacheBlocks(ListCacheBlocksReq req);
+  CoTryTask<ListRecoverableCachePermitsRsp> listRecoverableCachePermits(ListRecoverableCachePermitsReq req);
+  CoTryTask<CancelQueuedAdmissionsRsp> cancelQueuedAdmissions(CancelQueuedAdmissionsReq req);
   CoTryTask<UpdateCacheBlockAccessRsp> updateCacheBlockAccess(UpdateCacheBlockAccessReq req);
   CoTryTask<BeginEvictCacheBlocksRsp> beginEvictCacheBlocks(BeginEvictCacheBlocksReq req);
   CoTryTask<ListEvictingCacheBlocksRsp> listEvictingCacheBlocks(ListEvictingCacheBlocksReq req);

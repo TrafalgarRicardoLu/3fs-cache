@@ -50,6 +50,8 @@ IMPL_META_STUB_METHOD(beginCleanCacheBlocks, BeginCleanCacheBlocksReq, BeginClea
 IMPL_META_STUB_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
 IMPL_META_STUB_METHOD(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
 IMPL_META_STUB_METHOD(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
+IMPL_META_STUB_METHOD(listRecoverableCachePermits, ListRecoverableCachePermitsReq, ListRecoverableCachePermitsRsp);
+IMPL_META_STUB_METHOD(cancelQueuedAdmissions, CancelQueuedAdmissionsReq, CancelQueuedAdmissionsRsp);
 IMPL_META_STUB_METHOD(updateCacheBlockAccess, UpdateCacheBlockAccessReq, UpdateCacheBlockAccessRsp);
 IMPL_META_STUB_METHOD(beginEvictCacheBlocks, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
 IMPL_META_STUB_METHOD(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);

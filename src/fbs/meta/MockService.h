@@ -50,5 +50,7 @@ class MockMetaService : public serde::ServiceWrapper<MockMetaService, MetaSerde>
   META_MOCK_SERVICE_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
   META_MOCK_SERVICE_METHOD(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
   META_MOCK_SERVICE_METHOD(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
+  META_MOCK_SERVICE_METHOD(listRecoverableCachePermits, ListRecoverableCachePermitsReq, ListRecoverableCachePermitsRsp);
+  META_MOCK_SERVICE_METHOD(cancelQueuedAdmissions, CancelQueuedAdmissionsReq, CancelQueuedAdmissionsRsp);
 };
 }  // namespace hf3fs::meta

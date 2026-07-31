@@ -10,6 +10,7 @@
 #include "cache_manager/cleanup/CacheCleanupWorker.h"
 #include "cache_manager/config/Config.h"
 #include "cache_manager/loader/CacheLoader.h"
+#include "cache_manager/recovery/PermitRecovery.h"
 #include "cache_manager/scheduler/LoaderScheduler.h"
 #include "cache_manager/service/AdminCleanupCacheBlocks.h"
 #include "cache_manager/service/EnsureCached.h"
@@ -64,6 +65,7 @@ class CacheManagerOperator {
   std::unique_ptr<SpacePoller> spacePoller_;
   std::unique_ptr<PhysicalPreflight> physicalPreflight_;
   std::unique_ptr<AdmissionPolicy> admissionPolicy_;
+  std::unique_ptr<PermitRecovery> permitRecovery_;
   Uuid managerEpoch_{Uuid::zero()};
   std::unique_ptr<BackgroundRunner> scheduler_;
   SchedulerStopHook schedulerStopHook_;

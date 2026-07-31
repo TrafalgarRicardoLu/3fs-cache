@@ -633,6 +633,80 @@ CoTryTask<ListCacheBlocksRsp> MetaOperator::listCacheBlocks(ListCacheBlocksReq r
       .run(kvEngine_->createReadonlyTransaction(), std::move(handler));
 }
 
+CoTryTask<ListRecoverableCachePermitsRsp> MetaOperator::listRecoverableCachePermits(
+    ListRecoverableCachePermitsReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));
+  auto handler = [req](kv::IReadOnlyTransaction &transaction) -> CoTryTask<ListRecoverableCachePermitsRsp> {
+    auto records = co_await CacheBlockStore::snapshotListAll(transaction);
+    CO_RETURN_ON_ERROR(records);
+    auto less = [](const cache::CacheBlockKey &lhs, const cache::CacheBlockKey &rhs) {
+      return lhs.inode != rhs.inode ? lhs.inode < rhs.inode : lhs.block < rhs.block;
+    };
+    std::sort(records->begin(), records->end(), [&](const auto &lhs, const auto &rhs) {
+      return less(lhs.key, rhs.key);
+    });
+    std::vector<RecoverableCachePermit> recoverable;
+    for (const auto &record : *records) {
+      if ((record.state != cache::CacheBlockState::QUEUED && record.state != cache::CacheBlockState::LOADING) ||
+          !record.permit || (req.after && !less(*req.after, record.key))) {
+        continue;
+      }
+      recoverable.push_back(
+          {record.key, record.state, record.blockLength, *record.permit, record.loaderId, record.loadEpoch});
+    }
+    ListRecoverableCachePermitsRsp response;
+    response.more = recoverable.size() > req.limit;
+    if (response.more) recoverable.resize(req.limit);
+    response.items = std::move(recoverable);
+    co_return response;
+  };
+  co_return co_await kv::WithTransaction(kv::FDBRetryStrategy(createRetryConfig()))
+      .run(kvEngine_->createReadonlyTransaction(), std::move(handler));
+}
+
+CoTryTask<CancelQueuedAdmissionsRsp> MetaOperator::cancelQueuedAdmissions(CancelQueuedAdmissionsReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));
+  auto handler = [req](kv::IReadWriteTransaction &transaction) -> CoTryTask<CancelQueuedAdmissionsRsp> {
+    CancelQueuedAdmissionsRsp response;
+    response.results.reserve(req.items.size());
+    for (const auto &item : req.items) {
+      auto valid = item.valid();
+      if (valid.hasError()) {
+        response.results.push_back(makeError(valid.error()));
+        continue;
+      }
+      auto loaded = co_await CacheBlockStore::load(transaction, item.key);
+      if (loaded.hasError()) {
+        response.results.push_back(makeError(loaded.error()));
+        continue;
+      }
+      if (!loaded->has_value()) {
+        response.results.push_back(
+            CacheBlockMutationResult{item.key, cache::CacheBlockState::NONE, cache::CacheEnqueueOutcome::INVALID});
+        continue;
+      }
+      const auto &record = **loaded;
+      if (record.state != cache::CacheBlockState::QUEUED || record.permit != item.expectedPermit) {
+        response.results.push_back(makeError(CacheCode::kStateConflict, "queued admission cancellation fence changed"));
+        continue;
+      }
+      auto released = co_await CacheCapacityStore::release(transaction, record.chargeKind, record.chargedBytes);
+      CO_RETURN_ON_ERROR(released);
+      auto removed = co_await CacheBlockStore::remove(transaction, item.key);
+      CO_RETURN_ON_ERROR(removed);
+      response.results.push_back(
+          CacheBlockMutationResult{item.key, cache::CacheBlockState::NONE, cache::CacheEnqueueOutcome::INVALID});
+    }
+    co_return response;
+  };
+  co_return co_await kv::WithTransaction(kv::FDBRetryStrategy(createRetryConfig()))
+      .run(kvEngine_->createReadWriteTransaction(), std::move(handler));
+}
+
 #define META_PHASE2_DISABLED_METHOD(NAME, REQ, RSP)                                \
   CoTryTask<RSP> MetaOperator::NAME(REQ req) {                                     \
     CO_RETURN_ON_ERROR(req.valid());                                               \

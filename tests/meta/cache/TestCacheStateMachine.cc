@@ -27,6 +27,7 @@ class TestCacheStateMachine : public MetaTestBase<kv::mem::MemKV> {
       value.mock_meta().set_cache_service_name(std::string{kServiceName});
       value.mock_meta().set_cache_service_token(std::string{kServiceToken});
       value.mock_meta().set_cache_load_lease(10_ms);
+      value.mock_meta().set_enable_cache_phase2(true);
       return value;
     }();
     return createMockCluster(config);
@@ -401,6 +402,58 @@ TEST_F(TestCacheStateMachine, PersistsPermitAndPlacementAcrossAdmissionLifecycle
     CO_ASSERT_EQ((*record)->state, cache::CacheBlockState::CLEANING);
     CO_ASSERT_FALSE((*record)->permit.has_value());
     CO_ASSERT_EQ((*record)->placement, std::optional<storage::PlacementIdentity>{replacement.placement});
+  }());
+}
+
+TEST_F(TestCacheStateMachine, ListsAndCancelsExactQueuedAdmission) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    auto inode = co_await prepare(cluster, "/queued-recovery");
+    CO_ASSERT_OK(inode);
+    auto permit = permitFor(cluster, *inode, 0, Uuid::from(7, 11), Uuid::from(8, 11), 1);
+    CO_ASSERT_OK(permit);
+    auto enqueue = enqueueReq(*inode, {0});
+    enqueue.items[0].permit = *permit;
+    auto &meta = cluster.meta().getOperator();
+    CO_ASSERT_OK(co_await meta.enqueueCacheBlocks(enqueue));
+
+    ListRecoverableCachePermitsReq list;
+    list.service = service();
+    list.limit = 1;
+    list.cacheProtocolVersion = cache::kCacheProtocolVersion;
+    auto page = co_await meta.listRecoverableCachePermits(list);
+    CO_ASSERT_OK(page);
+    CO_ASSERT_EQ(page->items.size(), size_t{1});
+    CO_ASSERT_EQ(page->items[0].permit, *permit);
+    CO_ASSERT_EQ(page->items[0].state, cache::CacheBlockState::QUEUED);
+
+    auto wrong = *permit;
+    ++wrong.permitGeneration;
+    CancelQueuedAdmissionsReq cancel;
+    cancel.service = service();
+    cancel.cacheProtocolVersion = cache::kCacheProtocolVersion;
+    cancel.items.push_back({block(*inode, 0).key, wrong});
+    auto rejected = co_await meta.cancelQueuedAdmissions(cancel);
+    CO_ASSERT_OK(rejected);
+    CO_ASSERT_ERROR(rejected->results[0], CacheCode::kStateConflict);
+
+    cancel.items[0].expectedPermit = *permit;
+    auto cancelled = co_await meta.cancelQueuedAdmissions(cancel);
+    CO_ASSERT_OK(cancelled);
+    CO_ASSERT_OK(cancelled->results[0]);
+    CO_ASSERT_EQ(cancelled->results[0]->state, cache::CacheBlockState::NONE);
+    auto repeated = co_await meta.cancelQueuedAdmissions(cancel);
+    CO_ASSERT_OK(repeated);
+    CO_ASSERT_OK(repeated->results[0]);
+
+    auto read = cluster.kvEngine()->createReadonlyTransaction();
+    auto record = co_await CacheBlockStore::snapshotLoad(*read, block(*inode, 0).key);
+    CO_ASSERT_OK(record);
+    CO_ASSERT_FALSE(record->has_value());
+    auto capacity = co_await CacheCapacityStore::snapshotLoad(*read);
+    CO_ASSERT_OK(capacity);
+    CO_ASSERT_EQ(capacity->usedBytes, uint64_t{0});
+    CO_ASSERT_EQ(capacity->reservedBytes, uint64_t{0});
   }());
 }
 

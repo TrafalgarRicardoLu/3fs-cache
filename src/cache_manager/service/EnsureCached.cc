@@ -31,7 +31,8 @@ EnsureCached::EnsureCached(std::shared_ptr<CacheManagerBackend> backend,
                            Uuid managerEpoch,
                            Duration permitTtl,
                            SteadyClockFn steadyClock,
-                           WallClockNsFn wallClockNs)
+                           WallClockNsFn wallClockNs,
+                           AttachFn attach)
     : backend_(std::move(backend)),
       hints_(hints),
       cleanupWorker_(cleanupWorker),
@@ -40,7 +41,8 @@ EnsureCached::EnsureCached(std::shared_ptr<CacheManagerBackend> backend,
       managerEpoch_(managerEpoch),
       permitTtl_(permitTtl),
       steadyClock_(std::move(steadyClock)),
-      wallClockNs_(wallClockNs ? std::move(wallClockNs) : defaultWallClockNs) {}
+      wallClockNs_(wallClockNs ? std::move(wallClockNs) : defaultWallClockNs),
+      attach_(std::move(attach)) {}
 
 EnsureCachedRsp EnsureCached::respond(const meta::Inode &inode,
                                       const EnsureCachedReq &req,
@@ -149,6 +151,16 @@ CoTryTask<void> EnsureCached::release(const storage::PermitIdentity &permit) {
   co_return co_await backend_->releasePermit(permit);
 }
 
+CoTryTask<void> EnsureCached::cancelQueued(const cache::CacheBlockKey &key, const storage::PermitIdentity &permit) {
+  CO_RETURN_ON_ERROR(co_await backend_->cancelQueuedAdmission(key, permit));
+  co_return co_await release(permit);
+}
+
+Result<bool> EnsureCached::attach(LoadHint hint) {
+  if (attach_) return attach_(std::move(hint));
+  return hints_.enqueue(std::move(hint));
+}
+
 CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
                                                    const meta::Inode &inode,
                                                    const std::vector<meta::CacheBlockRequestBase> &items) {
@@ -231,9 +243,14 @@ CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
     if (result.enqueueOutcome == cache::CacheEnqueueOutcome::CREATED ||
         (result.enqueueOutcome == cache::CacheEnqueueOutcome::QUEUED &&
          persistedPermit == std::optional<storage::PermitIdentity>{*permit})) {
-      auto fresh = hints_.enqueue({inode.id, base.key.block, base.blockLength, req.reason, req.priority});
-      accepted = accepted || fresh;
-      attached = attached || !fresh;
+      auto fresh = attach({inode.id, base.key.block, base.blockLength, req.reason, req.priority});
+      if (fresh.hasError()) {
+        CO_RETURN_ON_ERROR(co_await cancelQueued(base.key, *permit));
+        unavailableBypass = true;
+        continue;
+      }
+      accepted = accepted || *fresh;
+      attached = attached || !*fresh;
       continue;
     }
 
@@ -274,9 +291,14 @@ CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
         unavailableBypass = true;
         continue;
       }
-      auto fresh = hints_.enqueue({inode.id, base.key.block, base.blockLength, req.reason, req.priority});
-      accepted = accepted || fresh;
-      attached = attached || !fresh;
+      auto fresh = attach({inode.id, base.key.block, base.blockLength, req.reason, req.priority});
+      if (fresh.hasError()) {
+        CO_RETURN_ON_ERROR(co_await cancelQueued(base.key, existing));
+        unavailableBypass = true;
+        continue;
+      }
+      accepted = accepted || *fresh;
+      attached = attached || !*fresh;
       continue;
     }
 
@@ -317,9 +339,14 @@ CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
       unavailableBypass = true;
       continue;
     }
-    auto fresh = hints_.enqueue({inode.id, base.key.block, base.blockLength, req.reason, req.priority});
-    accepted = accepted || fresh;
-    attached = attached || !fresh;
+    auto fresh = attach({inode.id, base.key.block, base.blockLength, req.reason, req.priority});
+    if (fresh.hasError()) {
+      CO_RETURN_ON_ERROR(co_await cancelQueued(base.key, replacement));
+      unavailableBypass = true;
+      continue;
+    }
+    accepted = accepted || *fresh;
+    attached = attached || !*fresh;
   }
 
   cache::metrics::setGauge(cache::metrics::Event::MANAGER_QUEUE, hints_.size());

@@ -146,6 +146,10 @@ class Phase2Backend : public EnsureBackend {
     released.push_back(permit);
     co_return Void{};
   }
+  CoTryTask<void> cancelQueuedAdmission(const cache::CacheBlockKey &key, const storage::PermitIdentity &permit) final {
+    cancelled.emplace_back(key, permit);
+    co_return Void{};
+  }
 
   CoTryTask<meta::EnqueueCacheBlocksRsp> enqueue(std::vector<meta::CacheBlockRequestBase> items) final {
     enqueueCalls.push_back(items);
@@ -215,6 +219,7 @@ class Phase2Backend : public EnsureBackend {
   std::vector<storage::PermitIdentity> queried;
   std::vector<storage::PermitIdentity> renewed;
   std::vector<storage::PermitIdentity> released;
+  std::vector<std::pair<cache::CacheBlockKey, storage::PermitIdentity>> cancelled;
   std::vector<std::vector<meta::CacheBlockRequestBase>> enqueueCalls;
 };
 
@@ -405,6 +410,30 @@ TEST_F(Phase2EnsureCachedTest, FinalAmbiguousEnqueueLeavesPermitForRecovery) {
   ASSERT_EQ(backend->enqueueCalls.size(), 2);
   EXPECT_EQ(backend->enqueueCalls[0][0].permit, backend->enqueueCalls[1][0].permit);
   EXPECT_TRUE(backend->released.empty());
+}
+
+TEST_F(Phase2EnsureCachedTest, SchedulerAttachFailureCancelsExactQueuedAdmission) {
+  EnsureCached ensure(
+      backend,
+      hints,
+      nullptr,
+      policy,
+      preflight,
+      Uuid::from(1, 1),
+      1_s,
+      [this] { return SteadyTime{std::chrono::nanoseconds(++steadyNs)}; },
+      [] { return uint64_t{1000}; },
+      [](LoadHint) -> Result<bool> { return makeError(StatusCode::kQueueConflict, "scheduler rejected hint"); });
+  ASSERT_OK(folly::coro::blockingWait(ensure.run(oneBlockRequest())));
+  auto rejected = folly::coro::blockingWait(ensure.run(oneBlockRequest()));
+  ASSERT_OK(rejected);
+  EXPECT_EQ(rejected->status, EnsureCachedStatus::BYPASSED);
+  EXPECT_EQ(rejected->bypassReason, BypassReason::UNAVAILABLE);
+  ASSERT_EQ(backend->cancelled.size(), 1);
+  EXPECT_EQ(backend->cancelled.front().first, backend->enqueueCalls.front().front().key);
+  EXPECT_EQ(backend->cancelled.front().second, backend->made.front());
+  EXPECT_EQ(backend->released, std::vector<storage::PermitIdentity>{backend->made.front()});
+  EXPECT_EQ(hints.size(), 0);
 }
 
 }  // namespace

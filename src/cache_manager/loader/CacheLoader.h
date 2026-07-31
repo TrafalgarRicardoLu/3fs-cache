@@ -52,6 +52,7 @@ class CacheManagerBackend {
     co_return makeError(StatusCode::kNotImplemented);
   }
   virtual std::shared_ptr<client::RoutingInfo> routingInfo() { return nullptr; }
+  virtual CoTryTask<void> refreshRouting() { co_return makeError(StatusCode::kNotImplemented); }
   virtual CoTryTask<storage::QueryCacheSpaceRsp> queryCacheSpace(const storage::QueryCacheSpaceReq &) {
     co_return makeError(StatusCode::kNotImplemented);
   }
@@ -73,6 +74,13 @@ class CacheManagerBackend {
     co_return makeError(StatusCode::kNotImplemented);
   }
   virtual CoTryTask<void> releasePermit(const storage::PermitIdentity &) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<meta::ListRecoverableCachePermitsRsp> listRecoverablePermits(std::optional<cache::CacheBlockKey>,
+                                                                                 uint32_t) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<void> cancelQueuedAdmission(const cache::CacheBlockKey &, const storage::PermitIdentity &) {
     co_return makeError(StatusCode::kNotImplemented);
   }
 };
@@ -108,6 +116,7 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
   CoTryTask<storage::CacheChunkGenerationInfo> query(const meta::Inode &inode, cache::CacheBlockIndex block) final;
   CoTryTask<void> finishClean(const meta::FinishCleanCacheBlockItem &item) final;
   std::shared_ptr<client::RoutingInfo> routingInfo() final;
+  CoTryTask<void> refreshRouting() final;
   CoTryTask<storage::QueryCacheSpaceRsp> queryCacheSpace(const storage::QueryCacheSpaceReq &req) final;
   CoTryTask<storage::PermitIdentity> makePermit(const meta::Inode &inode,
                                                 cache::CacheBlockIndex block,
@@ -120,6 +129,10 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
   CoTryTask<storage::CachePermitResult> renewPermit(const storage::PermitIdentity &permit, uint64_t expiresAtNs) final;
   CoTryTask<storage::CachePermitResult> queryPermit(const storage::PermitIdentity &permit) final;
   CoTryTask<void> releasePermit(const storage::PermitIdentity &permit) final;
+  CoTryTask<meta::ListRecoverableCachePermitsRsp> listRecoverablePermits(std::optional<cache::CacheBlockKey> after,
+                                                                         uint32_t limit) final;
+  CoTryTask<void> cancelQueuedAdmission(const cache::CacheBlockKey &key,
+                                        const storage::PermitIdentity &expectedPermit) final;
 
  private:
   meta::CacheServiceIdentity service() const;

@@ -62,6 +62,8 @@ class DummyMetaServiceStub : public IMetaServiceStub {
   NOT_IMPLEMENTED_FUNC(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
   NOT_IMPLEMENTED_FUNC(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
   NOT_IMPLEMENTED_FUNC(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
+  NOT_IMPLEMENTED_FUNC(listRecoverableCachePermits, ListRecoverableCachePermitsReq, ListRecoverableCachePermitsRsp);
+  NOT_IMPLEMENTED_FUNC(cancelQueuedAdmissions, CancelQueuedAdmissionsReq, CancelQueuedAdmissionsRsp);
   NOT_IMPLEMENTED_FUNC(updateCacheBlockAccess, UpdateCacheBlockAccessReq, UpdateCacheBlockAccessRsp);
   NOT_IMPLEMENTED_FUNC(beginEvictCacheBlocks, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
   NOT_IMPLEMENTED_FUNC(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);
@@ -167,6 +169,8 @@ class MetaServiceStub<hf3fs::stubs::StubMockContext<IMetaServiceStub>> : public 
   FORWARD_RPC_FUNC(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
   FORWARD_RPC_FUNC(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
   FORWARD_RPC_FUNC(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
+  FORWARD_RPC_FUNC(listRecoverableCachePermits, ListRecoverableCachePermitsReq, ListRecoverableCachePermitsRsp);
+  FORWARD_RPC_FUNC(cancelQueuedAdmissions, CancelQueuedAdmissionsReq, CancelQueuedAdmissionsRsp);
   FORWARD_RPC_FUNC(updateCacheBlockAccess, UpdateCacheBlockAccessReq, UpdateCacheBlockAccessRsp);
   FORWARD_RPC_FUNC(beginEvictCacheBlocks, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
   FORWARD_RPC_FUNC(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);

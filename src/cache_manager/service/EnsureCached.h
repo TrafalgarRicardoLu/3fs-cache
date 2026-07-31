@@ -15,6 +15,7 @@ class EnsureCached {
  public:
   using SteadyClockFn = std::function<SteadyTime()>;
   using WallClockNsFn = std::function<uint64_t()>;
+  using AttachFn = std::function<Result<bool>(LoadHint)>;
 
   EnsureCached(std::shared_ptr<CacheManagerBackend> backend,
                HintCoalescer &hints,
@@ -31,7 +32,8 @@ class EnsureCached {
                Uuid managerEpoch,
                Duration permitTtl,
                SteadyClockFn steadyClock = SteadyClock::now,
-               WallClockNsFn wallClockNs = {});
+               WallClockNsFn wallClockNs = {},
+               AttachFn attach = {});
 
   CoTryTask<EnsureCachedRsp> run(const EnsureCachedReq &req);
   BypassReason lastBypassReason() const { return lastBypassReason_.load(std::memory_order_relaxed); }
@@ -45,6 +47,8 @@ class EnsureCached {
                                        const std::vector<meta::CacheBlockRequestBase> &items);
   CoTryTask<meta::EnqueueCacheBlocksRsp> enqueueWithRetry(const meta::CacheBlockRequestBase &item);
   CoTryTask<void> release(const storage::PermitIdentity &permit);
+  CoTryTask<void> cancelQueued(const cache::CacheBlockKey &key, const storage::PermitIdentity &permit);
+  Result<bool> attach(LoadHint hint);
   EnsureCachedRsp respond(const meta::Inode &inode,
                           const EnsureCachedReq &req,
                           EnsureCachedStatus status,
@@ -59,6 +63,7 @@ class EnsureCached {
   Duration permitTtl_{0_ns};
   SteadyClockFn steadyClock_{SteadyClock::now};
   WallClockNsFn wallClockNs_;
+  AttachFn attach_;
   std::atomic<BypassReason> lastBypassReason_{BypassReason::NONE};
 };
 

@@ -233,6 +233,8 @@ class MetaClient {
   CoTryTask<FinishCleanCacheBlocksRsp> finishCleanCacheBlocks(FinishCleanCacheBlocksReq req);
   CoTryTask<GetCacheStatusRsp> getCacheStatus(GetCacheStatusReq req);
   CoTryTask<ListCacheBlocksRsp> listCacheBlocks(ListCacheBlocksReq req);
+  CoTryTask<ListRecoverableCachePermitsRsp> listRecoverableCachePermits(ListRecoverableCachePermitsReq req);
+  CoTryTask<CancelQueuedAdmissionsRsp> cancelQueuedAdmissions(CancelQueuedAdmissionsReq req);
 
   CoTryTask<Inode> extendStripe(const UserInfo &userInfo, InodeId inodeId, uint32_t stripe);
 
