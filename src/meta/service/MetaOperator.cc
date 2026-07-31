@@ -625,7 +625,13 @@ CoTryTask<ListCacheBlocksRsp> MetaOperator::listCacheBlocks(ListCacheBlocksReq r
     response.more = page->more;
     response.blocks.reserve(page->records.size());
     for (const auto &record : page->records) {
-      response.blocks.push_back({record.key, record.state, record.ready, record.chargeKind, record.chargedBytes});
+      response.blocks.push_back({record.key,
+                                 record.state,
+                                 record.ready,
+                                 record.chargeKind,
+                                 record.chargedBytes,
+                                 record.readyAt,
+                                 record.lastAccessAt});
     }
     co_return response;
   };
@@ -713,11 +719,17 @@ CoTryTask<CancelQueuedAdmissionsRsp> MetaOperator::cancelQueuedAdmissions(Cancel
     CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));                \
     co_return makeError(StatusCode::kNotImplemented, #NAME " is not implemented"); \
   }
-META_PHASE2_DISABLED_METHOD(updateCacheBlockAccess, UpdateCacheBlockAccessReq, UpdateCacheBlockAccessRsp);
 META_PHASE2_DISABLED_METHOD(beginEvictCacheBlocks, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
 META_PHASE2_DISABLED_METHOD(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);
 META_PHASE2_DISABLED_METHOD(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
 META_PHASE2_DISABLED_METHOD(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
 #undef META_PHASE2_DISABLED_METHOD
+
+CoTryTask<UpdateCacheBlockAccessRsp> MetaOperator::updateCacheBlockAccess(UpdateCacheBlockAccessReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::updateCacheBlockAccess, req);
+}
 
 }  // namespace hf3fs::meta::server

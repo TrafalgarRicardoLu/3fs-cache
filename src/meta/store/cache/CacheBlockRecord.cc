@@ -44,7 +44,8 @@ Result<Void> CacheBlockRecord::valid() const {
        leaseExpiresAt.isZero())) {
     return makeError(StatusCode::kInvalidArg, "LOADING record requires a complete lease fence");
   }
-  if (ready.has_value() && state != cache::CacheBlockState::READY && state != cache::CacheBlockState::CLEANING) {
+  if (ready.has_value() && state != cache::CacheBlockState::READY && state != cache::CacheBlockState::CLEANING &&
+      state != cache::CacheBlockState::EVICTING) {
     return makeError(StatusCode::kInvalidArg, "ready identity is not valid for this state");
   }
   if (ready.has_value()) RETURN_ON_ERROR(ready->valid());

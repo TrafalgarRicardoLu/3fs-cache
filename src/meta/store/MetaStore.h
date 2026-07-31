@@ -148,6 +148,7 @@ class MetaStore {
   OpPtr<AcquireCacheBlocksRsp> acquireCacheBlocks(const AcquireCacheBlocksReq &req);
 
   OpPtr<CommitCacheBlocksRsp> commitCacheBlocks(const CommitCacheBlocksReq &req);
+  OpPtr<UpdateCacheBlockAccessRsp> updateCacheBlockAccess(const UpdateCacheBlockAccessReq &req);
 
   OpPtr<FailCacheBlocksRsp> failCacheBlocks(const FailCacheBlocksReq &req);
 

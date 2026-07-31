@@ -46,6 +46,10 @@ class CacheBlockStore {
                                                               const cache::CacheBlockKey &key);
   static CoTryTask<CacheBlockRecord> commitCharge(kv::IReadWriteTransaction &txn,
                                                   const CacheBlockRecord &desiredRecord);
+  static CoTryTask<bool> updateAccess(kv::IReadWriteTransaction &txn,
+                                      const cache::CacheBlockKey &key,
+                                      cache::CacheGeneration generation,
+                                      UtcTime managerReceiveTime);
   static CoTryTask<Void> finishClean(kv::IReadWriteTransaction &txn,
                                      const cache::CacheBlockKey &key,
                                      cache::CleanupTerminalState terminalState);

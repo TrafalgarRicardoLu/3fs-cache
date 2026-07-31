@@ -93,6 +93,8 @@ class CommitCacheBlocksOp : public Operation<CommitCacheBlocksRsp> {
     record.permit.reset();
     record.loaderId = Uuid::zero();
     record.leaseExpiresAt = UtcTime{};
+    record.readyAt = UtcClock::now();
+    record.lastAccessAt = record.readyAt;
     auto committed = co_await CacheBlockStore::commitCharge(txn, record);
     CO_RETURN_ON_ERROR(committed);
     co_return CacheBlockMutationResult{committed->key,

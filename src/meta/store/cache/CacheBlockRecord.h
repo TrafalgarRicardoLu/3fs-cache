@@ -30,6 +30,8 @@ struct CacheBlockRecord {
   SERDE_STRUCT_FIELD(permit, std::optional<storage::PermitIdentity>{});
   SERDE_STRUCT_FIELD(placement, std::optional<storage::PlacementIdentity>{});
   SERDE_STRUCT_FIELD(committedPermit, std::optional<storage::PermitIdentity>{});
+  SERDE_STRUCT_FIELD(readyAt, UtcTime{});
+  SERDE_STRUCT_FIELD(lastAccessAt, UtcTime{});
 
  public:
   Result<Void> valid() const;

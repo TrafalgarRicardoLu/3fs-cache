@@ -78,6 +78,8 @@ class FailCacheBlocksOp : public Operation<FailCacheBlocksRsp> {
     record.deleteGeneration = record.cacheGeneration;
     record.leaseExpiresAt = UtcTime{};
     record.ready.reset();
+    record.readyAt = UtcTime{};
+    record.lastAccessAt = UtcTime{};
     if (record.permit.has_value()) {
       record.placement = record.permit->placement;
       record.permit.reset();

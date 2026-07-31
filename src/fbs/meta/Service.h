@@ -1057,6 +1057,8 @@ struct CacheBlockStatus {
   SERDE_STRUCT_FIELD(ready, std::optional<cache::ReadyIdentity>{});
   SERDE_STRUCT_FIELD(chargeKind, cache::ChargeKind::NONE);
   SERDE_STRUCT_FIELD(chargedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(readyAt, UtcTime{});
+  SERDE_STRUCT_FIELD(lastAccessAt, UtcTime{});
 };
 struct ListCacheBlocksRsp : RspBase {
   SERDE_STRUCT_FIELD(blocks, std::vector<CacheBlockStatus>{});
@@ -1156,7 +1158,6 @@ struct UpdateCacheBlockAccessReq : ReqBase {
     RETURN_ON_ERROR(service.valid());
     if (items.size() > cache::kMaxPhase2BatchItems)
       return makeError(CacheCode::kRequestTooLarge, "too many access updates");
-    for (const auto &item : items) RETURN_ON_ERROR(item.valid());
     return Void{};
   }
 };

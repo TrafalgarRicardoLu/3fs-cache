@@ -88,6 +88,8 @@ class AcquireCacheBlocksOp : public Operation<AcquireCacheBlocksRsp> {
     record.cacheGeneration = *generation;
     record.leaseExpiresAt = now + config().cache_load_lease().asUs();
     record.ready.reset();
+    record.readyAt = UtcTime{};
+    record.lastAccessAt = UtcTime{};
     record.terminalState = cache::CleanupTerminalState::NONE;
     CO_RETURN_ON_ERROR(co_await CacheBlockStore::store(txn, record));
     co_return AcquireCacheBlockResult{

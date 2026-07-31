@@ -247,6 +247,25 @@ CoTryTask<CacheBlockRecord> CacheBlockStore::commitCharge(kv::IReadWriteTransact
   co_return committed;
 }
 
+CoTryTask<bool> CacheBlockStore::updateAccess(kv::IReadWriteTransaction &txn,
+                                              const cache::CacheBlockKey &key,
+                                              cache::CacheGeneration generation,
+                                              UtcTime managerReceiveTime) {
+  CO_RETURN_ON_ERROR(key.valid());
+  if (generation == cache::CacheGeneration{} || managerReceiveTime.isZero()) {
+    co_return makeError(StatusCode::kInvalidArg, "invalid cache access update");
+  }
+  auto loaded = co_await load(txn, key);
+  CO_RETURN_ON_ERROR(loaded);
+  if (!loaded->has_value() || (*loaded)->state != cache::CacheBlockState::READY ||
+      (*loaded)->cacheGeneration != generation || (*loaded)->lastAccessAt >= managerReceiveTime) {
+    co_return false;
+  }
+  (*loaded)->lastAccessAt = managerReceiveTime;
+  CO_RETURN_ON_ERROR(co_await store(txn, **loaded));
+  co_return true;
+}
+
 CoTryTask<Void> CacheBlockStore::finishClean(kv::IReadWriteTransaction &txn,
                                              const cache::CacheBlockKey &key,
                                              cache::CleanupTerminalState terminalState) {
@@ -278,6 +297,8 @@ CoTryTask<Void> CacheBlockStore::finishClean(kv::IReadWriteTransaction &txn,
   record.chargeKind = cache::ChargeKind::NONE;
   record.chargedBytes = 0;
   record.ready.reset();
+  record.readyAt = UtcTime{};
+  record.lastAccessAt = UtcTime{};
   record.permit.reset();
   record.placement.reset();
   record.committedPermit.reset();
