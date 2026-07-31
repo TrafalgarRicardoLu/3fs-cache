@@ -43,6 +43,12 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
   cleanupWorker_ = std::make_unique<CacheCleanupWorker>(backend_);
   reportInvalid_ = std::make_unique<ReportCacheBlockInvalid>(backend_, *cleanupWorker_);
   adminCleanup_ = std::make_unique<AdminCleanupCacheBlocks>(backend_, *cleanupWorker_);
+  // Keep inventory polling available while admission is disabled so an
+  // administrator can satisfy the Phase 2 enable preconditions.
+  physicalTopology_ = std::make_unique<PhysicalTopology>();
+  spacePoller_ = std::make_unique<SpacePoller>(
+      *physicalTopology_,
+      [backend = backend_](const storage::QueryCacheSpaceReq &req) { return backend->queryCacheSpace(req); });
   if (config_.enable_phase2()) {
     auto evictionPolicy = createEvictionPolicy(config_.eviction_policy());
     RETURN_ON_ERROR(evictionPolicy);
@@ -63,11 +69,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     accessConfig.flushInterval = config_.access_flush_interval();
     accessFlushWorker_ = std::make_unique<AccessFlushWorker>(backend_, accessConfig);
     RETURN_ON_ERROR(accessFlushWorker_->start());
-    physicalTopology_ = std::make_unique<PhysicalTopology>();
     evictionPressure_ = std::make_unique<EvictionPressureState>();
-    spacePoller_ = std::make_unique<SpacePoller>(
-        *physicalTopology_,
-        [backend = backend_](const storage::QueryCacheSpaceReq &req) { return backend->queryCacheSpace(req); });
     physicalPreflight_ = std::make_unique<PhysicalPreflight>(*physicalTopology_,
                                                              config_.space_snapshot_max_age(),
                                                              config_.capacity_high_watermark(),
@@ -296,7 +298,7 @@ CoTryTask<ReportCacheAccessRsp> CacheManagerOperator::reportCacheAccess(const Re
 
 CoTryTask<GetPhase2CacheStatusRsp> CacheManagerOperator::getPhase2CacheStatus(const GetPhase2CacheStatusReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
-  CO_RETURN_ON_ERROR(checkPhase2Protocol(req.cacheProtocolVersion));
+  CO_RETURN_ON_ERROR(checkProtocol(req.cacheProtocolVersion));
   if (backend_) CO_RETURN_ON_ERROR(co_await backend_->authorizeAdmin(req.user, std::nullopt));
   GetPhase2CacheStatusRsp response;
   response.enabled = config_.enable_phase2();
@@ -334,12 +336,14 @@ CoTryTask<GetPhase2CacheStatusRsp> CacheManagerOperator::getPhase2CacheStatus(co
     for (const auto &count : metaStatus->stateCounts) {
       if (count.state == cache::CacheBlockState::EVICTING) response.evicting = count.count;
     }
-    meta::ListCacheEventDeadLettersReq deadLetters;
-    deadLetters.limit = cache::kMaxPhase2BatchItems;
-    deadLetters.cacheProtocolVersion = req.cacheProtocolVersion;
-    auto page = co_await metaClient_->listCacheEventDeadLetters(std::move(deadLetters));
-    CO_RETURN_ON_ERROR(page);
-    response.deadLetters = page->items.size();
+    if (config_.enable_phase2()) {
+      meta::ListCacheEventDeadLettersReq deadLetters;
+      deadLetters.limit = cache::kMaxPhase2BatchItems;
+      deadLetters.cacheProtocolVersion = req.cacheProtocolVersion;
+      auto page = co_await metaClient_->listCacheEventDeadLetters(std::move(deadLetters));
+      CO_RETURN_ON_ERROR(page);
+      response.deadLetters = page->items.size();
+    }
   }
   co_return response;
 }
