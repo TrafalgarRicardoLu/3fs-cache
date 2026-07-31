@@ -104,6 +104,22 @@ class StorageMessenger {
                                                                       const QueryCacheChunkGenerationsReq &request,
                                                                       const net::UserRequestOptions *options = nullptr,
                                                                       serde::Timestamp *timestamp = nullptr);
+  CoTryTask<PrepareCachePermitsRsp> prepareCachePermits(const hf3fs::net::Address &address,
+                                                        const PrepareCachePermitsReq &request,
+                                                        const net::UserRequestOptions *options = nullptr,
+                                                        serde::Timestamp *timestamp = nullptr);
+  CoTryTask<RenewCachePermitsRsp> renewCachePermits(const hf3fs::net::Address &address,
+                                                    const RenewCachePermitsReq &request,
+                                                    const net::UserRequestOptions *options = nullptr,
+                                                    serde::Timestamp *timestamp = nullptr);
+  CoTryTask<ReleaseCachePermitsRsp> releaseCachePermits(const hf3fs::net::Address &address,
+                                                        const ReleaseCachePermitsReq &request,
+                                                        const net::UserRequestOptions *options = nullptr,
+                                                        serde::Timestamp *timestamp = nullptr);
+  CoTryTask<QueryCachePermitsRsp> queryCachePermits(const hf3fs::net::Address &address,
+                                                    const QueryCachePermitsReq &request,
+                                                    const net::UserRequestOptions *options = nullptr,
+                                                    serde::Timestamp *timestamp = nullptr);
 
  private:
   hf3fs::net::Client client_;

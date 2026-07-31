@@ -261,4 +261,21 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageMessenger::queryCacheChunkGenera
                                                                                                           timestamp);
 }
 
+#define PHASE2_STORAGE_MESSENGER_METHOD(NAME, REQ, RSP)                                                     \
+  CoTryTask<RSP> StorageMessenger::NAME(const hf3fs::net::Address &address,                                 \
+                                        const REQ &request,                                                 \
+                                        const net::UserRequestOptions *options,                             \
+                                        serde::Timestamp *timestamp) {                                      \
+    co_return co_await callSerdeRpcMethod<REQ, RSP, StorageSerde<>::NAME<serde::ClientContext>>(client_,    \
+                                                                                                address,    \
+                                                                                                request,    \
+                                                                                                options,    \
+                                                                                                timestamp); \
+  }
+PHASE2_STORAGE_MESSENGER_METHOD(prepareCachePermits, PrepareCachePermitsReq, PrepareCachePermitsRsp);
+PHASE2_STORAGE_MESSENGER_METHOD(renewCachePermits, RenewCachePermitsReq, RenewCachePermitsRsp);
+PHASE2_STORAGE_MESSENGER_METHOD(releaseCachePermits, ReleaseCachePermitsReq, ReleaseCachePermitsRsp);
+PHASE2_STORAGE_MESSENGER_METHOD(queryCachePermits, QueryCachePermitsReq, QueryCachePermitsRsp);
+#undef PHASE2_STORAGE_MESSENGER_METHOD
+
 }  // namespace hf3fs::storage::client

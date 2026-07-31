@@ -1,11 +1,15 @@
+#include <array>
 #include <atomic>
 #include <folly/experimental/TestUtil.h>
+#include <folly/experimental/coro/BlockingWait.h>
+#include <set>
 #include <thread>
 
 #include "client/mgmtd/RoutingInfo.h"
 #include "common/utils/CPUExecutorGroup.h"
 #include "common/utils/SysResource.h"
 #include "kv/MemDBStore.h"
+#include "storage/service/CachePermitCoordinator.h"
 #include "storage/store/StorageTargets.h"
 #include "tests/GtestHelpers.h"
 
@@ -54,6 +58,44 @@ PermitIdentity permit(uint64_t attempt, uint64_t generation, uint64_t footprint 
       PlacementIdentity::create({ChainId{1}, ChainVer{1}}, {TargetId{1}}, TargetId{1}, Uuid::from(0, attempt));
   return PermitIdentity{Uuid::from(9, 9), *placement, generation, {{TargetId{1}, footprint}}};
 }
+
+PermitIdentity replicatedPermit() {
+  auto placement = PlacementIdentity::create({ChainId{1}, ChainVer{1}},
+                                             {TargetId{1}, TargetId{2}, TargetId{3}},
+                                             TargetId{1},
+                                             Uuid::from(0, 11));
+  return PermitIdentity{Uuid::from(9, 9), *placement, 1, {{TargetId{1}, 100}, {TargetId{2}, 100}, {TargetId{3}, 100}}};
+}
+
+struct FakePermitReplicas {
+  PermitIdentity permit = replicatedPermit();
+  std::map<int, CachePermitResult> active;
+  std::set<int> rejectPrepare;
+  std::set<int> rejectRelease;
+  std::vector<int> releases;
+
+  CoTryTask<CachePermitResult> query(int node) {
+    auto record = active.find(node);
+    if (record == active.end()) co_return makeError(CacheCode::kNotFound);
+    co_return record->second;
+  }
+
+  CoTryTask<CachePermitResult> prepare(int node) {
+    auto record = active.find(node);
+    if (record != active.end()) co_return record->second;
+    if (rejectPrepare.contains(node)) co_return makeError(CacheCode::kCapacityExceeded);
+    CachePermitResult result{permit, cache::CachePermitState::RESERVED, 500};
+    active.emplace(node, result);
+    co_return result;
+  }
+
+  CoTryTask<Void> release(int node) {
+    releases.push_back(node);
+    if (rejectRelease.contains(node)) co_return makeError(CacheCode::kUnavailable);
+    active.erase(node);
+    co_return Void{};
+  }
+};
 
 std::unique_ptr<CacheSpaceGate> memoryGate(const kv::KVStore::Config &config,
                                            PhysicalDiskId diskId,
@@ -340,6 +382,67 @@ TEST(TestStorageTargets, CacheSpaceGateConcurrentPrepareCannotCrossHighWatermark
   for (auto &thread : threads) thread.join();
   EXPECT_EQ(accepted, 5);
   EXPECT_EQ(*gate->reservedBytes(100), 500);
+}
+
+TEST(TestStorageTargets, CachePermitCoordinatorRollsBackPartialPrepare) {
+  FakePermitReplicas replicas;
+  replicas.rejectPrepare.insert(2);
+  std::array nodes{1, 2, 3};
+  auto result = folly::coro::blockingWait(CachePermitCoordinator::prepare<int>(
+      nodes,
+      [&](int node) { return replicas.query(node); },
+      [&](int node) { return replicas.prepare(node); },
+      [&](int node) { return replicas.release(node); }));
+  ASSERT_ERROR(result, CacheCode::kCapacityExceeded);
+  EXPECT_TRUE(replicas.active.empty());
+  EXPECT_EQ(replicas.releases, (std::vector<int>{1, 2}));
+}
+
+TEST(TestStorageTargets, CachePermitCoordinatorRetryRecoversAfterCoordinatorCrash) {
+  FakePermitReplicas replicas;
+  replicas.active.emplace(1, CachePermitResult{replicas.permit, cache::CachePermitState::RESERVED, 500});
+  std::array nodes{1, 2, 3};
+  auto result = folly::coro::blockingWait(CachePermitCoordinator::prepare<int>(
+      nodes,
+      [&](int node) { return replicas.query(node); },
+      [&](int node) { return replicas.prepare(node); },
+      [&](int node) { return replicas.release(node); }));
+  ASSERT_OK(result);
+  EXPECT_EQ(replicas.active.size(), 3);
+  EXPECT_TRUE(replicas.releases.empty());
+
+  auto duplicate = folly::coro::blockingWait(CachePermitCoordinator::prepare<int>(
+      nodes,
+      [&](int node) { return replicas.query(node); },
+      [&](int node) { return replicas.prepare(node); },
+      [&](int node) { return replicas.release(node); }));
+  ASSERT_OK(duplicate);
+  EXPECT_EQ(replicas.active.size(), 3);
+}
+
+TEST(TestStorageTargets, CachePermitCoordinatorFindsAndCleansFailedRollback) {
+  FakePermitReplicas replicas;
+  replicas.rejectPrepare.insert(2);
+  replicas.rejectRelease.insert(1);
+  std::array nodes{1, 2, 3};
+  auto prepared = folly::coro::blockingWait(CachePermitCoordinator::prepare<int>(
+      nodes,
+      [&](int node) { return replicas.query(node); },
+      [&](int node) { return replicas.prepare(node); },
+      [&](int node) { return replicas.release(node); }));
+  ASSERT_ERROR(prepared, CacheCode::kCapacityExceeded);
+  ASSERT_TRUE(replicas.active.contains(1));
+
+  auto recovered = folly::coro::blockingWait(
+      CachePermitCoordinator::query<int>(nodes, [&](int node) { return replicas.query(node); }));
+  ASSERT_OK(recovered);
+  EXPECT_EQ(recovered->permit.managerEpoch, replicas.permit.managerEpoch);
+
+  replicas.rejectRelease.clear();
+  auto released = folly::coro::blockingWait(
+      CachePermitCoordinator::release<int>(nodes, [&](int node) { return replicas.release(node); }));
+  ASSERT_OK(released);
+  EXPECT_TRUE(replicas.active.empty());
 }
 
 }  // namespace

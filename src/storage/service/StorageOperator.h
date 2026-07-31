@@ -118,7 +118,41 @@ class StorageOperator {
     double highWatermark = 0;
   };
 
+  struct PermitReplicaNode {
+    NodeId nodeId;
+    std::optional<net::Address> address;
+    bool local = false;
+  };
+
   Result<std::vector<LocalPermitDisk>> resolveLocalPermitDisks(const PermitIdentity &permit, uint64_t nowNs);
+  Result<std::vector<CacheSpaceGate *>> resolveLocalPermitGates(const PermitIdentity &permit) const;
+  Result<std::vector<PermitReplicaNode>> resolvePermitReplicaNodes(const PermitIdentity &permit,
+                                                                   bool &localIsCoordinator,
+                                                                   bool requireCurrentPlacement) const;
+  Result<CachePermitResult> prepareLocalPermit(const CachePermitRequestItem &item, uint64_t nowNs);
+  Result<CachePermitResult> renewLocalPermit(const CachePermitRequestItem &item, uint64_t nowNs);
+  Result<Void> releaseLocalPermit(const PermitIdentity &permit, uint64_t nowNs);
+  Result<CachePermitResult> queryLocalPermit(const PermitIdentity &permit, uint64_t nowNs);
+  CoTryTask<CachePermitResult> preparePermitOnReplica(const PermitReplicaNode &node,
+                                                      const CachePermitRequestItem &item,
+                                                      const flat::UserInfo &userInfo,
+                                                      uint32_t cacheProtocolVersion,
+                                                      uint64_t nowNs);
+  CoTryTask<CachePermitResult> renewPermitOnReplica(const PermitReplicaNode &node,
+                                                    const CachePermitRequestItem &item,
+                                                    const flat::UserInfo &userInfo,
+                                                    uint32_t cacheProtocolVersion,
+                                                    uint64_t nowNs);
+  CoTryTask<Void> releasePermitOnReplica(const PermitReplicaNode &node,
+                                         const PermitIdentity &permit,
+                                         const flat::UserInfo &userInfo,
+                                         uint32_t cacheProtocolVersion,
+                                         uint64_t nowNs);
+  CoTryTask<CachePermitResult> queryPermitOnReplica(const PermitReplicaNode &node,
+                                                    const PermitIdentity &permit,
+                                                    const flat::UserInfo &userInfo,
+                                                    uint32_t cacheProtocolVersion,
+                                                    uint64_t nowNs);
 
   using ChunkMetadataProcessor = std::function<CoTryTask<void>(const ChunkId &, const ChunkMetadata &)>;
 
@@ -176,6 +210,7 @@ class StorageOperator {
   std::unique_ptr<ConfigCallbackGuard> onConfigUpdated_;
   std::map<uint8_t, hf3fs::Semaphore> concurrentRdmaWriteSemaphore_;
   std::map<uint8_t, hf3fs::Semaphore> concurrentRdmaReadSemaphore_;
+  CoLockManager<> permitCoordinatorLocks_;
   std::atomic<uint64_t> totalReadBytes_{};
   std::atomic<uint64_t> totalReadIOs_{};
 };

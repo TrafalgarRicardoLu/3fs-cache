@@ -11,6 +11,7 @@
 #include "common/utils/Result.h"
 #include "common/utils/SemaphoreGuard.h"
 #include "storage/aio/BatchReadJob.h"
+#include "storage/service/CachePermitCoordinator.h"
 #include "storage/service/Components.h"
 #include "storage/update/UpdateJob.h"
 
@@ -1361,6 +1362,179 @@ Result<std::vector<StorageOperator::LocalPermitDisk>> StorageOperator::resolveLo
   return result;
 }
 
+Result<std::vector<CacheSpaceGate *>> StorageOperator::resolveLocalPermitGates(const PermitIdentity &permit) const {
+  RETURN_ON_ERROR(permit.valid());
+  std::map<PhysicalDiskId, CacheSpaceGate *> disks;
+  auto targets = components_.targetMap.snapshot();
+  for (const auto &[targetId, _] : permit.footprintByTarget) {
+    auto target = targets->getTargets().find(targetId);
+    if (target == targets->getTargets().end()) continue;
+    if (target->second.storageRole != StorageRole::CACHE_ONLY)
+      return makeError(CacheCode::kRoleMismatch, "permit target is not cache-only");
+    auto gate = components_.storageTargets.cacheSpaceGate(target->second.physicalDiskId);
+    if (gate == nullptr) return makeError(CacheCode::kUnavailable, "cache space gate is unavailable");
+    disks.emplace(target->second.physicalDiskId, gate);
+  }
+  if (disks.empty()) return makeError(CacheCode::kPlacementMismatch, "permit has no target on this storage node");
+  std::vector<CacheSpaceGate *> result;
+  result.reserve(disks.size());
+  for (auto [_, gate] : disks) result.push_back(gate);
+  return result;
+}
+
+Result<std::vector<StorageOperator::PermitReplicaNode>> StorageOperator::resolvePermitReplicaNodes(
+    const PermitIdentity &permit,
+    bool &localIsCoordinator,
+    bool requireCurrentPlacement) const {
+  RETURN_ON_ERROR(permit.valid());
+  auto mgmtd = components_.mgmtdClient.load();
+  if (!mgmtd) return makeError(CacheCode::kUnavailable, "routing client is unavailable");
+  auto routing = mgmtd->getRoutingInfo();
+  if (!routing || !routing->raw()) return makeError(CacheCode::kUnavailable, "routing info is unavailable");
+  if (requireCurrentPlacement) {
+    auto chain = routing->getChain(permit.placement.versionedChain.chainId);
+    if (!chain || chain->chainVersion != permit.placement.versionedChain.chainVer)
+      return makeError(CacheCode::kPlacementMismatch, "permit chain version changed");
+    std::vector<TargetId> routingTargets;
+    routingTargets.reserve(chain->targets.size());
+    for (const auto &target : chain->targets) routingTargets.push_back(target.targetId);
+    std::sort(routingTargets.begin(), routingTargets.end());
+    if (routingTargets != permit.placement.expectedReplicaTargets)
+      return makeError(CacheCode::kPlacementMismatch, "permit replica set changed");
+  }
+
+  std::map<NodeId, PermitReplicaNode> nodes;
+  std::optional<NodeId> coordinatorNode;
+  for (auto targetId : permit.placement.expectedReplicaTargets) {
+    auto target = routing->getTarget(targetId);
+    if (!target || !target->nodeId ||
+        (requireCurrentPlacement && (target->chainId != permit.placement.versionedChain.chainId ||
+                                     target->publicState != flat::PublicTargetState::SERVING)))
+      return makeError(CacheCode::kPlacementMismatch, "permit target is not serving on the recorded chain");
+    if (target->storageRole != StorageRole::CACHE_ONLY)
+      return makeError(CacheCode::kRoleMismatch, "permit target is not cache-only");
+    auto node = routing->getNode(*target->nodeId);
+    if (!node || node->type != flat::NodeType::STORAGE)
+      return makeError(CacheCode::kUnavailable, "permit storage node is unavailable");
+    auto &replicaNode = nodes[*target->nodeId];
+    replicaNode.nodeId = *target->nodeId;
+    replicaNode.local = *target->nodeId == components_.getAppInfo().nodeId;
+    if (!replicaNode.local && !replicaNode.address) {
+      auto addresses = node->extractAddresses("StorageSerde");
+      if (addresses.empty()) return makeError(CacheCode::kUnavailable, "permit storage node has no address");
+      replicaNode.address = addresses.front();
+    }
+    if (targetId == permit.placement.coordinatorTargetId) coordinatorNode = *target->nodeId;
+  }
+  if (!coordinatorNode) return makeError(CacheCode::kPlacementMismatch, "permit coordinator target is missing");
+  localIsCoordinator = *coordinatorNode == components_.getAppInfo().nodeId;
+  std::vector<PermitReplicaNode> result;
+  result.reserve(nodes.size());
+  for (auto &[_, node] : nodes) result.push_back(std::move(node));
+  return result;
+}
+
+Result<CachePermitResult> StorageOperator::prepareLocalPermit(const CachePermitRequestItem &item, uint64_t nowNs) {
+  CHECK_RESULT(disks, resolveLocalPermitDisks(item.permit, nowNs));
+  std::vector<CacheSpaceGate *> newlyPrepared;
+  Result<CachePermitResult> result = makeError(CacheCode::kUnavailable);
+  for (auto &disk : disks) {
+    bool existed = disk.gate->query(item.permit, nowNs).hasValue();
+    result = disk.gate->prepare(item, disk.footprintBytes, disk.capacity, disk.highWatermark, nowNs);
+    if (!result) break;
+    if (!existed) newlyPrepared.push_back(disk.gate);
+  }
+  if (!result) {
+    for (auto *gate : newlyPrepared) {
+      auto rollback = gate->release(item.permit, nowNs);
+      XLOGF_IF(ERR, rollback.hasError(), "rollback local cache permit failed: {}", rollback.error());
+    }
+  }
+  return result;
+}
+
+Result<CachePermitResult> StorageOperator::renewLocalPermit(const CachePermitRequestItem &item, uint64_t nowNs) {
+  CHECK_RESULT(disks, resolveLocalPermitDisks(item.permit, nowNs));
+  Result<CachePermitResult> result = makeError(CacheCode::kUnavailable);
+  for (auto &disk : disks) {
+    result = disk.gate->renew(item, nowNs);
+    if (!result) break;
+  }
+  return result;
+}
+
+Result<Void> StorageOperator::releaseLocalPermit(const PermitIdentity &permit, uint64_t nowNs) {
+  CHECK_RESULT(gates, resolveLocalPermitGates(permit));
+  Result<Void> result = Void{};
+  for (auto *gate : gates) {
+    result = gate->release(permit, nowNs);
+    if (!result) break;
+  }
+  return result;
+}
+
+Result<CachePermitResult> StorageOperator::queryLocalPermit(const PermitIdentity &permit, uint64_t nowNs) {
+  CHECK_RESULT(gates, resolveLocalPermitGates(permit));
+  Result<CachePermitResult> result = makeError(CacheCode::kNotFound);
+  for (auto *gate : gates) {
+    result = gate->query(permit, nowNs);
+    if (!result) break;
+  }
+  return result;
+}
+
+#define PERMIT_REPLICA_METHOD(NAME, RESULT, ITEM, REQ, RSP, FIELD, MESSENGER, LOCAL)                   \
+  CoTryTask<RESULT> StorageOperator::NAME(const PermitReplicaNode &node,                               \
+                                          const ITEM &item,                                            \
+                                          const flat::UserInfo &userInfo,                              \
+                                          uint32_t cacheProtocolVersion,                               \
+                                          uint64_t nowNs) {                                            \
+    if (node.local) co_return LOCAL(item, nowNs);                                                      \
+    if (!node.address) co_return makeError(CacheCode::kUnavailable, "permit replica address missing"); \
+    REQ request;                                                                                       \
+    request.userInfo = userInfo;                                                                       \
+    request.FIELD.push_back(item);                                                                     \
+    request.cacheProtocolVersion = cacheProtocolVersion;                                               \
+    auto response = co_await components_.messenger.MESSENGER(*node.address, request);                  \
+    CO_RETURN_ON_ERROR(response);                                                                      \
+    if (response->results.size() != 1)                                                                 \
+      co_return makeError(CacheCode::kInvalidResponse, "permit replica result count mismatch");        \
+    co_return std::move(response->results.front());                                                    \
+  }
+PERMIT_REPLICA_METHOD(preparePermitOnReplica,
+                      CachePermitResult,
+                      CachePermitRequestItem,
+                      PrepareCachePermitsReq,
+                      PrepareCachePermitsRsp,
+                      items,
+                      prepareCachePermits,
+                      prepareLocalPermit);
+PERMIT_REPLICA_METHOD(renewPermitOnReplica,
+                      CachePermitResult,
+                      CachePermitRequestItem,
+                      RenewCachePermitsReq,
+                      RenewCachePermitsRsp,
+                      items,
+                      renewCachePermits,
+                      renewLocalPermit);
+PERMIT_REPLICA_METHOD(releasePermitOnReplica,
+                      Void,
+                      PermitIdentity,
+                      ReleaseCachePermitsReq,
+                      ReleaseCachePermitsRsp,
+                      permits,
+                      releaseCachePermits,
+                      releaseLocalPermit);
+PERMIT_REPLICA_METHOD(queryPermitOnReplica,
+                      CachePermitResult,
+                      PermitIdentity,
+                      QueryCachePermitsReq,
+                      QueryCachePermitsRsp,
+                      permits,
+                      queryCachePermits,
+                      queryLocalPermit);
+#undef PERMIT_REPLICA_METHOD
+
 CoTryTask<QueryCacheSpaceRsp> StorageOperator::queryCacheSpace(const QueryCacheSpaceReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2()));
@@ -1427,25 +1601,31 @@ CoTryTask<PrepareCachePermitsRsp> StorageOperator::prepareCachePermits(const Pre
   PrepareCachePermitsRsp response;
   response.results.reserve(req.items.size());
   for (const auto &item : req.items) {
-    auto disks = resolveLocalPermitDisks(item.permit, nowNs);
-    if (!disks) {
-      response.results.emplace_back(makeError(std::move(disks.error())));
+    bool localIsCoordinator = false;
+    auto nodes = resolvePermitReplicaNodes(item.permit, localIsCoordinator, true);
+    if (!nodes) {
+      response.results.emplace_back(makeError(std::move(nodes.error())));
       continue;
     }
-    std::vector<CacheSpaceGate *> newlyPrepared;
-    Result<CachePermitResult> result = makeError(CacheCode::kUnavailable);
-    for (auto &disk : *disks) {
-      bool existed = disk.gate->query(item.permit, nowNs).hasValue();
-      result = disk.gate->prepare(item, disk.footprintBytes, disk.capacity, disk.highWatermark, nowNs);
-      if (!result) break;
-      if (!existed) newlyPrepared.push_back(disk.gate);
+    if (!localIsCoordinator) {
+      response.results.emplace_back(prepareLocalPermit(item, nowNs));
+      continue;
     }
-    if (!result) {
-      for (auto *gate : newlyPrepared) {
-        auto rollback = gate->release(item.permit, nowNs);
-        XLOGF_IF(ERR, rollback.hasError(), "rollback cache permit failed: {}", rollback.error());
-      }
-    }
+
+    folly::coro::Baton baton;
+    auto lock = permitCoordinatorLocks_.lock(baton, serde::serializeBytes(item.permit).toString());
+    co_await lock.lock();
+    auto result = co_await CachePermitCoordinator::prepare<PermitReplicaNode>(
+        *nodes,
+        [&](const auto &node) {
+          return queryPermitOnReplica(node, item.permit, req.userInfo, req.cacheProtocolVersion, nowNs);
+        },
+        [&](const auto &node) {
+          return preparePermitOnReplica(node, item, req.userInfo, req.cacheProtocolVersion, nowNs);
+        },
+        [&](const auto &node) {
+          return releasePermitOnReplica(node, item.permit, req.userInfo, req.cacheProtocolVersion, nowNs);
+        });
     response.results.emplace_back(std::move(result));
   }
   co_return response;
@@ -1458,16 +1638,22 @@ CoTryTask<RenewCachePermitsRsp> StorageOperator::renewCachePermits(const RenewCa
   RenewCachePermitsRsp response;
   response.results.reserve(req.items.size());
   for (const auto &item : req.items) {
-    auto disks = resolveLocalPermitDisks(item.permit, nowNs);
-    if (!disks) {
-      response.results.emplace_back(makeError(std::move(disks.error())));
+    bool localIsCoordinator = false;
+    auto nodes = resolvePermitReplicaNodes(item.permit, localIsCoordinator, true);
+    if (!nodes) {
+      response.results.emplace_back(makeError(std::move(nodes.error())));
       continue;
     }
-    Result<CachePermitResult> result = makeError(CacheCode::kUnavailable);
-    for (auto &disk : *disks) {
-      result = disk.gate->renew(item, nowNs);
-      if (!result) break;
+    if (!localIsCoordinator) {
+      response.results.emplace_back(renewLocalPermit(item, nowNs));
+      continue;
     }
+    folly::coro::Baton baton;
+    auto lock = permitCoordinatorLocks_.lock(baton, serde::serializeBytes(item.permit).toString());
+    co_await lock.lock();
+    auto result = co_await CachePermitCoordinator::renew<PermitReplicaNode>(*nodes, [&](const auto &node) {
+      return renewPermitOnReplica(node, item, req.userInfo, req.cacheProtocolVersion, nowNs);
+    });
     response.results.emplace_back(std::move(result));
   }
   co_return response;
@@ -1480,16 +1666,22 @@ CoTryTask<ReleaseCachePermitsRsp> StorageOperator::releaseCachePermits(const Rel
   ReleaseCachePermitsRsp response;
   response.results.reserve(req.permits.size());
   for (const auto &permit : req.permits) {
-    auto disks = resolveLocalPermitDisks(permit, nowNs);
-    if (!disks) {
-      response.results.emplace_back(makeError(std::move(disks.error())));
+    bool localIsCoordinator = false;
+    auto nodes = resolvePermitReplicaNodes(permit, localIsCoordinator, false);
+    if (!nodes) {
+      response.results.emplace_back(makeError(std::move(nodes.error())));
       continue;
     }
-    Result<Void> result = Void{};
-    for (auto &disk : *disks) {
-      result = disk.gate->release(permit, nowNs);
-      if (!result) break;
+    if (!localIsCoordinator) {
+      response.results.emplace_back(releaseLocalPermit(permit, nowNs));
+      continue;
     }
+    folly::coro::Baton baton;
+    auto lock = permitCoordinatorLocks_.lock(baton, serde::serializeBytes(permit).toString());
+    co_await lock.lock();
+    auto result = co_await CachePermitCoordinator::release<PermitReplicaNode>(*nodes, [&](const auto &node) {
+      return releasePermitOnReplica(node, permit, req.userInfo, req.cacheProtocolVersion, nowNs);
+    });
     response.results.emplace_back(std::move(result));
   }
   co_return response;
@@ -1502,17 +1694,23 @@ CoTryTask<QueryCachePermitsRsp> StorageOperator::queryCachePermits(const QueryCa
   QueryCachePermitsRsp response;
   response.results.reserve(req.permits.size());
   for (const auto &permit : req.permits) {
-    auto disks = resolveLocalPermitDisks(permit, nowNs);
-    if (!disks) {
-      response.results.emplace_back(makeError(std::move(disks.error())));
+    bool localIsCoordinator = false;
+    auto nodes = resolvePermitReplicaNodes(permit, localIsCoordinator, false);
+    if (!nodes) {
+      response.results.emplace_back(makeError(std::move(nodes.error())));
       continue;
     }
-    Result<CachePermitResult> result = makeError(CacheCode::kUnavailable);
-    for (auto &disk : *disks) {
-      result = disk.gate->query(permit, nowNs);
-      if (!result) break;
+    if (!localIsCoordinator) {
+      response.results.emplace_back(queryLocalPermit(permit, nowNs));
+      continue;
     }
-    response.results.emplace_back(std::move(result));
+    folly::coro::Baton baton;
+    auto lock = permitCoordinatorLocks_.lock(baton, serde::serializeBytes(permit).toString());
+    co_await lock.lock();
+    response.results.emplace_back(
+        co_await CachePermitCoordinator::query<PermitReplicaNode>(*nodes, [&](const auto &node) {
+          return queryPermitOnReplica(node, permit, req.userInfo, req.cacheProtocolVersion, nowNs);
+        }));
   }
   co_return response;
 }

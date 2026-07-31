@@ -77,10 +77,17 @@ class StorageClientImpl : public StorageClient {
       const RetireCacheChunkGenerationsReq &req) override;
   CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(
       const QueryCacheChunkGenerationsReq &req) override;
+  CoTryTask<PrepareCachePermitsRsp> prepareCachePermits(const PrepareCachePermitsReq &req) override;
+  CoTryTask<RenewCachePermitsRsp> renewCachePermits(const RenewCachePermitsReq &req) override;
+  CoTryTask<ReleaseCachePermitsRsp> releaseCachePermits(const ReleaseCachePermitsReq &req) override;
+  CoTryTask<QueryCachePermitsRsp> queryCachePermits(const QueryCachePermitsReq &req) override;
 
  private:
   template <typename Req, typename Rsp, auto MessengerMethod>
   CoTryTask<Rsp> cacheRequestAllTargets(MethodType methodType, VersionedChainId vChainId, const Req &req);
+
+  template <typename Req, typename Rsp, auto MessengerMethod>
+  CoTryTask<Rsp> cachePermitCoordinatorRequest(MethodType methodType, const PermitIdentity &permit, const Req &req);
 
   CoTryTask<void> batchReadWithRetry(ClientRequestContext &requestCtx,
                                      const std::vector<ReadIO *> &readIOs,

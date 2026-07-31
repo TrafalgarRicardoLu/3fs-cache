@@ -2660,4 +2660,72 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageClientImpl::queryCacheChunkGener
       req);
 }
 
+template <typename Req, typename Rsp, auto MessengerMethod>
+CoTryTask<Rsp> StorageClientImpl::cachePermitCoordinatorRequest(MethodType methodType,
+                                                                const PermitIdentity &permit,
+                                                                const Req &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(permit.valid());
+  ClientRequestContext
+      requestCtx(methodType, req.userInfo, DebugOptions(), config_, 1, 0, config_.retry().max_wait_time());
+  auto routingInfo = getCurrentRoutingInfo();
+  if (!routingInfo || !routingInfo->raw())
+    co_return makeError(StorageClientCode::kRoutingError, "cache permit routing info is unavailable");
+  auto targetInfo = getTargetInfo(routingInfo, permit.placement.coordinatorTargetId);
+  CO_RETURN_ON_ERROR(targetInfo);
+  if (!targetInfo->nodeId)
+    co_return makeError(StorageClientCode::kRoutingError, "cache permit coordinator has no node");
+  auto nodeInfo = getNodeInfo(routingInfo, *targetInfo->nodeId);
+  CO_RETURN_ON_ERROR(nodeInfo);
+  co_return co_await callMessengerMethod<Req, Rsp, MessengerMethod>(messenger_, requestCtx, *nodeInfo, req);
+}
+
+CoTryTask<PrepareCachePermitsRsp> StorageClientImpl::prepareCachePermits(const PrepareCachePermitsReq &req) {
+  if (req.items.empty()) co_return PrepareCachePermitsRsp{};
+  const auto &permit = req.items.front().permit;
+  if (std::any_of(req.items.begin(), req.items.end(), [&](const auto &item) {
+        return item.permit.placement.coordinatorTargetId != permit.placement.coordinatorTargetId;
+      }))
+    co_return makeError(StatusCode::kInvalidArg, "cache permit batch spans coordinators");
+  co_return co_await cachePermitCoordinatorRequest<PrepareCachePermitsReq,
+                                                   PrepareCachePermitsRsp,
+                                                   &StorageMessenger::prepareCachePermits>(
+      MethodType::prepareCachePermits,
+      permit,
+      req);
+}
+
+CoTryTask<RenewCachePermitsRsp> StorageClientImpl::renewCachePermits(const RenewCachePermitsReq &req) {
+  if (req.items.empty()) co_return RenewCachePermitsRsp{};
+  const auto &permit = req.items.front().permit;
+  if (std::any_of(req.items.begin(), req.items.end(), [&](const auto &item) {
+        return item.permit.placement.coordinatorTargetId != permit.placement.coordinatorTargetId;
+      }))
+    co_return makeError(StatusCode::kInvalidArg, "cache permit batch spans coordinators");
+  co_return co_await cachePermitCoordinatorRequest<RenewCachePermitsReq,
+                                                   RenewCachePermitsRsp,
+                                                   &StorageMessenger::renewCachePermits>(MethodType::renewCachePermits,
+                                                                                         permit,
+                                                                                         req);
+}
+
+#define CACHE_PERMIT_COORDINATOR_METHOD(NAME, REQ, RSP, METHOD)                                             \
+  CoTryTask<RSP> StorageClientImpl::NAME(const REQ &req) {                                                  \
+    if (req.permits.empty()) co_return RSP{};                                                               \
+    const auto &permit = req.permits.front();                                                               \
+    if (std::any_of(req.permits.begin(), req.permits.end(), [&](const auto &item) {                         \
+          return item.placement.coordinatorTargetId != permit.placement.coordinatorTargetId;                \
+        }))                                                                                                 \
+      co_return makeError(StatusCode::kInvalidArg, "cache permit batch spans coordinators");                \
+    co_return co_await cachePermitCoordinatorRequest<REQ, RSP, &StorageMessenger::NAME>(MethodType::METHOD, \
+                                                                                        permit,             \
+                                                                                        req);               \
+  }
+CACHE_PERMIT_COORDINATOR_METHOD(releaseCachePermits,
+                                ReleaseCachePermitsReq,
+                                ReleaseCachePermitsRsp,
+                                releaseCachePermits);
+CACHE_PERMIT_COORDINATOR_METHOD(queryCachePermits, QueryCachePermitsReq, QueryCachePermitsRsp, queryCachePermits);
+#undef CACHE_PERMIT_COORDINATOR_METHOD
+
 }  // namespace hf3fs::storage::client

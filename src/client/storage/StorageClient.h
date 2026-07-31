@@ -360,6 +360,10 @@ class StorageClient : public folly::MoveOnly {
     replaceCacheChunks,
     retireCacheChunkGenerations,
     queryCacheChunkGenerations,
+    prepareCachePermits,
+    renewCachePermits,
+    releaseCachePermits,
+    queryCachePermits,
   };
 
   class RetryConfig : public hf3fs::ConfigBase<RetryConfig> {
