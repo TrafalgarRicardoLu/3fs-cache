@@ -26,6 +26,7 @@ namespace {
 
 constexpr std::string_view kCachePermitPrefix = "phase2/cache-permit/";
 constexpr std::string_view kCachePermitStoreDirectory = ".cache-space-permits";
+constexpr std::string_view kCacheEventStoreDirectory = ".cache-events";
 
 struct CachePermitStoreKey {
   SERDE_STRUCT_FIELD(managerEpoch, Uuid::zero());
@@ -328,6 +329,7 @@ Result<Void> StorageTargets::init(CPUExecutorGroup &executor) {
   diskConfigs_.clear();
   engines_.clear();
   cacheSpaceGates_.clear();
+  cacheEventJournals_.clear();
 
   auto diskInfoResult = SysResource::scanDiskInfo();
   RETURN_AND_LOG_ON_ERROR(diskInfoResult);
@@ -378,6 +380,16 @@ Result<Void> StorageTargets::init(CPUExecutorGroup &executor) {
     auto gate = std::make_unique<CacheSpaceGate>(disk.physical_disk_id, std::move(permitStore));
     RETURN_ON_ERROR(gate->init());
     cacheSpaceGates_.emplace(disk.physical_disk_id, std::move(gate));
+
+    options.type = config_.cache_event_store().type();
+    options.path = targetPaths_[index] / std::string{kCacheEventStoreDirectory};
+    auto eventStore = kv::KVStore::create(config_.cache_event_store(), options);
+    if (!eventStore) return makeError(CacheCode::kJournalFull, "failed to open cache event journal");
+    auto journal = std::make_unique<CacheEventJournal>(std::move(eventStore),
+                                                       config_.cache_event_journal_max_records(),
+                                                       config_.cache_event_journal_max_bytes());
+    RETURN_ON_ERROR(journal->init());
+    cacheEventJournals_.emplace(disk.physical_disk_id, std::move(journal));
   }
 
   uint32_t i = 0;

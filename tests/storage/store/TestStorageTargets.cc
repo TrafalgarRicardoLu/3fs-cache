@@ -162,6 +162,7 @@ TEST(TestStorageTargets, PersistPhysicalDiskIdentityAndRole) {
   config.set_allow_disk_without_uuid(true);
 
   PhysicalDiskId diskId;
+  PhysicalDiskId eventSourceId;
   {
     AtomicallyTargetMap targetMap;
     StorageTargets targets(config, targetMap);
@@ -175,6 +176,10 @@ TEST(TestStorageTargets, PersistPhysicalDiskIdentityAndRole) {
     EXPECT_EQ((*first)->physicalDiskId, (*second)->physicalDiskId);
     EXPECT_EQ((*first)->storageRole, StorageRole::CACHE_ONLY);
     EXPECT_EQ((*second)->storageRole, StorageRole::CACHE_ONLY);
+    auto journal = targets.cacheEventJournal(diskId);
+    ASSERT_NE(journal, nullptr);
+    ASSERT_OK(journal->requireWritable());
+    eventSourceId = journal->stats().sourceId;
   }
 
   AtomicallyTargetMap targetMap;
@@ -185,6 +190,9 @@ TEST(TestStorageTargets, PersistPhysicalDiskIdentityAndRole) {
   ASSERT_OK(first);
   EXPECT_EQ((*first)->physicalDiskId, diskId);
   EXPECT_EQ((*first)->storageRole, StorageRole::CACHE_ONLY);
+  auto journal = targets.cacheEventJournal(diskId);
+  ASSERT_NE(journal, nullptr);
+  EXPECT_EQ(journal->stats().sourceId, eventSourceId);
 }
 
 TEST(TestStorageTargets, RejectLegacyDiskWhenRolesEnabled) {

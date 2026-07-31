@@ -12,6 +12,7 @@
 #include "fbs/mgmtd/HeartbeatInfo.h"
 #include "fbs/storage/Common.h"
 #include "kv/KVStore.h"
+#include "storage/cache/event/CacheEventJournal.h"
 #include "storage/service/TargetMap.h"
 #include "storage/store/StorageTarget.h"
 
@@ -106,6 +107,9 @@ class StorageTargets {
     CONFIG_OBJ(cache_permit_store, kv::KVStore::Config);
     CONFIG_ITEM(cache_permit_max_records, size_t{100000}, ConfigCheckers::checkPositive);
     CONFIG_ITEM(cache_permit_max_bytes, uint64_t{64_MB}, ConfigCheckers::checkPositive);
+    CONFIG_OBJ(cache_event_store, kv::KVStore::Config);
+    CONFIG_ITEM(cache_event_journal_max_records, size_t{100000}, ConfigCheckers::checkPositive);
+    CONFIG_ITEM(cache_event_journal_max_bytes, uint64_t{1_GB}, ConfigCheckers::checkPositive);
     CONFIG_OBJ(storage_target, StorageTarget::Config);
   };
 
@@ -160,6 +164,11 @@ class StorageTargets {
     return gate == cacheSpaceGates_.end() ? nullptr : gate->second.get();
   }
 
+  CacheEventJournal *cacheEventJournal(const PhysicalDiskId &diskId) const {
+    auto journal = cacheEventJournals_.find(diskId);
+    return journal == cacheEventJournals_.end() ? nullptr : journal->second.get();
+  }
+
   // remove target.
   Result<Void> removeChunkEngineTarget(ChainId chainId, uint32_t diskIndex) {
     auto &engine = *engines_[diskIndex];
@@ -179,6 +188,7 @@ class StorageTargets {
   std::map<Path, uint32_t> pathToDiskIndex_;
   std::vector<rust::Box<chunk_engine::Engine>> engines_;
   std::map<PhysicalDiskId, std::unique_ptr<CacheSpaceGate>> cacheSpaceGates_;
+  std::map<PhysicalDiskId, std::unique_ptr<CacheEventJournal>> cacheEventJournals_;
 
   CoLockManager<> targetLocks_;
   RelativeTime spaceInfoUpdatedTime_;

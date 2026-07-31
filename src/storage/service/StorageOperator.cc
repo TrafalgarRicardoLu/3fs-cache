@@ -1271,6 +1271,16 @@ CoTryTask<ReplaceCacheChunksRsp> StorageOperator::replaceCacheChunks(const Repla
         response.results.push_back(makeError(CacheCode::kRoleMismatch, "cache replace target is not cache-only"));
         continue;
       }
+      auto eventJournal = components_.storageTargets.cacheEventJournal(target->physicalDiskId);
+      if (eventJournal == nullptr) {
+        response.results.push_back(makeError(CacheCode::kUnavailable, "cache event journal is unavailable"));
+        continue;
+      }
+      auto journalWritable = eventJournal->requireWritable();
+      if (journalWritable.hasError()) {
+        response.results.push_back(makeError(std::move(journalWritable.error())));
+        continue;
+      }
       if (!std::binary_search(item.permit->placement.expectedReplicaTargets.begin(),
                               item.permit->placement.expectedReplicaTargets.end(),
                               target->targetId)) {
