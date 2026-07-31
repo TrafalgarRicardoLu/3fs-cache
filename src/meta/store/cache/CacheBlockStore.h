@@ -44,6 +44,8 @@ class CacheBlockStore {
                                              uint64_t expectedLoadEpoch = 0);
   static CoTryTask<cache::CacheGeneration> allocateGeneration(kv::IReadWriteTransaction &txn,
                                                               const cache::CacheBlockKey &key);
+  static CoTryTask<cache::EvictionEpoch> allocateEvictionEpoch(kv::IReadWriteTransaction &txn,
+                                                               const cache::CacheBlockKey &key);
   static CoTryTask<CacheBlockRecord> commitCharge(kv::IReadWriteTransaction &txn,
                                                   const CacheBlockRecord &desiredRecord);
   static CoTryTask<bool> updateAccess(kv::IReadWriteTransaction &txn,
@@ -56,6 +58,7 @@ class CacheBlockStore {
 
   static std::string recordKey(const cache::CacheBlockKey &key);
   static std::string generationKey(const cache::CacheBlockKey &key);
+  static std::string evictionEpochKey(const cache::CacheBlockKey &key);
 };
 
 }  // namespace hf3fs::meta::server

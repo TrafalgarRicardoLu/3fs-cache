@@ -98,7 +98,7 @@ class GetFileReadPlanOp : public ReadOnlyOperation<GetFileReadPlanRsp> {
         }
         plan.state = record.state;
         plan.loadEpoch = record.loadEpoch;
-        plan.ready = record.ready;
+        if (record.state == cache::CacheBlockState::READY) plan.ready = record.ready;
       }
       response.blocks.push_back(std::move(plan));
     }

@@ -32,6 +32,9 @@ struct CacheBlockRecord {
   SERDE_STRUCT_FIELD(committedPermit, std::optional<storage::PermitIdentity>{});
   SERDE_STRUCT_FIELD(readyAt, UtcTime{});
   SERDE_STRUCT_FIELD(lastAccessAt, UtcTime{});
+  SERDE_STRUCT_FIELD(evictionEpoch, cache::EvictionEpoch{});
+  SERDE_STRUCT_FIELD(retireOperationId, Uuid::zero());
+  SERDE_STRUCT_FIELD(evictionReason, cache::EvictionReason::INVALID);
 
  public:
   Result<Void> valid() const;

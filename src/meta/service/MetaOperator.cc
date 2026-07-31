@@ -719,11 +719,48 @@ CoTryTask<CancelQueuedAdmissionsRsp> MetaOperator::cancelQueuedAdmissions(Cancel
     CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));                \
     co_return makeError(StatusCode::kNotImplemented, #NAME " is not implemented"); \
   }
-META_PHASE2_DISABLED_METHOD(beginEvictCacheBlocks, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
-META_PHASE2_DISABLED_METHOD(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);
 META_PHASE2_DISABLED_METHOD(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
 META_PHASE2_DISABLED_METHOD(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
 #undef META_PHASE2_DISABLED_METHOD
+
+CoTryTask<BeginEvictCacheBlocksRsp> MetaOperator::beginEvictCacheBlocks(BeginEvictCacheBlocksReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::beginEvictCacheBlocks, req);
+}
+
+CoTryTask<ListEvictingCacheBlocksRsp> MetaOperator::listEvictingCacheBlocks(ListEvictingCacheBlocksReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));
+  auto handler = [req](kv::IReadOnlyTransaction &transaction) -> CoTryTask<ListEvictingCacheBlocksRsp> {
+    auto records = co_await CacheBlockStore::snapshotListAll(transaction);
+    CO_RETURN_ON_ERROR(records);
+    ListEvictingCacheBlocksRsp response;
+    for (const auto &record : *records) {
+      if (record.state != cache::CacheBlockState::EVICTING) continue;
+      if (record.key.inode < req.beginInode ||
+          (record.key.inode == req.beginInode && record.key.block < req.beginBlock)) {
+        continue;
+      }
+      if (response.items.size() == req.limit) {
+        response.more = true;
+        break;
+      }
+      CacheEvictionIdentity item{record.key,
+                                 *record.ready,
+                                 *record.placement,
+                                 record.evictionEpoch,
+                                 record.retireOperationId,
+                                 record.evictionReason};
+      CO_RETURN_ON_ERROR(item.valid());
+      response.items.push_back(std::move(item));
+    }
+    co_return response;
+  };
+  co_return co_await kv::WithTransaction(kv::FDBRetryStrategy(createRetryConfig()))
+      .run(kvEngine_->createReadonlyTransaction(), std::move(handler));
+}
 
 CoTryTask<UpdateCacheBlockAccessRsp> MetaOperator::updateCacheBlockAccess(UpdateCacheBlockAccessReq req) {
   CO_RETURN_ON_ERROR(req.valid());

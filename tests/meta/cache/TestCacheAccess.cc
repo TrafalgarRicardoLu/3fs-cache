@@ -164,11 +164,11 @@ TEST_F(TestCacheAccess, AppliesMonotonicGenerationFencedPartialBatch) {
     CO_ASSERT_EQ((*persisted)->lastAccessAt.toMicroseconds(), static_cast<int64_t>(newerNs / 1000));
 
     auto write = cluster.kvEngine()->createReadWriteTransaction();
-    auto evicting = co_await CacheBlockStore::load(*write, ready->key);
-    CO_ASSERT_OK(evicting);
-    CO_ASSERT_TRUE(evicting->has_value());
-    (*evicting)->state = cache::CacheBlockState::EVICTING;
-    CO_ASSERT_OK(co_await CacheBlockStore::store(*write, **evicting));
+    auto cleaning = co_await CacheBlockStore::load(*write, ready->key);
+    CO_ASSERT_OK(cleaning);
+    CO_ASSERT_TRUE(cleaning->has_value());
+    (*cleaning)->state = cache::CacheBlockState::CLEANING;
+    CO_ASSERT_OK(co_await CacheBlockStore::store(*write, **cleaning));
     CO_ASSERT_OK(co_await write->commit());
 
     update.items = {{ready->key, ready->cacheGeneration, newerNs + 1000}};

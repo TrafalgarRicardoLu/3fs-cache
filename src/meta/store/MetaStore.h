@@ -153,6 +153,7 @@ class MetaStore {
   OpPtr<FailCacheBlocksRsp> failCacheBlocks(const FailCacheBlocksReq &req);
 
   OpPtr<BeginCleanCacheBlocksRsp> beginCleanCacheBlocks(const BeginCleanCacheBlocksReq &req);
+  OpPtr<BeginEvictCacheBlocksRsp> beginEvictCacheBlocks(const BeginEvictCacheBlocksReq &req);
 
   OpPtr<FinishCleanCacheBlocksRsp> finishCleanCacheBlocks(const FinishCleanCacheBlocksReq &req);
 

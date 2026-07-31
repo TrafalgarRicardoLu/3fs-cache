@@ -53,6 +53,10 @@ std::string CacheBlockStore::generationKey(const cache::CacheBlockKey &key) {
   return Serializer::serRawArgs(kv::KeyPrefix::CacheBlock, uint8_t{1}, key.inode, key.block.toUnderType());
 }
 
+std::string CacheBlockStore::evictionEpochKey(const cache::CacheBlockKey &key) {
+  return Serializer::serRawArgs(kv::KeyPrefix::CacheBlock, uint8_t{2}, key.inode, key.block.toUnderType());
+}
+
 CoTryTask<std::optional<CacheBlockRecord>> CacheBlockStore::snapshotLoad(kv::IReadOnlyTransaction &txn,
                                                                          const cache::CacheBlockKey &key) {
   co_return co_await loadRecord(txn, key, true);
@@ -224,6 +228,23 @@ CoTryTask<cache::CacheGeneration> CacheBlockStore::allocateGeneration(kv::IReadW
   ++generation;
   CO_RETURN_ON_ERROR(co_await txn.set(packedKey, serde::serialize(generation)));
   co_return generation;
+}
+
+CoTryTask<cache::EvictionEpoch> CacheBlockStore::allocateEvictionEpoch(kv::IReadWriteTransaction &txn,
+                                                                       const cache::CacheBlockKey &key) {
+  CO_RETURN_ON_ERROR(key.valid());
+  auto packedKey = evictionEpochKey(key);
+  auto value = co_await txn.get(packedKey);
+  CO_RETURN_ON_ERROR(value);
+  cache::EvictionEpoch current;
+  if (value->has_value()) {
+    auto deserialized = serde::deserialize(current, **value);
+    if (deserialized.hasError()) co_return makeError(StatusCode::kDataCorruption, "invalid cache eviction epoch");
+  }
+  auto next = cache::nextEvictionEpoch(current);
+  CO_RETURN_ON_ERROR(next);
+  CO_RETURN_ON_ERROR(co_await txn.set(packedKey, serde::serialize(*next)));
+  co_return *next;
 }
 
 CoTryTask<CacheBlockRecord> CacheBlockStore::commitCharge(kv::IReadWriteTransaction &txn,

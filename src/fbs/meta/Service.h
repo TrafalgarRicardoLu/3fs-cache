@@ -1202,6 +1202,20 @@ struct CacheEvictionIdentity {
   SERDE_STRUCT_FIELD(placement, storage::PlacementIdentity{});
   SERDE_STRUCT_FIELD(evictionEpoch, cache::EvictionEpoch{});
   SERDE_STRUCT_FIELD(retireOperationId, Uuid::zero());
+  SERDE_STRUCT_FIELD(reason, cache::EvictionReason::INVALID);
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    RETURN_ON_ERROR(ready.valid());
+    RETURN_ON_ERROR(placement.valid());
+    if (evictionEpoch == cache::EvictionEpoch{} || retireOperationId == Uuid::zero() ||
+        reason == cache::EvictionReason::INVALID) {
+      return makeError(StatusCode::kInvalidArg, "invalid cache eviction identity");
+    }
+    return Void{};
+  }
+  bool operator==(const CacheEvictionIdentity &) const = default;
 };
 struct BeginEvictCacheBlocksRsp : RspBase {
   SERDE_STRUCT_FIELD(results, std::vector<Result<CacheEvictionIdentity>>{});
@@ -1214,6 +1228,7 @@ struct ListEvictingCacheBlocksReq : ReqBase {
 
  public:
   Result<Void> valid() const {
+    if (limit == 0) return makeError(StatusCode::kInvalidArg, "limit is zero");
     if (limit > cache::kMaxPhase2BatchItems) return makeError(CacheCode::kRequestTooLarge, "limit too large");
     return Void{};
   }

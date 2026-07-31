@@ -39,6 +39,9 @@ Result<Void> CacheBlockRecord::valid() const {
   if (state == cache::CacheBlockState::READY && chargeKind != cache::ChargeKind::COMMITTED) {
     return makeError(StatusCode::kInvalidArg, "READY record requires a committed charge");
   }
+  if (state == cache::CacheBlockState::EVICTING && chargeKind != cache::ChargeKind::COMMITTED) {
+    return makeError(StatusCode::kInvalidArg, "EVICTING record requires a committed charge");
+  }
   if (state == cache::CacheBlockState::LOADING &&
       (loaderId == Uuid::zero() || loadEpoch == 0 || cacheGeneration == cache::CacheGeneration{} ||
        leaseExpiresAt.isZero())) {
@@ -82,6 +85,17 @@ Result<Void> CacheBlockRecord::valid() const {
       case cache::CacheBlockState::NONE:
         return makeError(StatusCode::kInvalidArg, "terminal record cannot retain phase two identity");
     }
+  }
+  const bool hasEvictionIdentity = evictionEpoch != cache::EvictionEpoch{} || retireOperationId != Uuid::zero() ||
+                                   evictionReason != cache::EvictionReason::INVALID;
+  if (state == cache::CacheBlockState::EVICTING) {
+    if (!ready.has_value() || !placement.has_value() || !committedPermit.has_value() ||
+        evictionEpoch == cache::EvictionEpoch{} || retireOperationId == Uuid::zero() ||
+        evictionReason == cache::EvictionReason::INVALID) {
+      return makeError(StatusCode::kInvalidArg, "EVICTING record requires a complete eviction identity");
+    }
+  } else if (hasEvictionIdentity) {
+    return makeError(StatusCode::kInvalidArg, "eviction identity is only valid while EVICTING");
   }
   return Void{};
 }
