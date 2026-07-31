@@ -180,10 +180,21 @@ Result<Void> FuseClients::init(const flat::AppInfo &appInfo,
     cacheReporter = std::make_unique<client::cache::EnsureCachedReporter>(*cacheManagerStub,
                                                                           std::move(service),
                                                                           fuseConfig.read_cache().hint_timeout());
+    if (fuseConfig.read_cache().access_report_enabled()) {
+      client::cache::CacheAccessReporter::Config accessConfig;
+      accessConfig.flushThreshold = fuseConfig.read_cache().access_report_threshold();
+      accessConfig.maxBatchSize = fuseConfig.read_cache().access_report_batch_size();
+      accessConfig.maxBufferedItems = fuseConfig.read_cache().access_report_buffer_size();
+      accessConfig.flushInterval = fuseConfig.read_cache().access_report_interval();
+      accessConfig.requestTimeout = fuseConfig.read_cache().access_report_timeout();
+      cacheAccessReporter = std::make_unique<client::cache::CacheAccessReporter>(*cacheManagerStub, accessConfig);
+      RETURN_ON_ERROR(cacheAccessReporter->start());
+    }
     cacheReadPipeline = std::make_unique<client::cache::CacheReadPipeline>(*originMissReader,
                                                                            *readPlanner,
                                                                            *cacheHitReader,
-                                                                           cacheReporter.get());
+                                                                           cacheReporter.get(),
+                                                                           cacheAccessReporter.get());
   }
 
   iojqs.reserve(3);
@@ -247,6 +258,7 @@ void FuseClients::stop() {
     periodicSyncWorker->stopAndJoin();
     periodicSyncWorker.reset();
   }
+  if (cacheAccessReporter) cacheAccessReporter->stop();
   if (metaClient) {
     metaClient->stop();
     metaClient.reset();
@@ -264,6 +276,7 @@ void FuseClients::stop() {
     client.reset();
   }
   cacheReadPipeline.reset();
+  cacheAccessReporter.reset();
   cacheReporter.reset();
   cacheManagerStub.reset();
   cacheHitReader.reset();

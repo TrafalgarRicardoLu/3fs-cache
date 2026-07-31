@@ -39,6 +39,7 @@
 #include "PioV.h"
 #include "UserConfig.h"
 #include "cache/origin/RoutedObjectStore.h"
+#include "client/cache/CacheAccessReporter.h"
 #include "client/cache/CacheReadPipeline.h"
 #include "client/cache/ReadPlanner.h"
 #include "client/meta/MetaClient.h"
@@ -206,6 +207,7 @@ struct FuseClients {
   std::unique_ptr<client::cache::StorageCacheHitReader> cacheHitReader;
   std::unique_ptr<cache_manager::ICacheManagerServiceStub> cacheManagerStub;
   std::unique_ptr<client::cache::EnsureCachedReporter> cacheReporter;
+  std::unique_ptr<client::cache::CacheAccessReporter> cacheAccessReporter;
   std::unique_ptr<client::cache::CacheReadPipeline> cacheReadPipeline;
 
   std::unordered_map<Uuid, std::shared_ptr<RcInode>> originReadSessions;

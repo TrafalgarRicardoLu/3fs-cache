@@ -80,6 +80,9 @@ CoTryTask<size_t> CacheReadPipeline::read(const flat::UserInfo &user,
                                             .block = block.key.block.toUnderType(),
                                             .originId = origin.object.originId.toUnderType()});
         ranges.push_back({block.fileRange, std::move(*hit)});
+        if (accessReporter_ && block.ready) {
+          (void)accessReporter_->record(user, block.key, block.ready->cacheGeneration);
+        }
         continue;
       }
       if (reporter_) {

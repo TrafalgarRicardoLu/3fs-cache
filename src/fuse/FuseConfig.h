@@ -26,6 +26,12 @@ struct FuseConfig : public ConfigBase<FuseConfig> {
     CONFIG_ITEM(service_name, std::string{"fuse"});
     CONFIG_ITEM(service_token, std::string{});
     CONFIG_ITEM(hint_timeout, 500_ms, [](Duration value) { return value > 0_ns; });
+    CONFIG_ITEM(access_report_enabled, false);
+    CONFIG_ITEM(access_report_threshold, uint32_t{64}, ConfigCheckers::checkPositive);
+    CONFIG_ITEM(access_report_batch_size, uint32_t{256}, ConfigCheckers::checkPositive);
+    CONFIG_ITEM(access_report_buffer_size, uint32_t{4096}, ConfigCheckers::checkPositive);
+    CONFIG_ITEM(access_report_interval, 1_s, [](Duration value) { return value > 0_ns; });
+    CONFIG_ITEM(access_report_timeout, 200_ms, [](Duration value) { return value > 0_ns; });
     CONFIG_ITEM(max_concurrent_origin_requests, uint32_t{32}, ConfigCheckers::checkPositive);
     CONFIG_ITEM(max_inflight_origin_bytes, uint64_t{256_MB}, ConfigCheckers::checkPositive);
     CONFIG_OBJ_ARRAY(origins, CacheOrigin, 64, [](auto &) { return 0; });

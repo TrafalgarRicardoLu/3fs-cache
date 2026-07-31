@@ -3,6 +3,7 @@
 #include <optional>
 #include <span>
 
+#include "client/cache/CacheAccessReporter.h"
 #include "client/cache/CacheHitReader.h"
 #include "client/cache/EnsureCachedReporter.h"
 #include "client/cache/OriginMissReader.h"
@@ -19,11 +20,13 @@ class CacheReadPipeline {
   CacheReadPipeline(OriginMissReader &missReader,
                     ReadPlanner &planner,
                     ICacheHitReader &hitReader,
-                    IEnsureCachedReporter *reporter = nullptr)
+                    IEnsureCachedReporter *reporter = nullptr,
+                    ICacheAccessReporter *accessReporter = nullptr)
       : missReader_(missReader),
         planner_(&planner),
         hitReader_(&hitReader),
-        reporter_(reporter) {}
+        reporter_(reporter),
+        accessReporter_(accessReporter) {}
 
   CoTryTask<size_t> read(const meta::Inode &inode,
                          const std::optional<meta::SessionInfo> &session,
@@ -43,6 +46,7 @@ class CacheReadPipeline {
   ReadPlanner *planner_{nullptr};
   ICacheHitReader *hitReader_{nullptr};
   IEnsureCachedReporter *reporter_{nullptr};
+  ICacheAccessReporter *accessReporter_{nullptr};
 };
 
 }  // namespace hf3fs::client::cache

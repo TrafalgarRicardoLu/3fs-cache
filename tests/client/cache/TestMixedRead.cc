@@ -97,6 +97,19 @@ class MixedReporter final : public IEnsureCachedReporter {
   bool down{false};
 };
 
+class MixedAccessReporter final : public ICacheAccessReporter {
+ public:
+  bool record(const flat::UserInfo &,
+              const hf3fs::cache::CacheBlockKey &key,
+              hf3fs::cache::CacheGeneration generation,
+              uint64_t) final {
+    hits.emplace_back(key, generation);
+    return true;
+  }
+
+  std::vector<std::pair<hf3fs::cache::CacheBlockKey, hf3fs::cache::CacheGeneration>> hits;
+};
+
 meta::Inode originInode(const std::vector<uint8_t> &data) {
   return meta::server::Inode::newOriginFile(meta::InodeId{1},
                                             meta::Acl{},
@@ -117,7 +130,8 @@ TEST(TestMixedRead, ReadsHitsMissesAndFallsBackOnlyFailedHit) {
     MixedHitReader hitReader(data);
     hitReader.failure = MixedHitReader::Failure::CHECKSUM;
     MixedReporter reporter;
-    CacheReadPipeline pipeline(missReader, planner, hitReader, &reporter);
+    MixedAccessReporter accessReporter;
+    CacheReadPipeline pipeline(missReader, planner, hitReader, &reporter, &accessReporter);
     std::vector<uint8_t> output(10);
     auto result = co_await pipeline.read(flat::UserInfo{},
                                          source->inode,
@@ -132,6 +146,9 @@ TEST(TestMixedRead, ReadsHitsMissesAndFallsBackOnlyFailedHit) {
     CO_ASSERT_EQ(reporter.ensured.size(), size_t{2});
     CO_ASSERT_EQ(reporter.reported.size(), size_t{1});
     CO_ASSERT_EQ(reporter.reported[0].second, cache_manager::InvalidReason::CHECKSUM_MISMATCH);
+    CO_ASSERT_EQ(accessReporter.hits.size(), size_t{1});
+    CO_ASSERT_EQ(accessReporter.hits.front().first.block, hf3fs::cache::CacheBlockIndex{0});
+    CO_ASSERT_EQ(accessReporter.hits.front().second, hf3fs::cache::CacheGeneration{2});
   }());
 }
 

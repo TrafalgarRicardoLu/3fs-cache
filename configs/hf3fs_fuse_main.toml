@@ -36,6 +36,12 @@ cache_manager_address = 'TCP://127.0.0.1:8000'
 service_name = 'fuse'
 service_token = ''
 hint_timeout = '500ms'
+access_report_enabled = false
+access_report_threshold = 64
+access_report_batch_size = 256
+access_report_buffer_size = 4096
+access_report_interval = '1s'
+access_report_timeout = '200ms'
 max_concurrent_origin_requests = 32
 max_inflight_origin_bytes = 268435456
 
