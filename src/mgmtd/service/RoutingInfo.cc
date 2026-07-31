@@ -71,6 +71,10 @@ void RoutingInfo::localUpdateTargets(flat::NodeId nodeId,
         base.nodeId = nodeId;
         base.diskIndex = lti.diskIndex;
         base.usedSize = lti.usedSize;
+        if (lti.storageRole != storage::StorageRole::INVALID) {
+          base.physicalDiskId = lti.physicalDiskId;
+          base.storageRole = lti.storageRole;
+        }
       });
     } else {
       // only insert to orphans, not targets
@@ -82,6 +86,8 @@ void RoutingInfo::localUpdateTargets(flat::NodeId nodeId,
       ti.nodeId = nodeId;
       ti.diskIndex = lti.diskIndex;
       ti.usedSize = lti.usedSize;
+      ti.physicalDiskId = lti.physicalDiskId;
+      ti.storageRole = lti.storageRole;
     }
   }
 }
@@ -94,7 +100,16 @@ void RoutingInfo::insertNewChain(const flat::ChainInfo &chain) {
   for (const auto &t : chain.targets) {
     auto tid = t.targetId;
     XLOGF_IF(FATAL, targets.contains(tid), "Insert duplicated target {}", tid.toUnderType());
-    targets[tid] = TargetInfo(makeTargetInfo(cid, t), createdTime);
+    auto target = makeTargetInfo(cid, t);
+    if (auto orphan = orphanTargetsByTargetId.find(tid); orphan != orphanTargetsByTargetId.end()) {
+      target.nodeId = orphan->second.nodeId;
+      target.diskIndex = orphan->second.diskIndex;
+      target.usedSize = orphan->second.usedSize;
+      target.localState = orphan->second.localState;
+      target.physicalDiskId = orphan->second.physicalDiskId;
+      target.storageRole = orphan->second.storageRole;
+    }
+    targets[tid] = TargetInfo(std::move(target), createdTime);
     eraseOrphanTarget(tid);
   }
   newBornChains[cid] = createdTime;
@@ -103,7 +118,16 @@ void RoutingInfo::insertNewChain(const flat::ChainInfo &chain) {
 void RoutingInfo::insertNewTarget(flat::ChainId cid, const flat::ChainTargetInfo &cti) {
   auto tid = cti.targetId;
   XLOGF_IF(FATAL, targets.contains(tid), "Insert duplicated target {}", tid.toUnderType());
-  targets[tid] = TargetInfo(makeTargetInfo(cid, cti), SteadyClock::now());
+  auto target = makeTargetInfo(cid, cti);
+  if (auto orphan = orphanTargetsByTargetId.find(tid); orphan != orphanTargetsByTargetId.end()) {
+    target.nodeId = orphan->second.nodeId;
+    target.diskIndex = orphan->second.diskIndex;
+    target.usedSize = orphan->second.usedSize;
+    target.localState = orphan->second.localState;
+    target.physicalDiskId = orphan->second.physicalDiskId;
+    target.storageRole = orphan->second.storageRole;
+  }
+  targets[tid] = TargetInfo(std::move(target), SteadyClock::now());
   eraseOrphanTarget(tid);
 }
 

@@ -63,5 +63,17 @@ TEST(CacheChainTable, RequiresEveryActiveMetadataCapability) {
   EXPECT_TRUE(routing.cacheFeatureEnabled(1, 1));
 }
 
+TEST(CacheChainTable, PersistsTargetStorageIdentity) {
+  flat::TargetInfo original;
+  original.targetId = flat::TargetId{7};
+  original.physicalDiskId.uuid = Uuid::random();
+  original.storageRole = storage::StorageRole::CACHE_ONLY;
+
+  flat::TargetInfo decoded;
+  ASSERT_FALSE(serde::deserialize(decoded, serde::serialize(original)).hasError());
+  EXPECT_EQ(decoded.physicalDiskId, original.physicalDiskId);
+  EXPECT_EQ(decoded.storageRole, storage::StorageRole::CACHE_ONLY);
+}
+
 }  // namespace
 }  // namespace hf3fs::mgmtd::test

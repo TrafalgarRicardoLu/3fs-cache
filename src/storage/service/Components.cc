@@ -247,6 +247,8 @@ void Components::updateHeartbeatPayload(const TargetMap &targetMap, bool offline
     targetInfo.localState = offline ? flat::LocalTargetState::OFFLINE : target.localState;
     targetInfo.diskIndex = target.diskIndex;
     targetInfo.lowSpace = target.lowSpace;
+    targetInfo.physicalDiskId = target.physicalDiskId;
+    targetInfo.storageRole = target.storageRole;
     monitor::TagSet tag;
     tag.addTag("instance", fmt::format("{}", targetId));
     targetStateRecorder.set(uint32_t(target.localState), tag);

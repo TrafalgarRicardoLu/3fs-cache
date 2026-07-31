@@ -201,6 +201,7 @@ bump_routing_info_version_interval = '5s'
 check_status_interval = '10s'
 client_session_timeout = '20min'
 enable_routinginfo_cache = true
+enable_storage_role_enforcement = false
 extend_lease_check_release_version = true
 extend_lease_interval = '10s'
 heartbeat_fail_interval = '1min'

@@ -112,6 +112,12 @@ class MgmtdOperatorTest : public ::testing::Test {
     co_return co_await mgmtd.setChainTable(mgmtd::SetChainTableReq::create(clusterId, tableId, chains), {});
   }
 
+  CoTryTask<mgmtd::SetChainsRsp> setChains(MgmtdOperator &mgmtd,
+                                           const String &clusterId,
+                                           std::vector<flat::ChainSetting> chains) {
+    co_return co_await mgmtd.setChains(mgmtd::SetChainsReq::create(clusterId, std::move(chains)), {});
+  }
+
   CoTryTask<mgmtd::ExtendClientSessionRsp> extendClientSession(MgmtdOperator &mgmtd, auto &&...args) {
     co_return co_await mgmtd.extendClientSession(
         mgmtd::ExtendClientSessionReq::create(std::forward<decltype(args)>(args)...),
@@ -331,12 +337,12 @@ TEST_F(MgmtdOperatorTest, testHeartbeat) {
     {
       now_ = UtcTime::fromMicroseconds(10500);
       CO_AWAIT_ASSERT_OK(heartbeat(mgmtd, "clusterId", from(flat::NodeId(1), info1), now_));
-      auto* node = co_await MgmtdTestHelper(mgmtd).getNodeInfo(flat::NodeId(1));
+      auto *node = co_await MgmtdTestHelper(mgmtd).getNodeInfo(flat::NodeId(1));
       CO_ASSERT_EQ(node->base().type, flat::NodeType::MGMTD);
       CO_ASSERT_EQ(node->base().status, flat::NodeStatus::HEARTBEAT_CONNECTED);
       CO_ASSERT_EQ(node->base().app, info1.app) << fmt::format("node.app = {} info1.app = {}",
-                                                              serde::toJsonString(node->base().app),
-                                                              serde::toJsonString(info1.app));
+                                                               serde::toJsonString(node->base().app),
+                                                               serde::toJsonString(info1.app));
       CO_ASSERT_EQ(node->base().lastHeartbeatTs, now_);
     }
 
@@ -368,7 +374,7 @@ TEST_F(MgmtdOperatorTest, testHeartbeat) {
       info2.app.serviceGroups[0].services.emplace("OtherService");
       CO_AWAIT_ASSERT_OK(heartbeat(mgmtd, "clusterId", from(flat::NodeId(1), info2), now_));
 
-      auto* node = co_await MgmtdTestHelper(mgmtd).getNodeInfo(flat::NodeId(1));
+      auto *node = co_await MgmtdTestHelper(mgmtd).getNodeInfo(flat::NodeId(1));
       CO_ASSERT_EQ(node->base().app, info2.app);
     }
 
@@ -409,14 +415,14 @@ TEST_F(MgmtdOperatorTest, testHeartbeat) {
 
     // reconnected
     {
-      auto* innerNode = co_await MgmtdTestHelper(mgmtd).getNodeInfo(flat::NodeId(1));
+      auto *innerNode = co_await MgmtdTestHelper(mgmtd).getNodeInfo(flat::NodeId(1));
       innerNode->base().status = flat::NodeStatus::HEARTBEAT_FAILED;
 
       now_ = UtcTime::fromMicroseconds(10504);
       info1.hbVersion = flat::HeartbeatVersion{7};
       CO_AWAIT_ASSERT_OK(heartbeat(mgmtd, "clusterId", from(flat::NodeId(1), info1), now_));
 
-      auto* node = co_await MgmtdTestHelper(mgmtd).getNodeInfo(flat::NodeId(1));
+      auto *node = co_await MgmtdTestHelper(mgmtd).getNodeInfo(flat::NodeId(1));
       CO_ASSERT_EQ(node->base().status, flat::NodeStatus::HEARTBEAT_CONNECTED);
       CO_ASSERT_EQ(node->base().lastHeartbeatTs, now_);
     }
@@ -424,7 +430,7 @@ TEST_F(MgmtdOperatorTest, testHeartbeat) {
     // reject heartbeats from offlined nodes
     {
       // TODO: migrate to a formal method
-      auto* innerNode = co_await MgmtdTestHelper(mgmtd).getNodeInfo(flat::NodeId(1));
+      auto *innerNode = co_await MgmtdTestHelper(mgmtd).getNodeInfo(flat::NodeId(1));
       innerNode->base().status = flat::NodeStatus::DISABLED;
 
       CO_AWAIT_ASSERT_ERROR(MgmtdCode::kHeartbeatFail,
@@ -445,12 +451,122 @@ TEST_F(MgmtdOperatorTest, testHeartbeat) {
 
       CO_AWAIT_ASSERT_OK(
           heartbeat(mgmtd1, "clusterId", from(flat::NodeId(1), info1), UtcTime::fromMicroseconds(12500)));
-      auto* node = co_await MgmtdTestHelper(mgmtd1).getNodeInfo(flat::NodeId(1));
+      auto *node = co_await MgmtdTestHelper(mgmtd1).getNodeInfo(flat::NodeId(1));
       CO_ASSERT_EQ(node->base().type, flat::NodeType::MGMTD);
       CO_ASSERT_EQ(node->base().status, flat::NodeStatus::HEARTBEAT_CONNECTED);
       CO_ASSERT_EQ(node->base().app, info1.app);
       CO_ASSERT_EQ(node->base().lastHeartbeatTs, now_);
     }
+  }());
+}
+
+TEST_F(MgmtdOperatorTest, testStorageRoleIsolation) {
+  auto config = defaultConfig_.clone();
+  config.set_enable_storage_role_enforcement(true);
+  MgmtdOperator mgmtd(env_, config);
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    co_await MgmtdTestHelper(mgmtd).extendLease();
+    CO_AWAIT_ASSERT_OK(registerNode(mgmtd, "clusterId", flat::NodeId{1}, flat::NodeType::STORAGE));
+
+    auto makeHeartbeat = [&](flat::HeartbeatVersion version, std::vector<flat::LocalTargetInfo> targets) {
+      flat::StorageHeartbeatInfo payload;
+      payload.targets = std::move(targets);
+      flat::HeartbeatInfo info;
+      info.app.nodeId = flat::NodeId{1};
+      info.app.hostname = "storage-1";
+      info.hbVersion = version;
+      info.set(std::move(payload));
+      return info;
+    };
+    auto makeTarget = [](flat::TargetId targetId, storage::PhysicalDiskId diskId, storage::StorageRole role) {
+      flat::LocalTargetInfo target;
+      target.targetId = targetId;
+      target.localState = flat::LocalTargetState::ONLINE;
+      target.physicalDiskId = diskId;
+      target.storageRole = role;
+      return target;
+    };
+
+    storage::PhysicalDiskId cacheDisk;
+    cacheDisk.uuid = Uuid::random();
+    storage::PhysicalDiskId userDisk;
+    userDisk.uuid = Uuid::random();
+
+    // Missing identity and conflicting roles on one disk fail closed.
+    flat::LocalTargetInfo missingIdentity;
+    missingIdentity.targetId = flat::TargetId{4};
+    missingIdentity.localState = flat::LocalTargetState::ONLINE;
+    CO_AWAIT_ASSERT_ERROR(
+        CacheCode::kRoleMismatch,
+        heartbeat(mgmtd, "clusterId", makeHeartbeat(flat::HeartbeatVersion{1}, {missingIdentity}), now_));
+    CO_AWAIT_ASSERT_ERROR(
+        CacheCode::kRoleMismatch,
+        heartbeat(mgmtd,
+                  "clusterId",
+                  makeHeartbeat(flat::HeartbeatVersion{1},
+                                {makeTarget(flat::TargetId{1}, cacheDisk, storage::StorageRole::CACHE_ONLY),
+                                 makeTarget(flat::TargetId{2}, cacheDisk, storage::StorageRole::USER_DATA)}),
+                  now_));
+
+    auto validTargets = std::vector{makeTarget(flat::TargetId{1}, cacheDisk, storage::StorageRole::CACHE_ONLY),
+                                    makeTarget(flat::TargetId{2}, cacheDisk, storage::StorageRole::CACHE_ONLY),
+                                    makeTarget(flat::TargetId{3}, userDisk, storage::StorageRole::USER_DATA)};
+    CO_AWAIT_ASSERT_OK(heartbeat(mgmtd, "clusterId", makeHeartbeat(flat::HeartbeatVersion{1}, validTargets), now_));
+
+    auto chain = [](flat::ChainId chainId, flat::TargetId targetId) {
+      flat::ChainSetting setting;
+      setting.chainId = chainId;
+      flat::ChainTargetSetting target;
+      target.targetId = targetId;
+      setting.targets.push_back(target);
+      return setting;
+    };
+    CO_AWAIT_ASSERT_OK(setChains(mgmtd,
+                                 "clusterId",
+                                 {chain(flat::ChainId{1}, flat::TargetId{1}),
+                                  chain(flat::ChainId{2}, flat::TargetId{2}),
+                                  chain(flat::ChainId{3}, flat::TargetId{3})}));
+
+    auto setTable = [&](flat::ChainTableId tableId,
+                        flat::ChainId chainId,
+                        flat::ChainTableRole role) -> CoTryTask<mgmtd::SetChainTableRsp> {
+      auto req = mgmtd::SetChainTableReq::create("clusterId", tableId, std::vector{chainId});
+      req.role = role;
+      if (role == flat::ChainTableRole::CACHE_DATA) {
+        req.logicalCapacity = 1;
+        req.checksumType = flat::ChainTableChecksumType::CRC32C;
+      }
+      co_return co_await mgmtd.setChainTable(std::move(req), {});
+    };
+    CO_AWAIT_ASSERT_OK(setTable(flat::ChainTableId{1}, flat::ChainId{1}, flat::ChainTableRole::CACHE_DATA));
+    CO_AWAIT_ASSERT_ERROR(CacheCode::kRoleMismatch,
+                          setTable(flat::ChainTableId{2}, flat::ChainId{2}, flat::ChainTableRole::USER_DATA));
+    CO_AWAIT_ASSERT_OK(setTable(flat::ChainTableId{3}, flat::ChainId{3}, flat::ChainTableRole::USER_DATA));
+
+    auto routing = co_await getRoutingInfo(mgmtd, "clusterId", flat::RoutingInfoVersion{0});
+    CO_ASSERT_OK(routing);
+    CO_ASSERT_TRUE(routing->info.has_value());
+    CO_ASSERT_FALSE(routing->info->chainTables.contains(flat::ChainTableId{2}));
+    CO_ASSERT_EQ(routing->info->targets.at(flat::TargetId{1}).physicalDiskId, cacheDisk);
+    CO_ASSERT_EQ(routing->info->targets.at(flat::TargetId{1}).storageRole, storage::StorageRole::CACHE_ONLY);
+
+    storage::PhysicalDiskId anotherUserDisk;
+    anotherUserDisk.uuid = Uuid::random();
+    validTargets.push_back(makeTarget(flat::TargetId{4}, anotherUserDisk, storage::StorageRole::USER_DATA));
+    CO_AWAIT_ASSERT_OK(heartbeat(mgmtd, "clusterId", makeHeartbeat(flat::HeartbeatVersion{2}, validTargets), now_));
+    auto update = mgmtd::UpdateChainReq::create("clusterId",
+                                                flat::UserInfo{},
+                                                flat::ChainId{1},
+                                                flat::TargetId{4},
+                                                mgmtd::UpdateChainReq::Mode::ADD);
+    CO_AWAIT_ASSERT_ERROR(CacheCode::kRoleMismatch, mgmtd.updateChain(std::move(update), {}));
+    routing = co_await getRoutingInfo(mgmtd, "clusterId", flat::RoutingInfoVersion{0});
+    CO_ASSERT_OK(routing);
+    CO_ASSERT_EQ(routing->info->chains.at(flat::ChainId{1}).targets.size(), 1);
+
+    validTargets[0].storageRole = storage::StorageRole::USER_DATA;
+    CO_AWAIT_ASSERT_ERROR(CacheCode::kRoleMismatch,
+                          heartbeat(mgmtd, "clusterId", makeHeartbeat(flat::HeartbeatVersion{3}, validTargets), now_));
   }());
 }
 
@@ -491,7 +607,7 @@ TEST_F(MgmtdOperatorTest, testRecovery) {
 
     co_await MgmtdTestHelper(*mgmtd1).extendLease();
 
-    auto* node = co_await MgmtdTestHelper(*mgmtd1).getNodeInfo(flat::NodeId(1));
+    auto *node = co_await MgmtdTestHelper(*mgmtd1).getNodeInfo(flat::NodeId(1));
     CO_ASSERT_EQ(node->base().status, flat::NodeStatus::HEARTBEAT_CONNECTING);
 
     node = co_await MgmtdTestHelper(*mgmtd1).getNodeInfo(flat::NodeId(2));

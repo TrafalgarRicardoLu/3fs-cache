@@ -20,28 +20,13 @@
 #include "fbs/core/user/User.h"
 #include "fbs/mgmtd/MgmtdTypes.h"
 #include "fbs/mgmtd/NodeInfo.h"
+#include "fbs/storage/StorageIdentity.h"
 
 namespace hf3fs::storage {
 using ChainId = ::hf3fs::flat::ChainId;
 using ChainVer = ::hf3fs::flat::ChainVersion;
 using TargetId = ::hf3fs::flat::TargetId;
 using NodeId = ::hf3fs::flat::NodeId;
-
-struct PhysicalDiskId {
-  SERDE_STRUCT_FIELD(uuid, Uuid::zero());
-
- public:
-  Result<Void> valid() const;
-  bool operator==(const PhysicalDiskId &) const = default;
-  bool operator<(const PhysicalDiskId &other) const { return uuid < other.uuid; }
-};
-static_assert(serde::Serializable<PhysicalDiskId>);
-
-enum class StorageRole : uint8_t {
-  INVALID = 0,
-  USER_DATA = 1,
-  CACHE_ONLY = 2,
-};
 
 STRONG_TYPEDEF(uint32_t, ChunkVer);
 STRONG_TYPEDEF(uint64_t, RequestId);

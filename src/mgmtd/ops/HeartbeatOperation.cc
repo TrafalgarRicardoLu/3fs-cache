@@ -6,6 +6,86 @@
 
 namespace hf3fs::mgmtd {
 namespace {
+bool hasStorageIdentity(const flat::TargetInfo &target) {
+  return target.physicalDiskId != storage::PhysicalDiskId{} || target.storageRole != storage::StorageRole::INVALID;
+}
+
+bool hasStorageIdentity(const flat::LocalTargetInfo &target) {
+  return target.physicalDiskId != storage::PhysicalDiskId{} || target.storageRole != storage::StorageRole::INVALID;
+}
+
+Result<Void> validateStorageIdentities(core::ServiceOperation &ctx,
+                                       const RoutingInfo &routingInfo,
+                                       const flat::StorageHeartbeatInfo &heartbeat,
+                                       bool requireIdentity) {
+  std::map<storage::PhysicalDiskId, storage::StorageRole> diskRoles;
+  auto remember = [&](const flat::TargetInfo &target) -> Result<Void> {
+    if (!hasStorageIdentity(target)) return Void{};
+    if (target.physicalDiskId == storage::PhysicalDiskId{} ||
+        (target.storageRole != storage::StorageRole::USER_DATA &&
+         target.storageRole != storage::StorageRole::CACHE_ONLY)) {
+      RETURN_AND_LOG_OP_ERR(ctx,
+                            CacheCode::kRoleMismatch,
+                            "Target {} has incomplete storage identity",
+                            target.targetId);
+    }
+    auto [it, inserted] = diskRoles.emplace(target.physicalDiskId, target.storageRole);
+    if (!inserted && it->second != target.storageRole) {
+      RETURN_AND_LOG_OP_ERR(ctx,
+                            CacheCode::kRoleMismatch,
+                            "Physical disk {} reports conflicting roles {} and {}",
+                            target.physicalDiskId.uuid,
+                            magic_enum::enum_name(it->second),
+                            magic_enum::enum_name(target.storageRole));
+    }
+    return Void{};
+  };
+  for (const auto &[_, target] : routingInfo.getTargets()) RETURN_ON_ERROR(remember(target.base()));
+  for (const auto &[_, target] : routingInfo.getOrphanTargets()) RETURN_ON_ERROR(remember(target));
+
+  for (const auto &target : heartbeat.targets) {
+    const auto incomingKnown = hasStorageIdentity(target);
+    if (requireIdentity && !incomingKnown) {
+      RETURN_AND_LOG_OP_ERR(ctx, CacheCode::kRoleMismatch, "Target {} is missing storage identity", target.targetId);
+    }
+    if (!incomingKnown) continue;
+    if (target.physicalDiskId == storage::PhysicalDiskId{} ||
+        (target.storageRole != storage::StorageRole::USER_DATA &&
+         target.storageRole != storage::StorageRole::CACHE_ONLY)) {
+      RETURN_AND_LOG_OP_ERR(ctx,
+                            CacheCode::kRoleMismatch,
+                            "Target {} has incomplete storage identity",
+                            target.targetId);
+    }
+
+    const flat::TargetInfo *existing = nullptr;
+    if (auto it = routingInfo.getTargets().find(target.targetId); it != routingInfo.getTargets().end()) {
+      existing = &it->second.base();
+    } else if (auto it = routingInfo.getOrphanTargets().find(target.targetId);
+               it != routingInfo.getOrphanTargets().end()) {
+      existing = &it->second;
+    }
+    if (existing && hasStorageIdentity(*existing) &&
+        (existing->physicalDiskId != target.physicalDiskId || existing->storageRole != target.storageRole)) {
+      RETURN_AND_LOG_OP_ERR(ctx,
+                            CacheCode::kRoleMismatch,
+                            "Target {} changed physical disk identity or role",
+                            target.targetId);
+    }
+
+    auto [it, inserted] = diskRoles.emplace(target.physicalDiskId, target.storageRole);
+    if (!inserted && it->second != target.storageRole) {
+      RETURN_AND_LOG_OP_ERR(ctx,
+                            CacheCode::kRoleMismatch,
+                            "Physical disk {} reports conflicting roles {} and {}",
+                            target.physicalDiskId.uuid,
+                            magic_enum::enum_name(it->second),
+                            magic_enum::enum_name(target.storageRole));
+    }
+  }
+  return Void{};
+}
+
 flat::NodeInfo onNewNode(const flat::HeartbeatInfo &hb, UtcTime now) {
   flat::NodeInfo sn;
   sn.app = hb.app;
@@ -117,6 +197,7 @@ Result<Void> prepareHandleHeartbeat(MgmtdState &state,
           break;
       }
     }
+    RETURN_ON_ERROR(validateStorageIdentities(ctx, ri, shb, state.config_.enable_storage_role_enforcement()));
   }
 
   return Void{};

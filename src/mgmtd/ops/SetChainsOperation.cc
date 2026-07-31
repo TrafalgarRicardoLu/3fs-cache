@@ -1,5 +1,6 @@
 #include "SetChainsOperation.h"
 
+#include "mgmtd/service/StorageRoleValidation.h"
 #include "mgmtd/service/helpers.h"
 
 namespace hf3fs::mgmtd {
@@ -115,6 +116,14 @@ CoTryTask<SetChainsRsp> SetChainsOperation::handle(MgmtdState &state) {
       robin_hood::unordered_set<flat::TargetId> newTargets;
       CO_RETURN_ON_ERROR(
           checkChains(*this, dataPtr->routingInfo, std::span(chains.begin(), chains.size()), newChains, newTargets));
+      for (const auto &chain : chains) {
+        for (const auto &target : chain.targets) {
+          CO_RETURN_ON_ERROR(validateTargetStorageRole(dataPtr->routingInfo,
+                                                       target.targetId,
+                                                       std::nullopt,
+                                                       state.config_.enable_storage_role_enforcement()));
+        }
+      }
     }
 
     if (newChains.empty()) co_return SetChainsRsp::create();

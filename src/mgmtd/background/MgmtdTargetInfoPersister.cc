@@ -22,8 +22,9 @@ struct Op : core::ServiceOperationWithMetric<"MgmtdService", OP_NAME, "bg"> {
       for (const auto &[tid, ti] : ri.getTargets()) {
         if (ti.locationInitLoaded  // the persisted location is known
             && ti.base().nodeId    // the actual location is known
-            && (ti.persistedNodeId != ti.base().nodeId ||
-                ti.persistedDiskIndex != ti.base().diskIndex)  // and they are different
+            && (ti.persistedNodeId != ti.base().nodeId || ti.persistedDiskIndex != ti.base().diskIndex ||
+                ti.persistedPhysicalDiskId != ti.base().physicalDiskId ||
+                ti.persistedStorageRole != ti.base().storageRole)  // and they are different
         ) {
           candidates.push_back(ti.base());
           if (static_cast<int>(candidates.size()) >= state.config_.target_info_persist_batch()) break;
@@ -51,6 +52,8 @@ struct Op : core::ServiceOperationWithMetric<"MgmtdService", OP_NAME, "bg"> {
         dataPtr->routingInfo.updateTarget(persisted.targetId, [&](auto &ti) {
           ti.persistedNodeId = persisted.nodeId;
           ti.persistedDiskIndex = persisted.diskIndex;
+          ti.persistedPhysicalDiskId = persisted.physicalDiskId;
+          ti.persistedStorageRole = persisted.storageRole;
           LOG_OP_DBG(*this,
                      "TargetInfo of {} persisted, nodeId={}, diskIndex={}",
                      persisted.targetId,

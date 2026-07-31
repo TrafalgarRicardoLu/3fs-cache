@@ -1,5 +1,6 @@
 #include "SetChainTableOperation.h"
 
+#include "mgmtd/service/StorageRoleValidation.h"
 #include "mgmtd/service/helpers.h"
 
 namespace hf3fs::mgmtd {
@@ -56,6 +57,9 @@ CoTryTask<SetChainTableRsp> SetChainTableOperation::handle(MgmtdState &state) {
       auto dataPtr = co_await state.data_.coSharedLock();
 
       CO_RETURN_ON_ERROR(checkChains(*this, dataPtr->routingInfo, newChainTable.chains));
+      CO_RETURN_ON_ERROR(validateChainTableStorageRoles(dataPtr->routingInfo,
+                                                        newChainTable,
+                                                        state.config_.enable_storage_role_enforcement()));
 
       auto ctit = dataPtr->routingInfo.chainTables.find(tableId);
       if (ctit != dataPtr->routingInfo.chainTables.end()) {

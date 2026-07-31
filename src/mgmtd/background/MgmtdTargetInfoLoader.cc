@@ -60,6 +60,8 @@ struct Op : core::ServiceOperationWithMetric<"MgmtdService", OP_NAME, "bg"> {
           ti.locationInitLoaded = true;
           ti.persistedNodeId = loaded.nodeId;
           ti.persistedDiskIndex = loaded.diskIndex;
+          ti.persistedPhysicalDiskId = loaded.physicalDiskId;
+          ti.persistedStorageRole = loaded.storageRole;
           LOG_OP_DBG(*this,
                      "TargetInfo of {} loaded, nodeId={}, diskIndex={}",
                      loaded.targetId,
@@ -69,6 +71,14 @@ struct Op : core::ServiceOperationWithMetric<"MgmtdService", OP_NAME, "bg"> {
             ti.base().nodeId = loaded.nodeId;
             ti.base().diskIndex = loaded.diskIndex;
             LOG_OP_DBG(*this, "Fill TargetInfo of {}", loaded.targetId);
+          }
+          if (loaded.storageRole != storage::StorageRole::INVALID) {
+            if (ti.base().storageRole != storage::StorageRole::INVALID &&
+                (ti.base().physicalDiskId != loaded.physicalDiskId || ti.base().storageRole != loaded.storageRole)) {
+              LOG_OP_ERR(*this, "TargetInfo of {} heartbeat identity conflicts with persisted identity", loaded.targetId);
+            }
+            ti.base().physicalDiskId = loaded.physicalDiskId;
+            ti.base().storageRole = loaded.storageRole;
           }
         };
         dataPtr->routingInfo.updateTarget(tid, std::move(updater));

@@ -15,5 +15,7 @@ struct TargetInfo : public serde::SerdeHelper<TargetInfo> {
   SERDE_STRUCT_FIELD(nodeId, std::optional<NodeId>{});
   SERDE_STRUCT_FIELD(diskIndex, std::optional<uint32_t>{});
   SERDE_STRUCT_FIELD(usedSize, uint64_t{});
+  SERDE_STRUCT_FIELD(physicalDiskId, storage::PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(storageRole, storage::StorageRole::INVALID);
 };
 }  // namespace hf3fs::flat

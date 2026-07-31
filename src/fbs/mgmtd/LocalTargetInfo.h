@@ -3,6 +3,7 @@
 #include "MgmtdTypes.h"
 #include "common/serde/SerdeComparisons.h"
 #include "common/serde/SerdeHelper.h"
+#include "fbs/storage/StorageIdentity.h"
 
 namespace hf3fs::flat {
 struct LocalTargetInfo : public serde::SerdeHelper<LocalTargetInfo> {
@@ -14,5 +15,7 @@ struct LocalTargetInfo : public serde::SerdeHelper<LocalTargetInfo> {
   SERDE_STRUCT_FIELD(usedSize, uint64_t{});
   SERDE_STRUCT_FIELD(chainVersion, ChainVersion{});
   SERDE_STRUCT_FIELD(lowSpace, false);
+  SERDE_STRUCT_FIELD(physicalDiskId, storage::PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(storageRole, storage::StorageRole::INVALID);
 };
 }  // namespace hf3fs::flat

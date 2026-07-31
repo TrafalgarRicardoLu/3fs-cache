@@ -1,6 +1,7 @@
 #include "UpdateChainOperation.h"
 
 #include "common/utils/StringUtils.h"
+#include "mgmtd/service/StorageRoleValidation.h"
 #include "mgmtd/service/helpers.h"
 #include "mgmtd/service/updateChain.h"
 
@@ -40,6 +41,16 @@ CoTryTask<UpdateChainRsp> UpdateChainOperation::handle(MgmtdState &state) {
       auto tit = ri.getTargets().find(req.targetId);
       if (req.mode == UpdateChainReq::Mode::ADD && tit != ri.getTargets().end()) {
         CO_RETURN_AND_LOG_OP_ERR(*this, MgmtdCode::kTargetExisted, "target: {}", req.targetId.toUnderType());
+      }
+      auto expectedRoleResult = storageRoleForChain(ri, req.chainId);
+      CO_RETURN_ON_ERROR(expectedRoleResult);
+      auto expectedRole = *expectedRoleResult;
+      if (addTarget) {
+        CO_RETURN_ON_ERROR(
+            validateTargetStorageRole(ri, req.targetId, expectedRole, state.config_.enable_storage_role_enforcement()));
+      } else if (expectedRole) {
+        CO_RETURN_ON_ERROR(
+            validateChainStorageRole(ri, req.chainId, *expectedRole, state.config_.enable_storage_role_enforcement()));
       }
       chainInfo = it->second;
     }

@@ -12,6 +12,8 @@ class TargetInfo : public WithTimestamp<flat::TargetInfo> {
   bool locationInitLoaded = false;
   std::optional<flat::NodeId> persistedNodeId;
   std::optional<uint32_t> persistedDiskIndex;
+  storage::PhysicalDiskId persistedPhysicalDiskId;
+  storage::StorageRole persistedStorageRole = storage::StorageRole::INVALID;
 
   SteadyTime importantInfoChangedTime = SteadyClock::now();
 };

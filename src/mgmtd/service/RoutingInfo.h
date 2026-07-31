@@ -56,6 +56,7 @@ struct RoutingInfo {
   void removeTarget(flat::ChainId cid, flat::TargetId tid);
 
   const TargetMap &getTargets() const { return targets; }
+  const OrphanTargetsByTargetId &getOrphanTargets() const { return orphanTargetsByTargetId; }
 
   auto updateTarget(flat::TargetId tid, auto &&func) {
     XLOGF_IF(DFATAL, !targets.contains(tid), "tid = {}", tid);

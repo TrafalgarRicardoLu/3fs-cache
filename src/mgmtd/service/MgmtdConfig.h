@@ -37,5 +37,6 @@ struct MgmtdConfig : ConfigBase<MgmtdConfig> {
   CONFIG_OBJ(user_cache, core::UserCache::Config);
   CONFIG_HOT_UPDATED_ITEM(enable_routinginfo_cache, true);
   CONFIG_HOT_UPDATED_ITEM(only_accept_client_uuid, false);
+  CONFIG_HOT_UPDATED_ITEM(enable_storage_role_enforcement, false);
 };
 }  // namespace hf3fs::mgmtd
