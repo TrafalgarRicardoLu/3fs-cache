@@ -18,6 +18,18 @@ struct StorageTargetsHelper;
 
 namespace hf3fs::storage {
 
+struct CacheDiskPhysicalCapacity {
+  uint64_t capacityBytes = 0;
+  uint64_t physicalUsedBytes = 0;
+  uint64_t allocatableBytes = 0;
+  uint64_t reservedBytes = 0;
+};
+
+CacheDiskPhysicalCapacity calculateCacheDiskPhysicalCapacity(const CacheTargetPhysicalUsage &targetUsage,
+                                                             uint64_t engineAllocatedBytes,
+                                                             uint64_t engineReservedBytes,
+                                                             uint64_t filesystemAvailableBytes);
+
 class StorageTargets {
  public:
   class Config : public ConfigBase<Config> {
@@ -28,6 +40,9 @@ class StorageTargets {
     CONFIG_HOT_UPDATED_ITEM(space_info_cache_timeout, 5_s);
     CONFIG_HOT_UPDATED_ITEM(allow_disk_without_uuid, false);
     CONFIG_HOT_UPDATED_ITEM(create_engine_path, true);
+    CONFIG_HOT_UPDATED_ITEM(cache_admission_high_watermark, 0.9, [](double value) {
+      return value > 0.0 && value <= 1.0;
+    });
     CONFIG_OBJ(storage_target, StorageTarget::Config);
   };
 

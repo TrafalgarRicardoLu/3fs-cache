@@ -58,6 +58,15 @@ TEST(Phase2CacheCommon, ServiceContractsRoundTripAndEnforceBatchLimit) {
   storage::PrepareCachePermitsReq permits;
   permits.items.resize(kMaxPhase2BatchItems + 1);
   ASSERT_ERROR(permits.valid(), CacheCode::kRequestTooLarge);
+
+  storage::QueryCacheSpaceReq space;
+  space.footprints.push_back({flat::TargetId{7}, 1_MB, 17});
+  space.cacheProtocolVersion = kCacheProtocolVersion;
+  storage::QueryCacheSpaceReq decodedSpace;
+  ASSERT_TRUE(serde::deserialize(decodedSpace, serde::serialize(space)));
+  ASSERT_TRUE(decodedSpace.valid());
+  ASSERT_EQ(decodedSpace.footprints.size(), 1);
+  EXPECT_EQ(decodedSpace.footprints.front().payloadLength, 17);
 }
 
 TEST(Phase2CacheCommon, KeepsCapacityErrorNamesStable) {

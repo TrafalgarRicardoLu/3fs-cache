@@ -6,6 +6,7 @@
 #include <folly/experimental/coro/Sleep.h>
 #include <folly/experimental/coro/Task.h>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <sys/statvfs.h>
 #include <unordered_map>
@@ -76,9 +77,29 @@ Result<PhysicalDiskConfig> loadOrCreatePhysicalDiskConfig(const Path &diskPath, 
   return config;
 }
 
+uint64_t saturatingAdd(uint64_t lhs, uint64_t rhs) {
+  if (rhs > std::numeric_limits<uint64_t>::max() - lhs) return std::numeric_limits<uint64_t>::max();
+  return lhs + rhs;
+}
+
 }  // namespace
 
 using namespace std::chrono_literals;
+
+CacheDiskPhysicalCapacity calculateCacheDiskPhysicalCapacity(const CacheTargetPhysicalUsage &targetUsage,
+                                                             uint64_t engineAllocatedBytes,
+                                                             uint64_t engineReservedBytes,
+                                                             uint64_t filesystemAvailableBytes) {
+  CacheDiskPhysicalCapacity result;
+  auto engineActive = engineAllocatedBytes >= engineReservedBytes ? engineAllocatedBytes - engineReservedBytes : 0;
+  result.physicalUsedBytes = saturatingAdd(targetUsage.activeBytes, targetUsage.unrecycledBytes);
+  result.physicalUsedBytes = saturatingAdd(result.physicalUsedBytes, engineActive);
+  result.reservedBytes = saturatingAdd(targetUsage.reservedBytes, engineReservedBytes);
+  result.allocatableBytes = filesystemAvailableBytes;
+  result.capacityBytes = saturatingAdd(result.physicalUsedBytes, result.reservedBytes);
+  result.capacityBytes = saturatingAdd(result.capacityBytes, result.allocatableBytes);
+  return result;
+}
 
 StorageTargets::~StorageTargets() { void(); }
 
@@ -349,6 +370,7 @@ Result<std::vector<SpaceInfo>> StorageTargets::spaceInfos(bool force) {
     return cachedSpaceInfos_;
   }
 
+  std::unordered_map<std::string, CacheTargetPhysicalUsage> cacheUsage;
   std::unordered_map<std::string, uint64_t> diskUnusedSize;
   std::unordered_map<std::string, std::vector<hf3fs::flat::TargetId>> pathToTargetIds;
   auto snapshot = targetMap_.snapshot();
@@ -356,6 +378,13 @@ Result<std::vector<SpaceInfo>> StorageTargets::spaceInfos(bool force) {
     pathToTargetIds[target.path.parent_path().string()].emplace_back(targetId);
     if (target.storageTarget != nullptr) {
       diskUnusedSize[target.path.parent_path().string()] += target.storageTarget->unusedSize();
+      if (target.storageRole == StorageRole::CACHE_ONLY && !target.storageTarget->useChunkEngine()) {
+        CHECK_RESULT(usage, target.storageTarget->cachePhysicalUsage());
+        auto &diskUsage = cacheUsage[target.path.parent_path().string()];
+        diskUsage.activeBytes = saturatingAdd(diskUsage.activeBytes, usage.activeBytes);
+        diskUsage.reservedBytes = saturatingAdd(diskUsage.reservedBytes, usage.reservedBytes);
+        diskUsage.unrecycledBytes = saturatingAdd(diskUsage.unrecycledBytes, usage.unrecycledBytes);
+      }
     }
   }
 
@@ -377,6 +406,22 @@ Result<std::vector<SpaceInfo>> StorageTargets::spaceInfos(bool force) {
     info.free = spaceInfo.free + diskUnusedSize[info.path] + usedSize.reserved_size;
     info.available = spaceInfo.available;
     info.manufacturer = manufacturers_[index];
+    if (index < diskConfigs_.size()) {
+      info.physicalDiskId = diskConfigs_[index].physical_disk_id;
+      info.storageRole = diskConfigs_[index].storage_role;
+    }
+    if (info.storageRole == StorageRole::CACHE_ONLY) {
+      auto capacity = calculateCacheDiskPhysicalCapacity(cacheUsage[info.path],
+                                                         usedSize.allocated_size,
+                                                         usedSize.reserved_size,
+                                                         spaceInfo.available);
+      info.cachePhysicalUsedBytes = capacity.physicalUsedBytes;
+      info.cacheReservedBytes = capacity.reservedBytes;
+      info.cacheAllocatableBytes = capacity.allocatableBytes;
+      info.cacheCapacityBytes = capacity.capacityBytes;
+      info.enforcedAdmissionHighWatermark = config_.cache_admission_high_watermark();
+      info.sampledAtNs = static_cast<uint64_t>(UtcClock::now().toMicroseconds()) * 1000;
+    }
     ret.push_back(std::move(info));
   }
   cachedSpaceInfos_ = ret;

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <bit>
 #include <folly/Synchronized.h>
+#include <span>
 #include <unordered_map>
 
 #include "chunk_engine/src/cxx.rs.h"
@@ -16,6 +18,30 @@
 #include "storage/update/UpdateJob.h"
 
 namespace hf3fs::storage {
+
+struct CacheTargetPhysicalUsage {
+  uint64_t activeBytes = 0;
+  uint64_t reservedBytes = 0;
+  uint64_t unrecycledBytes = 0;
+};
+
+inline Result<uint64_t> physicalFootprint(bool chunkEngine,
+                                          std::span<const Size> allocationUnits,
+                                          uint32_t chunkSize,
+                                          uint64_t payloadLength) {
+  if (chunkSize == 0 || payloadLength == 0 || payloadLength > chunkSize)
+    return makeError(StatusCode::kInvalidArg, "invalid cache chunk footprint request");
+  if (std::find(allocationUnits.begin(), allocationUnits.end(), Size{chunkSize}) == allocationUnits.end())
+    return makeError(StatusCode::kInvalidArg, "unsupported cache chunk allocation unit");
+  if (chunkEngine) {
+    constexpr uint64_t kSmallestEngineAllocation = 64_KB;
+    constexpr uint64_t kLargestEngineAllocation = 64_MB;
+    if (payloadLength > kLargestEngineAllocation)
+      return makeError(StatusCode::kInvalidArg, "cache payload exceeds chunk engine allocation range");
+    return std::max<uint64_t>(std::bit_ceil(payloadLength), kSmallestEngineAllocation);
+  }
+  return uint64_t{chunkSize};
+}
 
 class StorageTarget : public enable_shared_from_this<StorageTarget> {
  protected:
@@ -121,6 +147,22 @@ class StorageTarget : public enable_shared_from_this<StorageTarget> {
 
   // get unused size.
   uint64_t unusedSize() const { return unusedSize_; }
+
+  Result<CacheTargetPhysicalUsage> cachePhysicalUsage() {
+    if (useChunkEngine()) return CacheTargetPhysicalUsage{};
+    int64_t reserved = 0;
+    int64_t unrecycled = 0;
+    RETURN_ON_ERROR(chunkStore_.unusedSize(reserved, unrecycled));
+    return CacheTargetPhysicalUsage{usedSize(),
+                                    static_cast<uint64_t>(std::max<int64_t>(reserved, 0)),
+                                    static_cast<uint64_t>(std::max<int64_t>(unrecycled, 0))};
+  }
+
+  Result<uint64_t> physicalFootprint(uint32_t chunkSize, uint64_t payloadLength) const {
+    auto sizes = chunkSizeList_.lock();
+    std::vector<Size> allocationUnits(sizes->begin(), sizes->end());
+    return storage::physicalFootprint(useChunkEngine(), allocationUnits, chunkSize, payloadLength);
+  }
 
   // get all uncommitted chunk ids.
   Result<std::vector<ChunkId>> uncommitted() {

@@ -624,6 +624,14 @@ struct SpaceInfo {
   SERDE_STRUCT_FIELD(available, uint64_t{});
   SERDE_STRUCT_FIELD(targetIds, std::vector<hf3fs::flat::TargetId>{});
   SERDE_STRUCT_FIELD(manufacturer, std::string{});
+  SERDE_STRUCT_FIELD(physicalDiskId, PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(storageRole, StorageRole::INVALID);
+  SERDE_STRUCT_FIELD(cacheCapacityBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(cachePhysicalUsedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(cacheAllocatableBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(cacheReservedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(enforcedAdmissionHighWatermark, double{0});
+  SERDE_STRUCT_FIELD(sampledAtNs, uint64_t{0});
 };
 static_assert(serde::Serializable<SpaceInfo>);
 

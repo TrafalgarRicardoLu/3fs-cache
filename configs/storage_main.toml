@@ -450,6 +450,7 @@ queue_size = 1024
 
 [server.targets]
 allow_disk_without_uuid = false
+cache_admission_high_watermark = 0.9
 collect_all_fds = true
 create_engine_path = true
 space_info_cache_timeout = '5s'

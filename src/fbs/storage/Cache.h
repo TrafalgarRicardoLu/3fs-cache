@@ -121,21 +121,43 @@ struct CacheSpaceInfo {
   SERDE_STRUCT_FIELD(sampledAtNs, uint64_t{0});
 };
 
+struct CacheFootprintQuery {
+  SERDE_STRUCT_FIELD(targetId, TargetId{});
+  SERDE_STRUCT_FIELD(chunkSize, uint32_t{0});
+  SERDE_STRUCT_FIELD(payloadLength, uint64_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (targetId == TargetId{} || chunkSize == 0 || payloadLength == 0 || payloadLength > chunkSize)
+      return makeError(StatusCode::kInvalidArg, "invalid cache footprint query");
+    return Void{};
+  }
+};
+
+struct CacheFootprintInfo {
+  SERDE_STRUCT_FIELD(targetId, TargetId{});
+  SERDE_STRUCT_FIELD(physicalDiskId, PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(footprintBytes, uint64_t{0});
+};
+
 struct QueryCacheSpaceReq {
   SERDE_STRUCT_FIELD(targetIds, std::vector<TargetId>{});
+  SERDE_STRUCT_FIELD(footprints, std::vector<CacheFootprintQuery>{});
   SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
 
  public:
   Result<Void> valid() const {
-    if (targetIds.size() > cache::kMaxPhase2BatchItems)
-      return makeError(CacheCode::kRequestTooLarge, "too many cache targets");
+    if (targetIds.size() > cache::kMaxPhase2BatchItems || footprints.size() > cache::kMaxPhase2BatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "too many cache space queries");
     for (auto targetId : targetIds)
       if (targetId == TargetId{}) return makeError(StatusCode::kInvalidArg, "targetId not set");
+    for (const auto &footprint : footprints) RETURN_ON_ERROR(footprint.valid());
     return Void{};
   }
 };
 struct QueryCacheSpaceRsp {
   SERDE_STRUCT_FIELD(results, std::vector<Result<CacheSpaceInfo>>{});
+  SERDE_STRUCT_FIELD(footprintResults, std::vector<Result<CacheFootprintInfo>>{});
 };
 
 struct CachePermitRequestItem {

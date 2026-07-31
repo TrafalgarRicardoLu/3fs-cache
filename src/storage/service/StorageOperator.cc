@@ -1319,13 +1319,71 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageOperator::queryCacheChunkGenerat
   co_return response;
 }
 
+CoTryTask<QueryCacheSpaceRsp> StorageOperator::queryCacheSpace(const QueryCacheSpaceReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2()));
+  auto spaceInfosResult = components_.storageTargets.spaceInfos(true);
+  CO_RETURN_ON_ERROR(spaceInfosResult);
+  auto &spaceInfos = *spaceInfosResult;
+
+  auto convert = [](const SpaceInfo &info) {
+    return CacheSpaceInfo{info.physicalDiskId,
+                          info.storageRole,
+                          info.targetIds,
+                          info.cacheCapacityBytes,
+                          info.cachePhysicalUsedBytes,
+                          info.cacheAllocatableBytes,
+                          info.cacheReservedBytes,
+                          info.enforcedAdmissionHighWatermark,
+                          info.sampledAtNs};
+  };
+  QueryCacheSpaceRsp response;
+  if (req.targetIds.empty()) {
+    for (const auto &info : spaceInfos) {
+      if (info.storageRole == StorageRole::CACHE_ONLY) response.results.emplace_back(convert(info));
+    }
+  } else {
+    response.results.reserve(req.targetIds.size());
+    for (auto targetId : req.targetIds) {
+      auto info = std::find_if(spaceInfos.begin(), spaceInfos.end(), [targetId](const auto &candidate) {
+        return std::find(candidate.targetIds.begin(), candidate.targetIds.end(), targetId) != candidate.targetIds.end();
+      });
+      if (info == spaceInfos.end()) {
+        response.results.emplace_back(makeError(CacheCode::kNotFound, "cache target has no physical space snapshot"));
+      } else if (info->storageRole != StorageRole::CACHE_ONLY) {
+        response.results.emplace_back(makeError(CacheCode::kRoleMismatch, "target is not on a cache-only disk"));
+      } else {
+        response.results.emplace_back(convert(*info));
+      }
+    }
+  }
+  response.footprintResults.reserve(req.footprints.size());
+  for (const auto &query : req.footprints) {
+    auto target = components_.targetMap.getByTargetId(query.targetId);
+    if (!target) {
+      response.footprintResults.emplace_back(makeError(std::move(target.error())));
+      continue;
+    }
+    if ((*target)->storageRole != StorageRole::CACHE_ONLY || (*target)->storageTarget == nullptr) {
+      response.footprintResults.emplace_back(makeError(CacheCode::kRoleMismatch, "target is not cache-only"));
+      continue;
+    }
+    auto footprint = (*target)->storageTarget->physicalFootprint(query.chunkSize, query.payloadLength);
+    if (!footprint) {
+      response.footprintResults.emplace_back(makeError(std::move(footprint.error())));
+      continue;
+    }
+    response.footprintResults.emplace_back(CacheFootprintInfo{query.targetId, (*target)->physicalDiskId, *footprint});
+  }
+  co_return response;
+}
+
 #define PHASE2_STORAGE_DISABLED_METHOD(NAME, REQ, RSP)                                                         \
   CoTryTask<RSP> StorageOperator::NAME(const REQ &req) {                                                       \
     CO_RETURN_ON_ERROR(req.valid());                                                                           \
     CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2())); \
     co_return makeError(StatusCode::kNotImplemented, #NAME " is not implemented");                             \
   }
-PHASE2_STORAGE_DISABLED_METHOD(queryCacheSpace, QueryCacheSpaceReq, QueryCacheSpaceRsp);
 PHASE2_STORAGE_DISABLED_METHOD(prepareCachePermits, PrepareCachePermitsReq, PrepareCachePermitsRsp);
 PHASE2_STORAGE_DISABLED_METHOD(renewCachePermits, RenewCachePermitsReq, RenewCachePermitsRsp);
 PHASE2_STORAGE_DISABLED_METHOD(releaseCachePermits, ReleaseCachePermitsReq, ReleaseCachePermitsRsp);

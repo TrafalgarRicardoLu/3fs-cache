@@ -196,5 +196,32 @@ TEST(TestStorageTargets, RejectRoutingRoleMismatch) {
   verify(StorageRole::CACHE_ONLY, flat::ChainTableRole::USER_DATA);
 }
 
+TEST(TestStorageTargets, CalculatesCachePhysicalCapacityFromAllocationModel) {
+  CacheTargetPhysicalUsage targets;
+  targets.activeBytes = 100;
+  targets.reservedBytes = 30;
+  targets.unrecycledBytes = 20;
+  auto capacity = calculateCacheDiskPhysicalCapacity(targets,
+                                                     100,  // engine allocated
+                                                     40,   // engine reserved
+                                                     1000  // filesystem available
+  );
+  EXPECT_EQ(capacity.physicalUsedBytes, 180);
+  EXPECT_EQ(capacity.reservedBytes, 70);
+  EXPECT_EQ(capacity.allocatableBytes, 1000);
+  EXPECT_EQ(capacity.capacityBytes, 1250);
+}
+
+TEST(TestStorageTargets, CacheFootprintUsesActualAllocationUnit) {
+  const std::vector<Size> units{512_KB, 1_MB, 4_MB};
+  EXPECT_EQ(*physicalFootprint(false, units, 1_MB, 1), 1_MB);
+  EXPECT_EQ(*physicalFootprint(false, units, 1_MB, 1_MB), 1_MB);
+  EXPECT_EQ(*physicalFootprint(true, units, 1_MB, 1), 64_KB);
+  EXPECT_EQ(*physicalFootprint(true, units, 1_MB, 64_KB + 1), 128_KB);
+  EXPECT_EQ(*physicalFootprint(true, units, 1_MB, 1_MB), 1_MB);
+  EXPECT_TRUE(physicalFootprint(false, units, 1_MB, 1_MB + 1).hasError());
+  EXPECT_TRUE(physicalFootprint(false, units, 2_MB, 1).hasError());
+}
+
 }  // namespace
 }  // namespace hf3fs::storage
