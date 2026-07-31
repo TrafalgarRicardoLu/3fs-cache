@@ -12,6 +12,7 @@ meta::CacheStorageEvent CacheEventReporter::toWire(const CacheEventEnvelope &env
   event.logicalRetireOperationId = intent.logicalRetireOperationId;
   event.logicalKey = intent.logicalKey;
   event.storageKey = intent.storageKey;
+  event.storageTargetId = intent.storageTargetId;
   event.generation = intent.generation;
   event.placement = intent.placement;
   event.evictionEpoch = intent.evictionEpoch;

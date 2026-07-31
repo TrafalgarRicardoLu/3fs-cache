@@ -17,6 +17,7 @@
 #include "common/utils/LockManager.h"
 #include "common/utils/Semaphore.h"
 #include "storage/aio/AioReadWorker.h"
+#include "storage/cache/eviction/LocalSafetyEvictor.h"
 #include "storage/service/BufferPool.h"
 #include "storage/service/ReliableForwarding.h"
 #include "storage/service/ReliableUpdate.h"
@@ -43,6 +44,10 @@ class StorageOperator {
     CONFIG_HOT_UPDATED_ITEM(enable_cache_phase2, false);
     CONFIG_HOT_UPDATED_ITEM(local_access_persist_interval, 30_s, [](Duration value) { return value > 0_ns; });
     CONFIG_ITEM(local_eviction_policy, std::string{"lru"});
+    CONFIG_ITEM(local_safety_high_watermark, 0.96, [](double value) { return value > 0.0 && value < 1.0; });
+    CONFIG_ITEM(local_safety_low_watermark, 0.90, [](double value) { return value > 0.0 && value < 1.0; });
+    CONFIG_HOT_UPDATED_ITEM(local_safety_interval, 3_s, [](Duration value) { return value > 0_ns; });
+    CONFIG_ITEM(local_safety_protection_period, 10_min, [](Duration value) { return value >= 0_ns; });
     CONFIG_HOT_UPDATED_ITEM(rdma_transmission_req_timeout, 0_ms);
     CONFIG_HOT_UPDATED_ITEM(apply_transmission_before_getting_semaphore, true);
   };
@@ -70,6 +75,7 @@ class StorageOperator {
   Result<Void> init(uint32_t numberOfDisks);
 
   Result<Void> stopAndJoin();
+  Result<LocalSafetyRunResult> runLocalSafetyEviction(uint64_t nowNs);
 
   CoTryTask<BatchReadRsp> batchRead(ServiceRequestContext &requestCtx,
                                     const BatchReadReq &req,
@@ -231,6 +237,7 @@ class StorageOperator {
   std::atomic<uint64_t> totalReadBytes_{};
   std::atomic<uint64_t> totalReadIOs_{};
   std::unique_ptr<LocalEvictionPolicy> localEvictionPolicy_;
+  std::unique_ptr<LocalSafetyEvictor> localSafetyEvictor_;
 };
 
 }  // namespace hf3fs::storage

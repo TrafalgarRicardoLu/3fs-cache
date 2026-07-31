@@ -142,6 +142,9 @@ struct CacheSpaceInfo {
   SERDE_STRUCT_FIELD(reservedBytes, uint64_t{0});
   SERDE_STRUCT_FIELD(enforcedHighWatermark, double{0});
   SERDE_STRUCT_FIELD(sampledAtNs, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventPrepared, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventDeliverable, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventAcknowledgedSequence, uint64_t{0});
 };
 
 struct CacheFootprintQuery {

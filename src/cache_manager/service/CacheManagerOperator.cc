@@ -1,6 +1,7 @@
 #include "cache_manager/service/CacheManagerOperator.h"
 
 #include <folly/experimental/coro/BlockingWait.h>
+#include <limits>
 
 namespace hf3fs::cache_manager {
 
@@ -137,6 +138,20 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     folly::coro::blockingWait(scheduler->stopAll());
     if (accessFlushWorker_) accessFlushWorker_->stop();
     return makeError(StatusCode::kQueueConflict, "failed to start cache eviction controller");
+  }
+  if (config_.enable_phase2()) {
+    evictingWorker_ = std::make_unique<EvictingWorker>(backend_, config_.evicting_page_size());
+    if (!scheduler->start(
+            "CacheManagerEvictingWorker",
+            [this]() -> CoTask<void> {
+              auto result = co_await evictingWorker_->runOnce();
+              if (result.hasError()) XLOGF(WARN, "EVICTING recovery iteration failed: {}", result.error());
+            },
+            [this] { return config_.evicting_scan_interval(); })) {
+      folly::coro::blockingWait(scheduler->stopAll());
+      if (accessFlushWorker_) accessFlushWorker_->stop();
+      return makeError(StatusCode::kQueueConflict, "failed to start EVICTING recovery worker");
+    }
   }
   auto lock = std::unique_lock(mutex_);
   if (running_) {
@@ -282,7 +297,51 @@ CoTryTask<ReportCacheAccessRsp> CacheManagerOperator::reportCacheAccess(const Re
 CoTryTask<GetPhase2CacheStatusRsp> CacheManagerOperator::getPhase2CacheStatus(const GetPhase2CacheStatusReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkPhase2Protocol(req.cacheProtocolVersion));
-  co_return makeError(StatusCode::kNotImplemented, "phase two status is not implemented");
+  if (backend_) CO_RETURN_ON_ERROR(co_await backend_->authorizeAdmin(req.user, std::nullopt));
+  GetPhase2CacheStatusRsp response;
+  response.enabled = config_.enable_phase2();
+  response.managerEpoch = managerEpoch_;
+  response.admissionPolicy = config_.admission_policy();
+  response.evictionPolicy = config_.eviction_policy();
+  auto now = SteadyClock::now();
+  if (physicalTopology_) {
+    for (const auto &[diskId, snapshot] : physicalTopology_->snapshots()) {
+      Phase2DiskStatus disk;
+      disk.physicalDiskId = diskId;
+      disk.role = snapshot.space.role;
+      disk.capacityBytes = snapshot.space.capacityBytes;
+      disk.physicalUsedBytes = snapshot.space.physicalUsedBytes;
+      disk.allocatableBytes = snapshot.space.allocatableBytes;
+      disk.reservedBytes = snapshot.space.reservedBytes;
+      disk.eventPrepared = snapshot.space.eventPrepared;
+      disk.eventDeliverable = snapshot.space.eventDeliverable;
+      disk.eventAcknowledgedSequence = snapshot.space.eventAcknowledgedSequence;
+      response.eventBacklog += disk.eventPrepared + disk.eventDeliverable;
+      disk.snapshotAgeNs = now >= snapshot.receivedAt
+                               ? std::chrono::duration_cast<std::chrono::nanoseconds>(now - snapshot.receivedAt).count()
+                               : std::numeric_limits<uint64_t>::max();
+      disk.admissionPaused =
+          disk.snapshotAgeNs > static_cast<uint64_t>(config_.space_snapshot_max_age().asUs().count()) * 1000;
+      if (disk.admissionPaused) disk.pauseReason = "stale_space_snapshot";
+      response.disks.push_back(std::move(disk));
+    }
+  }
+  if (metaClient_) {
+    meta::GetCacheStatusReq status;
+    status.cacheProtocolVersion = req.cacheProtocolVersion;
+    auto metaStatus = co_await metaClient_->getCacheStatus(std::move(status));
+    CO_RETURN_ON_ERROR(metaStatus);
+    for (const auto &count : metaStatus->stateCounts) {
+      if (count.state == cache::CacheBlockState::EVICTING) response.evicting = count.count;
+    }
+    meta::ListCacheEventDeadLettersReq deadLetters;
+    deadLetters.limit = cache::kMaxPhase2BatchItems;
+    deadLetters.cacheProtocolVersion = req.cacheProtocolVersion;
+    auto page = co_await metaClient_->listCacheEventDeadLetters(std::move(deadLetters));
+    CO_RETURN_ON_ERROR(page);
+    response.deadLetters = page->items.size();
+  }
+  co_return response;
 }
 
 }  // namespace hf3fs::cache_manager

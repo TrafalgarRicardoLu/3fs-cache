@@ -65,6 +65,7 @@ CacheEventIntent RetireOperationStore::eventIntent(const CoordinateCacheRetireIt
   intent.logicalRetireOperationId = item.operationId;
   intent.logicalKey = item.logicalKey;
   intent.storageKey = item.key;
+  intent.storageTargetId = item.placement.coordinatorTargetId;
   intent.generation = item.expectedGeneration;
   intent.placement = item.placement;
   intent.evictionEpoch = item.evictionEpoch;

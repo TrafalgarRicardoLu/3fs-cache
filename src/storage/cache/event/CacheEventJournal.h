@@ -17,6 +17,7 @@ struct CacheEventIntent {
   SERDE_STRUCT_FIELD(logicalRetireOperationId, std::optional<Uuid>{});
   SERDE_STRUCT_FIELD(logicalKey, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(storageKey, CacheChunkKey{});
+  SERDE_STRUCT_FIELD(storageTargetId, TargetId{});
   SERDE_STRUCT_FIELD(generation, cache::CacheGeneration{});
   SERDE_STRUCT_FIELD(placement, PlacementIdentity{});
   SERDE_STRUCT_FIELD(evictionEpoch, std::optional<cache::EvictionEpoch>{});
@@ -29,8 +30,8 @@ struct CacheEventIntent {
     return type == other.type && storageOperationId == other.storageOperationId &&
            logicalRetireOperationId == other.logicalRetireOperationId && logicalKey == other.logicalKey &&
            storageKey.vChainId == other.storageKey.vChainId && storageKey.chunkId == other.storageKey.chunkId &&
-           generation == other.generation && placement == other.placement && evictionEpoch == other.evictionEpoch &&
-           diskId == other.diskId && timestamp == other.timestamp;
+           storageTargetId == other.storageTargetId && generation == other.generation && placement == other.placement &&
+           evictionEpoch == other.evictionEpoch && diskId == other.diskId && timestamp == other.timestamp;
   }
 };
 

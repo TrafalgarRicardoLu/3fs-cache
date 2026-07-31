@@ -119,6 +119,7 @@ class StorageTarget : public enable_shared_from_this<StorageTarget> {
   Result<CacheChunkGenerationInfo> queryCacheChunk(const CacheChunkKey &key);
   Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(const ChunkId &chunkId);
   Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(const CacheChunkKey &key);
+  Result<std::vector<LocalEvictionCandidate>> listActiveCacheChunks();
   CoTryTask<bool> recordCacheAccess(const ChunkId &chunkId,
                                     cache::CacheGeneration generation,
                                     uint64_t observedAtNs,

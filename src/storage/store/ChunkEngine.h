@@ -7,6 +7,7 @@
 #include "fbs/storage/Cache.h"
 #include "fbs/storage/Common.h"
 #include "storage/aio/BatchReadJob.h"
+#include "storage/store/cache/LocalEvictionPolicy.h"
 #include "storage/update/UpdateJob.h"
 
 namespace hf3fs::storage {
@@ -117,6 +118,8 @@ struct ChunkEngine {
                                              cache::CacheGeneration generation,
                                              uint64_t observedAtNs,
                                              bool sync);
+  static Result<std::vector<LocalEvictionCandidate>> listActiveCacheChunks(chunk_engine::Engine &engine,
+                                                                           TargetId targetId);
 
   static Result<ChunkMetadata> queryChunk(chunk_engine::Engine &engine, const ChunkId &chunkId, ChainId chainId) {
     std::string key;

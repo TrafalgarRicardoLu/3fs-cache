@@ -43,7 +43,8 @@ class Config : public ConfigBase<Config> {
       return makeError(StatusCode::kInvalidConfig, "cache capacity low watermark must be below high watermark");
     }
     if (eviction_page_size() == 0 || eviction_page_size() > cache::kMaxPhase2BatchItems || eviction_batch_size() == 0 ||
-        eviction_batch_size() > cache::kMaxPhase2BatchItems) {
+        eviction_batch_size() > cache::kMaxPhase2BatchItems || evicting_page_size() == 0 ||
+        evicting_page_size() > cache::kMaxPhase2BatchItems) {
       return makeError(StatusCode::kInvalidConfig, "cache eviction batch configuration exceeds protocol limit");
     }
     std::set<uint32_t> ids;
@@ -100,6 +101,8 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(eviction_protection_period, 10_min, [](Duration value) { return value >= 0_ns; });
   CONFIG_ITEM(eviction_page_size, uint32_t{1000}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(eviction_batch_size, uint32_t{256}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(evicting_scan_interval, 5_s, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(evicting_page_size, uint32_t{1000}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(storage_permit_ttl, 60_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(access_flush_threshold, uint32_t{256}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(access_flush_batch_size, uint32_t{512}, ConfigCheckers::checkPositive);

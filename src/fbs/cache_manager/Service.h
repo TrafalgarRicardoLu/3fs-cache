@@ -148,6 +148,9 @@ struct Phase2DiskStatus {
   SERDE_STRUCT_FIELD(snapshotAgeNs, uint64_t{0});
   SERDE_STRUCT_FIELD(admissionPaused, false);
   SERDE_STRUCT_FIELD(pauseReason, String{});
+  SERDE_STRUCT_FIELD(eventPrepared, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventDeliverable, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventAcknowledgedSequence, uint64_t{0});
 };
 struct GetPhase2CacheStatusRsp {
   SERDE_STRUCT_FIELD(enabled, false);

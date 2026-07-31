@@ -8,6 +8,29 @@
 #include "storage/update/UpdateJob.h"
 
 namespace hf3fs::storage {
+
+Result<std::vector<LocalEvictionCandidate>> ChunkEngine::listActiveCacheChunks(chunk_engine::Engine &engine,
+                                                                               TargetId targetId) {
+  std::string error;
+  auto chunks = engine.query_all_raw_chunks({}, error);
+  if (!error.empty()) return makeError(StorageCode::kChunkMetadataGetError, std::move(error));
+  std::vector<LocalEvictionCandidate> result;
+  for (size_t i = 0; i < chunks->len(); ++i) {
+    auto rawId = chunks->chunk_id(i);
+    if (rawId.length() <= sizeof(ChainId)) continue;
+    auto tag = decodeCacheTag(chunks->chunk_etag(i));
+    if (!tag || tag->state != CacheChunkState::ACTIVE || !tag->descriptor || tag->descriptor->targetId != targetId ||
+        tag->descriptor->generation != tag->generation) {
+      continue;
+    }
+    auto chunkId = ChunkId(std::string_view{reinterpret_cast<const char *>(rawId.data()) + sizeof(ChainId),
+                                            rawId.length() - sizeof(ChainId)});
+    auto length = chunks->chunk_meta(i).len;
+    auto footprint = std::max<uint64_t>(std::bit_ceil(uint64_t{length}), 64_KB);
+    result.push_back({std::move(chunkId), std::move(*tag->descriptor), footprint});
+  }
+  return result;
+}
 namespace {
 
 monitor::OperationRecorder storageUpdateRecorder{"storage.engine_update"};

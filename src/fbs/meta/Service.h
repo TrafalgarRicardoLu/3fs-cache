@@ -1293,6 +1293,7 @@ struct CacheStorageEvent {
   SERDE_STRUCT_FIELD(logicalRetireOperationId, std::optional<Uuid>{});
   SERDE_STRUCT_FIELD(logicalKey, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(storageKey, storage::CacheChunkKey{});
+  SERDE_STRUCT_FIELD(storageTargetId, storage::TargetId{});
   SERDE_STRUCT_FIELD(generation, cache::CacheGeneration{});
   SERDE_STRUCT_FIELD(placement, storage::PlacementIdentity{});
   SERDE_STRUCT_FIELD(evictionEpoch, std::optional<cache::EvictionEpoch>{});
@@ -1306,8 +1307,11 @@ struct CacheStorageEvent {
     RETURN_ON_ERROR(storageKey.valid());
     RETURN_ON_ERROR(placement.valid());
     RETURN_ON_ERROR(diskId.valid());
-    if (sequence == 0 || generation == cache::CacheGeneration{} || storageOperationId == Uuid::zero() ||
-        timestamp.isZero()) {
+    if (sequence == 0 || storageTargetId == storage::TargetId{} ||
+        !std::binary_search(placement.expectedReplicaTargets.begin(),
+                            placement.expectedReplicaTargets.end(),
+                            storageTargetId) ||
+        generation == cache::CacheGeneration{} || storageOperationId == Uuid::zero() || timestamp.isZero()) {
       return makeError(StatusCode::kInvalidArg, "invalid storage event identity");
     }
     if (storageKey.vChainId != placement.versionedChain) {

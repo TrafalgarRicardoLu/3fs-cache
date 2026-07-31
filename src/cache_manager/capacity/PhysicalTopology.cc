@@ -125,4 +125,9 @@ Result<storage::PhysicalDiskId> PhysicalTopology::persistedDisk(flat::TargetId t
   return target->second;
 }
 
+std::map<storage::PhysicalDiskId, DiskSpaceSnapshot> PhysicalTopology::snapshots() const {
+  std::scoped_lock lock(mutex_);
+  return disks_;
+}
+
 }  // namespace hf3fs::cache_manager

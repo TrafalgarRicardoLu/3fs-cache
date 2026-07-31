@@ -46,6 +46,7 @@ class PhysicalTopology {
                                                                                   Duration maxAge,
                                                                                   double expectedHighWatermark) const;
   Result<storage::PhysicalDiskId> persistedDisk(flat::TargetId targetId) const;
+  std::map<storage::PhysicalDiskId, DiskSpaceSnapshot> snapshots() const;
 
  private:
   mutable std::mutex mutex_;

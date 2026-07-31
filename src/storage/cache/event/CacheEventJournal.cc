@@ -25,7 +25,11 @@ Result<Void> CacheEventIntent::valid() const {
   RETURN_ON_ERROR(storageKey.valid());
   RETURN_ON_ERROR(placement.valid());
   RETURN_ON_ERROR(diskId.valid());
-  if (storageOperationId == Uuid::zero() || generation == cache::CacheGeneration{} || timestamp.isZero()) {
+  if (storageOperationId == Uuid::zero() || storageTargetId == TargetId{} ||
+      !std::binary_search(placement.expectedReplicaTargets.begin(),
+                          placement.expectedReplicaTargets.end(),
+                          storageTargetId) ||
+      generation == cache::CacheGeneration{} || timestamp.isZero()) {
     return makeError(StatusCode::kInvalidArg, "invalid cache event intent identity");
   }
   if (type == cache::CacheStorageEventType::DELETED) {

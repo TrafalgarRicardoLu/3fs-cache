@@ -65,9 +65,20 @@ monitor::CountRecorder storageCacheRetireCount{"storage.cache.retire"};
 monitor::CountRecorder storageCacheTombstoneCount{"storage.cache.tombstone"};
 
 Result<Void> StorageOperator::init(uint32_t numberOfDisks) {
+  if (config_.local_safety_low_watermark() <= 0.0 ||
+      config_.local_safety_low_watermark() >= config_.local_safety_high_watermark() ||
+      config_.local_safety_high_watermark() >= 1.0) {
+    return makeError(StatusCode::kInvalidConfig, "local safety low watermark must be below high watermark");
+  }
   auto localEvictionPolicy = createLocalEvictionPolicy(config_.local_eviction_policy());
   RETURN_ON_ERROR(localEvictionPolicy);
   localEvictionPolicy_ = std::move(*localEvictionPolicy);
+  localSafetyEvictor_ =
+      std::make_unique<LocalSafetyEvictor>(createStorageLocalSafetyBackend(components_),
+                                           std::move(localEvictionPolicy_),
+                                           config_.local_safety_high_watermark(),
+                                           config_.local_safety_low_watermark(),
+                                           static_cast<uint64_t>(config_.local_safety_protection_period().count()));
   storageReadAvgBytes.setLambda([&] {
     auto totalReadBytes = totalReadBytes_.exchange(0);
     auto totalReadIOs = totalReadIOs_.exchange(0);
@@ -80,6 +91,12 @@ Result<Void> StorageOperator::init(uint32_t numberOfDisks) {
   }
 
   return updateWorker_.start(numberOfDisks);
+}
+
+Result<LocalSafetyRunResult> StorageOperator::runLocalSafetyEviction(uint64_t nowNs) {
+  if (!config_.enable_cache_phase2()) return LocalSafetyRunResult{};
+  if (!localSafetyEvictor_) return makeError(CacheCode::kUnavailable, "local safety evictor is unavailable");
+  return localSafetyEvictor_->runOnce(nowNs);
 }
 
 Result<Void> StorageOperator::stopAndJoin() {
@@ -1672,8 +1689,8 @@ CoTryTask<QueryCacheSpaceRsp> StorageOperator::queryCacheSpace(const QueryCacheS
   CO_RETURN_ON_ERROR(spaceInfosResult);
   auto &spaceInfos = *spaceInfosResult;
 
-  auto convert = [](const SpaceInfo &info) {
-    return CacheSpaceInfo{info.physicalDiskId,
+  auto convert = [this](const SpaceInfo &info) {
+    CacheSpaceInfo result{info.physicalDiskId,
                           info.storageRole,
                           info.targetIds,
                           info.cacheCapacityBytes,
@@ -1682,6 +1699,13 @@ CoTryTask<QueryCacheSpaceRsp> StorageOperator::queryCacheSpace(const QueryCacheS
                           info.cacheReservedBytes,
                           info.enforcedAdmissionHighWatermark,
                           info.sampledAtNs};
+    if (auto journal = components_.storageTargets.cacheEventJournal(info.physicalDiskId)) {
+      auto stats = journal->stats();
+      result.eventPrepared = stats.prepared;
+      result.eventDeliverable = stats.deliverable;
+      result.eventAcknowledgedSequence = stats.acknowledgedSequence;
+    }
+    return result;
   };
   QueryCacheSpaceRsp response;
   if (req.targetIds.empty()) {

@@ -114,6 +114,7 @@ CacheStorageEvent eventFor(const CacheBlockRecord &record,
   event.storageKey = {placement(source).versionedChain, storage::ChunkId{0xCA, source}};
   event.generation = record.cacheGeneration;
   event.placement = record.placement.value_or(record.permit.has_value() ? record.permit->placement : placement(source));
+  event.storageTargetId = event.placement.coordinatorTargetId;
   event.diskId = disk(999);
   event.timestamp = UtcTime::fromMicroseconds(static_cast<int64_t>(source));
   if (type == cache::CacheStorageEventType::DELETED) {

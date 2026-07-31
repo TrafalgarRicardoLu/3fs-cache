@@ -459,6 +459,23 @@ Result<std::optional<CacheChunkDescriptor>> StorageTarget::queryCacheChunkDescri
   return chunkStore_.queryCacheChunkDescriptor(key.chunkId);
 }
 
+Result<std::vector<LocalEvictionCandidate>> StorageTarget::listActiveCacheChunks() {
+  if (storageRole() != StorageRole::CACHE_ONLY)
+    return makeError(CacheCode::kRoleMismatch, "local eviction target is not cache-only");
+  if (useChunkEngine()) return ChunkEngine::listActiveCacheChunks(*engine_, targetId());
+  std::unordered_map<ChunkId, ChunkMetadata> metas;
+  RETURN_ON_ERROR(getAllMetadataMap(metas));
+  std::vector<LocalEvictionCandidate> result;
+  for (const auto &[chunkId, meta] : metas) {
+    if (meta.cacheState != CacheChunkState::ACTIVE) continue;
+    CHECK_RESULT(descriptor, queryCacheChunkDescriptor(chunkId));
+    if (!descriptor || descriptor->targetId != targetId() || descriptor->generation != meta.cacheGeneration) continue;
+    CHECK_RESULT(footprint, physicalFootprint(meta.innerFileId.chunkSize, meta.size));
+    result.push_back({chunkId, std::move(*descriptor), footprint});
+  }
+  return result;
+}
+
 CoTryTask<bool> StorageTarget::recordCacheAccess(const ChunkId &chunkId,
                                                  cache::CacheGeneration generation,
                                                  uint64_t observedAtNs,

@@ -187,6 +187,49 @@ CoTryTask<meta::BeginEvictCacheBlocksRsp> RealCacheManagerBackend::beginEvict(
   co_return co_await metaClient_->beginEvictCacheBlocks(std::move(request));
 }
 
+CoTryTask<meta::ListEvictingCacheBlocksRsp> RealCacheManagerBackend::listEvicting(
+    std::optional<cache::CacheBlockKey> after,
+    uint32_t limit) {
+  meta::ListEvictingCacheBlocksReq request;
+  if (after) {
+    if (after->block.toUnderType() == std::numeric_limits<uint32_t>::max()) {
+      if (after->inode == std::numeric_limits<uint64_t>::max()) co_return meta::ListEvictingCacheBlocksRsp{};
+      request.beginInode = after->inode + 1;
+    } else {
+      request.beginInode = after->inode;
+      request.beginBlock = cache::CacheBlockIndex{after->block.toUnderType() + 1};
+    }
+  }
+  request.limit = limit;
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  co_return co_await metaClient_->listEvictingCacheBlocks(std::move(request));
+}
+
+CoTryTask<bool> RealCacheManagerBackend::coordinateRetire(const meta::CacheEvictionIdentity &identity) {
+  CO_RETURN_ON_ERROR(identity.valid());
+  auto inode = co_await stat(meta::InodeId{identity.key.inode});
+  CO_RETURN_ON_ERROR(inode);
+  auto key = storageKey(*inode, identity.key.block);
+  CO_RETURN_ON_ERROR(key);
+  key->vChainId = identity.placement.versionedChain;
+  storage::CoordinateCacheRetiresReq request;
+  request.items.push_back({identity.key,
+                           *key,
+                           identity.ready.cacheGeneration,
+                           identity.placement,
+                           identity.evictionEpoch,
+                           identity.retireOperationId});
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  auto response = co_await storageClient_->coordinateCacheRetires(request);
+  CO_RETURN_ON_ERROR(response);
+  if (response->results.size() != 1)
+    co_return makeError(CacheCode::kInvalidResponse, "invalid coordinated retire result count");
+  CO_RETURN_ON_ERROR(response->results.front());
+  if (response->results.front()->operationId != identity.retireOperationId)
+    co_return makeError(CacheCode::kInvalidResponse, "coordinated retire operation identity changed");
+  co_return response->results.front()->allReplicasDurableRetired;
+}
+
 CoTryTask<meta::EnqueueCacheBlocksRsp> RealCacheManagerBackend::enqueue(
     std::vector<meta::CacheBlockRequestBase> items) {
   meta::EnqueueCacheBlocksReq req;

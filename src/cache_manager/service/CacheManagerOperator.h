@@ -10,6 +10,7 @@
 #include "cache_manager/capacity/SpacePoller.h"
 #include "cache_manager/cleanup/CacheCleanupWorker.h"
 #include "cache_manager/config/Config.h"
+#include "cache_manager/eviction/EvictingWorker.h"
 #include "cache_manager/eviction/EvictionController.h"
 #include "cache_manager/eviction/EvictionPolicy.h"
 #include "cache_manager/eviction/EvictionPressureState.h"
@@ -72,6 +73,7 @@ class CacheManagerOperator {
   std::unique_ptr<AdmissionPolicy> admissionPolicy_;
   std::unique_ptr<EvictionPolicy> evictionPolicy_;
   std::unique_ptr<EvictionController> evictionController_;
+  std::unique_ptr<EvictingWorker> evictingWorker_;
   std::unique_ptr<PermitRecovery> permitRecovery_;
   std::unique_ptr<AccessFlushWorker> accessFlushWorker_;
   Uuid managerEpoch_{Uuid::zero()};

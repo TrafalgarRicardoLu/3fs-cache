@@ -114,6 +114,7 @@ void CheckWorker::loop(const std::vector<Path> &targetPaths, const std::vector<s
   RelativeTime lastTriggerHeartbeatTime{};
   RelativeTime lastUpdateTargetUsedSizeTime = RelativeTime::now();
   RelativeTime lastChunkEngineMetricsReportTime = RelativeTime::now();
+  RelativeTime lastLocalSafetyEvictionTime{};
   robin_hood::unordered_map<uint32_t, double> diskUsage;
   while (!stopping_) {
     auto lock = std::unique_lock(mutex_);
@@ -146,6 +147,13 @@ void CheckWorker::loop(const std::vector<Path> &targetPaths, const std::vector<s
 
     // 2. check disk status.
     auto now = RelativeTime::now();
+    if (components_.config.storage().enable_cache_phase2() &&
+        now - lastLocalSafetyEvictionTime >= components_.config.storage().local_safety_interval()) {
+      lastLocalSafetyEvictionTime = now;
+      auto result = components_.storageOperator.runLocalSafetyEviction(
+          static_cast<uint64_t>(UtcClock::now().toMicroseconds()) * 1000);
+      if (!result) XLOGF(WARN, "Local safety eviction iteration failed: {}", result.error());
+    }
     auto diskLowSpaceThreshold = config_.disk_low_space_threshold();
     auto diskRejectCreateChunkThreshold = config_.disk_reject_create_chunk_threshold();
     if (now - lastCheckDiskStatusTime >= 3_s) {

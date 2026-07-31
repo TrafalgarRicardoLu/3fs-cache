@@ -18,6 +18,7 @@ CacheEventIntent intent(uint64_t id, cache::CacheStorageEventType type = cache::
   result.storageOperationId = Uuid::from(1, id);
   result.logicalKey = {id, cache::CacheBlockIndex{0}};
   result.storageKey = {{ChainId{1}, ChainVer{1}}, ChunkId{0xCA, id}};
+  result.storageTargetId = TargetId{1};
   result.generation = cache::CacheGeneration{id};
   result.placement =
       *PlacementIdentity::create({ChainId{1}, ChainVer{1}}, {TargetId{1}}, TargetId{1}, Uuid::from(2, id));
