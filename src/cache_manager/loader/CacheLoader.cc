@@ -178,6 +178,15 @@ CoTryTask<meta::ListReadyCacheBlocksRsp> RealCacheManagerBackend::listReadyCache
   co_return co_await metaClient_->listReadyCacheBlocks(std::move(request));
 }
 
+CoTryTask<meta::BeginEvictCacheBlocksRsp> RealCacheManagerBackend::beginEvict(
+    std::vector<meta::BeginEvictCacheBlockItem> items) {
+  meta::BeginEvictCacheBlocksReq request;
+  request.service = service();
+  request.items = std::move(items);
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  co_return co_await metaClient_->beginEvictCacheBlocks(std::move(request));
+}
+
 CoTryTask<meta::EnqueueCacheBlocksRsp> RealCacheManagerBackend::enqueue(
     std::vector<meta::CacheBlockRequestBase> items) {
   meta::EnqueueCacheBlocksReq req;

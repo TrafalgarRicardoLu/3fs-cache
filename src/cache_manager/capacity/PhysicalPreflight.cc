@@ -43,10 +43,14 @@ void PhysicalPreflight::Reservation::release() {
   bytesByDisk_.clear();
 }
 
-PhysicalPreflight::PhysicalPreflight(const PhysicalTopology &topology, Duration maxAge, double highWatermark)
+PhysicalPreflight::PhysicalPreflight(const PhysicalTopology &topology,
+                                     Duration maxAge,
+                                     double highWatermark,
+                                     const EvictionPressureState *pressure)
     : topology_(topology),
       maxAge_(maxAge),
       highWatermark_(highWatermark),
+      pressure_(pressure),
       state_(std::make_shared<SharedState>()) {}
 
 Result<PhysicalPreflight::Reservation> PhysicalPreflight::tryReserve(flat::ChainId chainId,
@@ -74,6 +78,9 @@ Result<PhysicalPreflight::Reservation> PhysicalPreflight::tryReserve(flat::Chain
 
   std::scoped_lock lock(state_->mutex);
   for (const auto &[diskId, requested] : byDisk) {
+    if (pressure_ && pressure_->contains(diskId)) {
+      return makeError(CacheCode::kCapacityExceeded, "cache admission paused for pressured disk");
+    }
     const auto &space = resolved->disks.at(diskId).space;
     auto localReservation = state_->reserved.find(diskId);
     auto local = localReservation == state_->reserved.end() ? 0 : localReservation->second;

@@ -39,6 +39,13 @@ class Config : public ConfigBase<Config> {
     if (eviction_policy() != "lru") {
       return makeError(StatusCode::kInvalidConfig, "unknown cache eviction policy");
     }
+    if (capacity_low_watermark() <= 0.0 || capacity_low_watermark() >= capacity_high_watermark()) {
+      return makeError(StatusCode::kInvalidConfig, "cache capacity low watermark must be below high watermark");
+    }
+    if (eviction_page_size() == 0 || eviction_page_size() > cache::kMaxPhase2BatchItems || eviction_batch_size() == 0 ||
+        eviction_batch_size() > cache::kMaxPhase2BatchItems) {
+      return makeError(StatusCode::kInvalidConfig, "cache eviction batch configuration exceeds protocol limit");
+    }
     std::set<uint32_t> ids;
     for (size_t i = 0; i < origins_length(); ++i) {
       const auto &origin = origins(i);
@@ -86,8 +93,13 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(second_miss_window, 30_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(second_miss_max_entries, uint32_t{65536}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(capacity_high_watermark, 0.9, [](double value) { return value > 0.0 && value < 1.0; });
+  CONFIG_ITEM(capacity_low_watermark, 0.8, [](double value) { return value > 0.0 && value < 1.0; });
   CONFIG_ITEM(space_poll_interval, 5_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(space_snapshot_max_age, 15_s, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(eviction_interval, 5_s, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(eviction_protection_period, 10_min, [](Duration value) { return value >= 0_ns; });
+  CONFIG_ITEM(eviction_page_size, uint32_t{1000}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(eviction_batch_size, uint32_t{256}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(storage_permit_ttl, 60_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(access_flush_threshold, uint32_t{256}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(access_flush_batch_size, uint32_t{512}, ConfigCheckers::checkPositive);

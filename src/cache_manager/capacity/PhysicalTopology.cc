@@ -94,6 +94,27 @@ Result<ResolvedPhysicalChain> PhysicalTopology::resolve(flat::ChainId chainId,
   return resolved;
 }
 
+Result<std::map<storage::PhysicalDiskId, DiskSpaceSnapshot>>
+PhysicalTopology::freshDiskSnapshots(SteadyTime now, Duration maxAge, double expectedHighWatermark) const {
+  if (maxAge <= 0_ns || !std::isfinite(expectedHighWatermark) || expectedHighWatermark <= 0.0 ||
+      expectedHighWatermark >= 1.0) {
+    return makeError(StatusCode::kInvalidArg, "invalid cache disk snapshot request");
+  }
+  std::scoped_lock lock(mutex_);
+  if (disks_.empty()) return makeError(CacheCode::kUnavailable, "cache disk space snapshots are unavailable");
+  for (const auto &[_, snapshot] : disks_) {
+    if (snapshot.receivedAt < snapshot.requestStarted || now < snapshot.receivedAt ||
+        snapshot.receivedAt - snapshot.requestStarted > maxAge || now - snapshot.receivedAt > maxAge) {
+      return makeError(CacheCode::kUnavailable, "cache disk space snapshot is stale");
+    }
+    if (std::abs(snapshot.space.enforcedHighWatermark - expectedHighWatermark) >
+        std::numeric_limits<double>::epsilon()) {
+      return makeError(CacheCode::kStateConflict, "cache high watermark differs from Storage enforcement");
+    }
+  }
+  return disks_;
+}
+
 Result<storage::PhysicalDiskId> PhysicalTopology::persistedDisk(flat::TargetId targetId) const {
   if (targetId == flat::TargetId{}) return makeError(StatusCode::kInvalidArg, "invalid cache target");
   std::scoped_lock lock(mutex_);

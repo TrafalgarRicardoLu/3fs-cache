@@ -5,6 +5,7 @@
 #include <mutex>
 
 #include "cache_manager/capacity/PhysicalTopology.h"
+#include "cache_manager/eviction/EvictionPressureState.h"
 
 namespace hf3fs::cache_manager {
 
@@ -33,7 +34,10 @@ class PhysicalPreflight {
     friend class PhysicalPreflight;
   };
 
-  PhysicalPreflight(const PhysicalTopology &topology, Duration maxAge, double highWatermark);
+  PhysicalPreflight(const PhysicalTopology &topology,
+                    Duration maxAge,
+                    double highWatermark,
+                    const EvictionPressureState *pressure = nullptr);
 
   Result<Reservation> tryReserve(flat::ChainId chainId, const storage::FootprintByTarget &footprints, SteadyTime now);
   uint64_t locallyReserved(storage::PhysicalDiskId diskId) const;
@@ -47,6 +51,7 @@ class PhysicalPreflight {
   const PhysicalTopology &topology_;
   const Duration maxAge_;
   const double highWatermark_;
+  const EvictionPressureState *pressure_;
   std::shared_ptr<SharedState> state_;
 };
 

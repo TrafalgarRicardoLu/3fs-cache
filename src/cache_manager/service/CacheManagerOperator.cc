@@ -63,12 +63,26 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     accessFlushWorker_ = std::make_unique<AccessFlushWorker>(backend_, accessConfig);
     RETURN_ON_ERROR(accessFlushWorker_->start());
     physicalTopology_ = std::make_unique<PhysicalTopology>();
+    evictionPressure_ = std::make_unique<EvictionPressureState>();
     spacePoller_ = std::make_unique<SpacePoller>(
         *physicalTopology_,
         [backend = backend_](const storage::QueryCacheSpaceReq &req) { return backend->queryCacheSpace(req); });
     physicalPreflight_ = std::make_unique<PhysicalPreflight>(*physicalTopology_,
                                                              config_.space_snapshot_max_age(),
-                                                             config_.capacity_high_watermark());
+                                                             config_.capacity_high_watermark(),
+                                                             evictionPressure_.get());
+    EvictionControllerConfig evictionConfig;
+    evictionConfig.highWatermark = config_.capacity_high_watermark();
+    evictionConfig.lowWatermark = config_.capacity_low_watermark();
+    evictionConfig.snapshotMaxAge = config_.space_snapshot_max_age();
+    evictionConfig.protectionPeriod = config_.eviction_protection_period();
+    evictionConfig.candidatePageSize = config_.eviction_page_size();
+    evictionConfig.batchSize = config_.eviction_batch_size();
+    evictionController_ = std::make_unique<EvictionController>(backend_,
+                                                               *physicalTopology_,
+                                                               *evictionPolicy_,
+                                                               *evictionPressure_,
+                                                               evictionConfig);
     ensureCached_ = std::make_unique<EnsureCached>(backend_,
                                                    hints_,
                                                    cleanupWorker_.get(),
@@ -110,6 +124,19 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     folly::coro::blockingWait(scheduler->stopAll());
     if (accessFlushWorker_) accessFlushWorker_->stop();
     return makeError(StatusCode::kQueueConflict, "failed to start cache manager space poller");
+  }
+  if (evictionController_ && !scheduler->start(
+                                 "CacheManagerEvictionController",
+                                 [this]() -> CoTask<void> {
+                                   auto result = co_await evictionController_->runOnce();
+                                   if (result.hasError()) {
+                                     XLOGF(WARN, "Cache eviction controller iteration failed: {}", result.error());
+                                   }
+                                 },
+                                 [this] { return config_.eviction_interval(); })) {
+    folly::coro::blockingWait(scheduler->stopAll());
+    if (accessFlushWorker_) accessFlushWorker_->stop();
+    return makeError(StatusCode::kQueueConflict, "failed to start cache eviction controller");
   }
   auto lock = std::unique_lock(mutex_);
   if (running_) {

@@ -89,6 +89,9 @@ class CacheManagerBackend {
   virtual CoTryTask<meta::ListReadyCacheBlocksRsp> listReadyCacheBlocks(std::optional<cache::CacheBlockKey>, uint32_t) {
     co_return makeError(StatusCode::kNotImplemented);
   }
+  virtual CoTryTask<meta::BeginEvictCacheBlocksRsp> beginEvict(std::vector<meta::BeginEvictCacheBlockItem>) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
 };
 
 class RealCacheManagerBackend final : public CacheManagerBackend {
@@ -142,6 +145,7 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
   CoTryTask<meta::UpdateCacheBlockAccessRsp> updateAccess(std::vector<meta::UpdateCacheBlockAccessItem> items) final;
   CoTryTask<meta::ListReadyCacheBlocksRsp> listReadyCacheBlocks(std::optional<cache::CacheBlockKey> after,
                                                                 uint32_t limit) final;
+  CoTryTask<meta::BeginEvictCacheBlocksRsp> beginEvict(std::vector<meta::BeginEvictCacheBlockItem> items) final;
 
  private:
   meta::CacheServiceIdentity service() const;

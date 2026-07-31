@@ -10,7 +10,9 @@
 #include "cache_manager/capacity/SpacePoller.h"
 #include "cache_manager/cleanup/CacheCleanupWorker.h"
 #include "cache_manager/config/Config.h"
+#include "cache_manager/eviction/EvictionController.h"
 #include "cache_manager/eviction/EvictionPolicy.h"
+#include "cache_manager/eviction/EvictionPressureState.h"
 #include "cache_manager/loader/CacheLoader.h"
 #include "cache_manager/recovery/PermitRecovery.h"
 #include "cache_manager/scheduler/LoaderScheduler.h"
@@ -65,9 +67,11 @@ class CacheManagerOperator {
   std::unique_ptr<AdminCleanupCacheBlocks> adminCleanup_;
   std::unique_ptr<PhysicalTopology> physicalTopology_;
   std::unique_ptr<SpacePoller> spacePoller_;
+  std::unique_ptr<EvictionPressureState> evictionPressure_;
   std::unique_ptr<PhysicalPreflight> physicalPreflight_;
   std::unique_ptr<AdmissionPolicy> admissionPolicy_;
   std::unique_ptr<EvictionPolicy> evictionPolicy_;
+  std::unique_ptr<EvictionController> evictionController_;
   std::unique_ptr<PermitRecovery> permitRecovery_;
   std::unique_ptr<AccessFlushWorker> accessFlushWorker_;
   Uuid managerEpoch_{Uuid::zero()};

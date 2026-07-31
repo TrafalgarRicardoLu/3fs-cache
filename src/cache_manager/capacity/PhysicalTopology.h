@@ -42,6 +42,9 @@ class PhysicalTopology {
                                         SteadyTime now,
                                         Duration maxAge,
                                         double expectedHighWatermark) const;
+  Result<std::map<storage::PhysicalDiskId, DiskSpaceSnapshot>> freshDiskSnapshots(SteadyTime now,
+                                                                                  Duration maxAge,
+                                                                                  double expectedHighWatermark) const;
   Result<storage::PhysicalDiskId> persistedDisk(flat::TargetId targetId) const;
 
  private:
