@@ -422,6 +422,11 @@ Result<CacheChunkGenerationInfo> StorageTarget::queryCacheChunk(const ChunkId &c
   return chunkStore_.queryCacheChunk(chunkId);
 }
 
+Result<std::optional<CacheChunkDescriptor>> StorageTarget::queryCacheChunkDescriptor(const ChunkId &chunkId) {
+  if (useChunkEngine()) return ChunkEngine::queryCacheChunkDescriptor(*engine_, chunkId, chainId());
+  return chunkStore_.queryCacheChunkDescriptor(chunkId);
+}
+
 Result<Void> StorageTarget::reportUnrecycledSize() {
   targetUsedSize_->set(usedSize());
 

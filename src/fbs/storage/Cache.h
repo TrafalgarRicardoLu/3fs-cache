@@ -28,6 +28,9 @@ struct ReplaceCacheChunkItem {
   SERDE_STRUCT_FIELD(data, std::vector<uint8_t>{});
   SERDE_STRUCT_FIELD(chunkSize, uint32_t{});
   SERDE_STRUCT_FIELD(checksumType, ChecksumType::NONE);
+  SERDE_STRUCT_FIELD(logicalKey, std::optional<cache::CacheBlockKey>{});
+  SERDE_STRUCT_FIELD(permit, std::optional<PermitIdentity>{});
+  SERDE_STRUCT_FIELD(descriptor, std::optional<CacheChunkDescriptor>{});
 
  public:
   Result<Void> valid() const {
@@ -36,6 +39,20 @@ struct ReplaceCacheChunkItem {
     if (cacheGeneration.toUnderType() == 0) return makeError(StatusCode::kInvalidArg, "cacheGeneration not set");
     if (data.empty() || chunkSize < data.size()) return makeError(StatusCode::kInvalidArg, "invalid cache chunk size");
     if (checksumType == ChecksumType::NONE) return makeError(StatusCode::kInvalidArg, "checksumType not set");
+    if (logicalKey.has_value() != permit.has_value())
+      return makeError(StatusCode::kInvalidArg, "logical key and permit must be provided together");
+    if (logicalKey) RETURN_ON_ERROR(logicalKey->valid());
+    if (permit) {
+      RETURN_ON_ERROR(permit->valid());
+      if (permit->placement.versionedChain != key.vChainId)
+        return makeError(CacheCode::kPlacementMismatch, "replace chain differs from permit placement");
+    }
+    if (descriptor) {
+      RETURN_ON_ERROR(descriptor->valid());
+      if (!logicalKey || !permit || descriptor->logicalKey != *logicalKey ||
+          descriptor->generation != cacheGeneration || descriptor->placement != permit->placement)
+        return makeError(CacheCode::kPlacementMismatch, "cache descriptor differs from replace identity");
+    }
     return Void{};
   }
 };
@@ -43,6 +60,7 @@ struct ReplaceCacheChunkItem {
 struct ReplaceCacheChunksReq {
   SERDE_STRUCT_FIELD(userInfo, flat::UserInfo{});
   SERDE_STRUCT_FIELD(items, std::vector<ReplaceCacheChunkItem>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
 
  public:
   Result<Void> valid() const {
@@ -61,6 +79,7 @@ struct CacheChunkGenerationInfo {
 
 struct ReplaceCacheChunksRsp {
   SERDE_STRUCT_FIELD(results, std::vector<Result<CacheChunkGenerationInfo>>{});
+  SERDE_STRUCT_FIELD(descriptors, std::vector<std::optional<CacheChunkDescriptor>>{});
 };
 
 struct RetireCacheChunkItem {
@@ -91,6 +110,7 @@ struct RetireCacheChunkGenerationsReq {
 
 struct RetireCacheChunkGenerationsRsp {
   SERDE_STRUCT_FIELD(results, std::vector<Result<CacheChunkGenerationInfo>>{});
+  SERDE_STRUCT_FIELD(descriptors, std::vector<std::optional<CacheChunkDescriptor>>{});
 };
 
 struct QueryCacheChunkGenerationsReq {
@@ -107,6 +127,7 @@ struct QueryCacheChunkGenerationsReq {
 
 struct QueryCacheChunkGenerationsRsp {
   SERDE_STRUCT_FIELD(results, std::vector<Result<CacheChunkGenerationInfo>>{});
+  SERDE_STRUCT_FIELD(descriptors, std::vector<std::optional<CacheChunkDescriptor>>{});
 };
 
 struct CacheSpaceInfo {

@@ -51,6 +51,7 @@ enum class MetaKeyType : uint8_t {
   ALLOCATEINDEX,
   ALLOCATESTART,
   VERSION,
+  CACHE_DESCRIPTOR,
   MAX = 0xFF,
 };
 
@@ -111,6 +112,7 @@ class ChunkKey {
 
 using ChunkMetaKey = ChunkKey<MetaKeyType::METADATA>;
 using UncommittedChunkKey = ChunkKey<MetaKeyType::UNCOMMITTED>;
+using CacheDescriptorKey = ChunkKey<MetaKeyType::CACHE_DESCRIPTOR>;
 
 struct FileSizeKey {
   SERDE_CLASS_FIELD(type, MetaKeyType::FILESIZE);
@@ -370,6 +372,44 @@ Result<Void> ChunkMetaStore::set(const ChunkId &chunkId, const ChunkMetadata &me
   return Void{};
 }
 
+Result<Void> ChunkMetaStore::setCacheState(const ChunkId &chunkId,
+                                           const ChunkMetadata &meta,
+                                           const std::optional<CacheChunkDescriptor> &descriptor) {
+  auto guard = storageMetaSet.record();
+  auto batchOp = kv_->createBatchOps();
+  batchOp->put(ChunkMetaKey(chunkId), serde::serializeBytes(meta));
+  if (meta.chunkState == ChunkState::COMMIT) {
+    batchOp->remove(UncommittedChunkKey(chunkId));
+  } else {
+    batchOp->put(UncommittedChunkKey(chunkId), {});
+  }
+  if (descriptor) {
+    batchOp->put(CacheDescriptorKey(chunkId), serde::serializeBytes(*descriptor));
+  } else {
+    batchOp->remove(CacheDescriptorKey(chunkId));
+  }
+  auto result = batchOp->commit();
+  if (UNLIKELY(!result)) {
+    auto msg = fmt::format("chunk id {} set cache state error: {}", chunkId, result.error());
+    XLOG(ERR, msg);
+    return makeError(StorageCode::kChunkMetadataSetError, std::move(msg));
+  }
+  guard.succ();
+  return Void{};
+}
+
+Result<std::optional<CacheChunkDescriptor>> ChunkMetaStore::getCacheDescriptor(const ChunkId &chunkId) {
+  auto result = kv_->get(CacheDescriptorKey(chunkId));
+  if (!result) {
+    if (result.error().code() == StatusCode::kKVStoreNotFound) return std::optional<CacheChunkDescriptor>{};
+    return makeError(StorageCode::kChunkMetadataGetError, result.error().describe());
+  }
+  CacheChunkDescriptor descriptor;
+  RETURN_ON_ERROR(serde::deserialize(descriptor, *result));
+  RETURN_ON_ERROR(descriptor.valid());
+  return std::optional<CacheChunkDescriptor>{std::move(descriptor)};
+}
+
 Result<Void> ChunkMetaStore::remove(const ChunkId &chunkId, const ChunkMetadata &meta) {
   auto guard = storageMetaRemove.record();
 
@@ -385,6 +425,7 @@ Result<Void> ChunkMetaStore::remove(const ChunkId &chunkId, const ChunkMetadata 
   XLOGF(DBG, "remove meta data {}", meta);
   batchOp->remove(chunkMetaKey);
   batchOp->remove(UncommittedChunkKey(chunkId));
+  batchOp->remove(CacheDescriptorKey(chunkId));
 
   const bool doPunchHole = meta.innerOffset < state.startingPoint.load();
   if (doPunchHole) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -289,6 +290,29 @@ struct PermitIdentity {
   bool operator==(const PermitIdentity &) const = default;
 };
 static_assert(serde::Serializable<PermitIdentity>);
+
+struct CacheChunkDescriptor {
+  SERDE_STRUCT_FIELD(logicalKey, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(generation, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(placement, PlacementIdentity{});
+  SERDE_STRUCT_FIELD(targetId, TargetId{});
+  SERDE_STRUCT_FIELD(createdAtNs, uint64_t{0});
+  SERDE_STRUCT_FIELD(lastAccessAtNs, uint64_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(logicalKey.valid());
+    if (generation == cache::CacheGeneration{}) return makeError(StatusCode::kInvalidArg, "generation not set");
+    RETURN_ON_ERROR(placement.valid());
+    if (!std::binary_search(placement.expectedReplicaTargets.begin(), placement.expectedReplicaTargets.end(), targetId))
+      return makeError(CacheCode::kPlacementMismatch, "descriptor target is outside placement");
+    if (createdAtNs == 0 || lastAccessAtNs < createdAtNs)
+      return makeError(StatusCode::kInvalidArg, "invalid descriptor timestamps");
+    return Void{};
+  }
+  bool operator==(const CacheChunkDescriptor &) const = default;
+};
+static_assert(serde::Serializable<CacheChunkDescriptor>);
 
 struct GlobalKey {
   SERDE_STRUCT_FIELD(vChainId, VersionedChainId{});

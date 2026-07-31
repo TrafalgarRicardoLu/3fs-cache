@@ -17,6 +17,14 @@ meta::Inode originInode(bool superseded = false) {
   return meta::Inode{meta::InodeId{7}, meta::InodeData{std::move(origin)}};
 }
 
+storage::PermitIdentity phase2Permit() {
+  storage::PlacementIdentity placement{{flat::ChainId{1}, flat::ChainVersion{1}},
+                                       {flat::TargetId{1}},
+                                       flat::TargetId{1},
+                                       Uuid::from(2, 1)};
+  return {Uuid::from(3, 1), placement, 1, {{flat::TargetId{1}, 4096}}};
+}
+
 class MockBackend : public CacheManagerBackend {
  public:
   CoTryTask<meta::Inode> stat(meta::InodeId) final {
@@ -39,7 +47,7 @@ class MockBackend : public CacheManagerBackend {
   }
   CoTryTask<storage::CacheChunkGenerationInfo> replace(const meta::Inode &,
                                                        cache::CacheBlockIndex,
-                                                       const meta::CacheBlockLease &,
+                                                       const meta::CacheBlockLease &activeLease,
                                                        std::vector<uint8_t> data) final {
     events.push_back("replace");
     ++replaceCalls;
@@ -47,13 +55,14 @@ class MockBackend : public CacheManagerBackend {
       co_return makeError(replaceError.value_or(Status(CacheCode::kUnavailable, "storage failed")));
     }
     auto checksum = storage::ChecksumInfo::create(storage::ChecksumType::CRC32C, data.data(), data.size());
-    co_return storage::CacheChunkGenerationInfo{lease.cacheGeneration, false, data.size(), checksum};
+    co_return storage::CacheChunkGenerationInfo{activeLease.cacheGeneration, false, data.size(), checksum};
   }
   CoTryTask<void> commit(const meta::CacheBlockRequestBase &,
-                         const meta::CacheBlockLease &,
+                         const meta::CacheBlockLease &activeLease,
                          const storage::CacheChunkGenerationInfo &) final {
     events.push_back("commit");
     if (commitError.has_value()) co_return makeError(*commitError);
+    committedPermit = activeLease.permit;
     ++commits;
     co_return Void{};
   }
@@ -62,12 +71,26 @@ class MockBackend : public CacheManagerBackend {
     ++fails;
     co_return Void{};
   }
+  CoTryTask<storage::CachePermitResult> renewPermit(const storage::PermitIdentity &permit, uint64_t expiresAtNs) final {
+    events.push_back("renew");
+    renewed.push_back(permit);
+    if (renewError) co_return makeError(*renewError);
+    co_return storage::CachePermitResult{permit, renewedState, expiresAtNs};
+  }
+  CoTryTask<void> releasePermit(const storage::PermitIdentity &permit) final {
+    events.push_back("release");
+    released.push_back(permit);
+    co_return Void{};
+  }
 
   meta::Inode inode = originInode();
   meta::CacheBlockLease lease{Uuid::random(), 1, cache::CacheGeneration{1}};
   std::optional<Status> originError;
   std::optional<Status> replaceError;
   std::optional<Status> commitError;
+  std::optional<Status> renewError;
+  std::optional<storage::PermitIdentity> committedPermit;
+  cache::CachePermitState renewedState{cache::CachePermitState::RESERVED};
   bool changeAfterWrite{false};
   int statCalls{0};
   int commits{0};
@@ -76,6 +99,8 @@ class MockBackend : public CacheManagerBackend {
   int failReplaceCall{-1};
   std::vector<std::string> events;
   std::vector<cache::ByteRange> ranges;
+  std::vector<storage::PermitIdentity> renewed;
+  std::vector<storage::PermitIdentity> released;
 };
 
 TEST(TestCacheLoader, MergesAndSplitsContiguousRanges) {
@@ -168,6 +193,50 @@ TEST(TestCacheLoader, RejectsSupersededInodeAfterStorageWrite) {
   ASSERT_ERROR(result, CacheCode::kVersionMismatch);
   ASSERT_EQ(backend->fails, 1);
   ASSERT_EQ(backend->commits, 0);
+}
+
+TEST(TestCacheLoader, RenewsAndThreadsPhase2PermitThroughReplaceAndCommit) {
+  auto backend = std::make_shared<MockBackend>();
+  backend->lease.permit = phase2Permit();
+  CapacityGate gate({1, 4096}, {{cache::OriginId{1}, {1, 4096}}});
+  CacheLoader loader(backend, gate, 1_s, [] { return uint64_t{1000}; });
+  auto result = folly::coro::blockingWait(
+      loader.load({meta::InodeId{7}, cache::CacheBlockIndex{0}, 4096, EnsureReason::FOREGROUND_MISS, 1}));
+  ASSERT_OK(result);
+  ASSERT_EQ(backend->renewed, std::vector<storage::PermitIdentity>{phase2Permit()});
+  ASSERT_EQ(backend->committedPermit, backend->lease.permit);
+  ASSERT_TRUE(backend->released.empty());
+  ASSERT_EQ(backend->events,
+            (std::vector<std::string>{"stat", "acquire", "origin", "renew", "replace", "stat", "commit"}));
+}
+
+TEST(TestCacheLoader, ExpiredPhase2PermitFailsBeforeReplaceAndIsReleased) {
+  auto backend = std::make_shared<MockBackend>();
+  backend->lease.permit = phase2Permit();
+  backend->renewError = Status(CacheCode::kPermitExpired, "expired");
+  CapacityGate gate({1, 4096}, {{cache::OriginId{1}, {1, 4096}}});
+  CacheLoader loader(backend, gate, 1_s, [] { return uint64_t{1000}; });
+  auto result = folly::coro::blockingWait(
+      loader.load({meta::InodeId{7}, cache::CacheBlockIndex{0}, 4096, EnsureReason::FOREGROUND_MISS, 1}));
+  ASSERT_ERROR(result, CacheCode::kPermitExpired);
+  ASSERT_EQ(backend->replaceCalls, 0);
+  ASSERT_EQ(backend->fails, 1);
+  ASSERT_EQ(backend->released, std::vector<storage::PermitIdentity>{phase2Permit()});
+}
+
+TEST(TestCacheLoader, CommitFailureReleasesPhase2Permit) {
+  auto backend = std::make_shared<MockBackend>();
+  backend->lease.permit = phase2Permit();
+  backend->commitError = Status(RPCCode::kTimeout, "commit timeout");
+  CapacityGate gate({1, 4096}, {{cache::OriginId{1}, {1, 4096}}});
+  CacheLoader loader(backend, gate, 1_s, [] { return uint64_t{1000}; });
+  auto result = folly::coro::blockingWait(
+      loader.load({meta::InodeId{7}, cache::CacheBlockIndex{0}, 4096, EnsureReason::FOREGROUND_MISS, 1}));
+  ASSERT_ERROR(result, RPCCode::kTimeout);
+  ASSERT_EQ(backend->replaceCalls, 1);
+  ASSERT_EQ(backend->commits, 0);
+  ASSERT_EQ(backend->fails, 1);
+  ASSERT_EQ(backend->released, std::vector<storage::PermitIdentity>{phase2Permit()});
 }
 
 }  // namespace

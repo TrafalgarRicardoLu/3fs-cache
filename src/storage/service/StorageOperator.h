@@ -133,6 +133,8 @@ class StorageOperator {
   Result<CachePermitResult> renewLocalPermit(const CachePermitRequestItem &item, uint64_t nowNs);
   Result<Void> releaseLocalPermit(const PermitIdentity &permit, uint64_t nowNs);
   Result<CachePermitResult> queryLocalPermit(const PermitIdentity &permit, uint64_t nowNs);
+  Result<CachePermitResult> pinLocalPermit(const PermitIdentity &permit, uint64_t nowNs);
+  Result<Void> consumeLocalPermit(const PermitIdentity &permit);
   CoTryTask<CachePermitResult> preparePermitOnReplica(const PermitReplicaNode &node,
                                                       const CachePermitRequestItem &item,
                                                       const flat::UserInfo &userInfo,

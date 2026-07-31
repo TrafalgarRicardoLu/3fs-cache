@@ -18,6 +18,7 @@ struct ChunkEngine {
     CacheChunkState state = CacheChunkState::NONE;
     cache::CacheGeneration generation{};
     Uuid operationId = Uuid::zero();
+    std::optional<CacheChunkDescriptor> descriptor;
   };
 
   static std::string encodeCacheTag(CacheTag tag);
@@ -104,6 +105,9 @@ struct ChunkEngine {
   static Result<CacheChunkGenerationInfo> queryCacheChunk(chunk_engine::Engine &engine,
                                                           const ChunkId &chunkId,
                                                           ChainId chainId);
+  static Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(chunk_engine::Engine &engine,
+                                                                               const ChunkId &chunkId,
+                                                                               ChainId chainId);
 
   static Result<ChunkMetadata> queryChunk(chunk_engine::Engine &engine, const ChunkId &chunkId, ChainId chainId) {
     std::string key;

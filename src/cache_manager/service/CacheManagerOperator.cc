@@ -35,7 +35,9 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
   capacityGate_ =
       std::make_unique<CapacityGate>(CapacityGate::Limit{config_.global_concurrency(), config_.max_inflight_bytes()},
                                      std::move(originLimits));
-  loader_ = std::make_unique<CacheLoader>(backend_, *capacityGate_);
+  loader_ = std::make_unique<CacheLoader>(backend_,
+                                          *capacityGate_,
+                                          config_.enable_phase2() ? config_.storage_permit_ttl() : 0_ns);
   loaderScheduler_ = std::make_unique<LoaderScheduler>(hints_, *loader_, config_.range_size());
   cleanupWorker_ = std::make_unique<CacheCleanupWorker>(backend_);
   reportInvalid_ = std::make_unique<ReportCacheBlockInvalid>(backend_, *cleanupWorker_);

@@ -79,6 +79,7 @@ class ChunkStore {
   Result<CacheChunkGenerationInfo> retireCacheChunk(const RetireCacheChunkItem &item);
 
   Result<CacheChunkGenerationInfo> queryCacheChunk(const ChunkId &chunkId);
+  Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(const ChunkId &chunkId);
 
   // recycle a batch of chunks.
   Result<bool> punchHole() { return metaStore_.punchHole(); }

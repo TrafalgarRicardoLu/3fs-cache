@@ -114,6 +114,7 @@ class StorageTarget : public enable_shared_from_this<StorageTarget> {
                                                      folly::CPUThreadPoolExecutor &executor);
   Result<CacheChunkGenerationInfo> retireCacheChunk(const RetireCacheChunkItem &item);
   Result<CacheChunkGenerationInfo> queryCacheChunk(const ChunkId &chunkId);
+  Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(const ChunkId &chunkId);
 
   // recycle a batch of chunks. return true if all holes are punched.
   Result<bool> punchHole() {

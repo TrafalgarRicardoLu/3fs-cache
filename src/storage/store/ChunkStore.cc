@@ -95,13 +95,14 @@ Result<CacheChunkGenerationInfo> ChunkStore::replaceCacheChunk(const ReplaceCach
   if (current) {
     chunkInfo = (*current)->second;
     auto &meta = chunkInfo.meta;
+    CHECK_RESULT(existingDescriptor, metaStore_.getCacheDescriptor(chunkId));
     if (meta.cacheGeneration == item.cacheGeneration) {
       if (meta.cacheState == CacheChunkState::ACTIVE && meta.cacheOperationId == item.operationId &&
-          meta.size == item.data.size() && meta.checksum() == checksum) {
+          existingDescriptor == item.descriptor && meta.size == item.data.size() && meta.checksum() == checksum) {
         return cacheGenerationInfo(meta);
       }
       if (meta.cacheState != CacheChunkState::WRITING || meta.cacheOperationId != item.operationId ||
-          meta.size != item.data.size() || meta.checksum() != checksum) {
+          existingDescriptor != item.descriptor || meta.size != item.data.size() || meta.checksum() != checksum) {
         return makeError(meta.cacheState == CacheChunkState::RETIRED ? CacheCode::kStaleGeneration
                                                                      : CacheCode::kStateConflict);
       }
@@ -127,9 +128,10 @@ Result<CacheChunkGenerationInfo> ChunkStore::replaceCacheChunk(const ReplaceCach
   meta.chunkState = ChunkState::DIRTY;
   if (create) {
     RETURN_ON_ERROR(createChunk(chunkId, item.chunkSize, chunkInfo, executor, true));
-  } else {
-    RETURN_ON_ERROR(set(chunkId, chunkInfo));
   }
+  RETURN_ON_ERROR(metaStore_.setCacheState(chunkId, meta, item.descriptor));
+  auto &map = maps_[std::hash<ChunkId>{}(chunkId) % kShardsNum];
+  map.insert_or_assign(chunkId, chunkInfo);
 
   CHECK_RESULT(written, chunkInfo.view.write(item.data.data(), item.data.size(), 0, meta));
   if (written != item.data.size()) return makeError(StorageCode::kChunkWriteFailed, "short cache chunk write");
@@ -141,16 +143,20 @@ Result<CacheChunkGenerationInfo> ChunkStore::replaceCacheChunk(const ReplaceCach
   meta.recycleState = RecycleState::NORMAL;
   meta.cacheState = CacheChunkState::ACTIVE;
   meta.timestamp = UtcClock::now();
-  RETURN_ON_ERROR(set(chunkId, chunkInfo));
+  RETURN_ON_ERROR(metaStore_.setCacheState(chunkId, meta, item.descriptor));
+  map.insert_or_assign(chunkId, chunkInfo);
   return cacheGenerationInfo(meta);
 }
 
 Result<CacheChunkGenerationInfo> ChunkStore::retireCacheChunk(const RetireCacheChunkItem &item) {
   const auto &chunkId = item.key.chunkId;
   ChunkInfo chunkInfo;
+  std::optional<CacheChunkDescriptor> descriptor;
   auto current = get(chunkId);
   if (current) {
     chunkInfo = (*current)->second;
+    CHECK_RESULT(currentDescriptor, metaStore_.getCacheDescriptor(chunkId));
+    descriptor = std::move(currentDescriptor);
     if (chunkInfo.meta.cacheGeneration > item.expectedGeneration) {
       return makeError(CacheCode::kGenerationAdvanced);
     }
@@ -173,7 +179,7 @@ Result<CacheChunkGenerationInfo> ChunkStore::retireCacheChunk(const RetireCacheC
   meta.commitVer = meta.updateVer;
   meta.chunkState = ChunkState::COMMIT;
   meta.timestamp = UtcClock::now();
-  RETURN_ON_ERROR(metaStore_.set(chunkId, meta));
+  RETURN_ON_ERROR(metaStore_.setCacheState(chunkId, meta, descriptor));
   auto &map = maps_[std::hash<ChunkId>{}(chunkId) % kShardsNum];
   map.insert_or_assign(chunkId, chunkInfo);
   return cacheGenerationInfo(meta);
@@ -183,6 +189,12 @@ Result<CacheChunkGenerationInfo> ChunkStore::queryCacheChunk(const ChunkId &chun
   CHECK_RESULT(current, get(chunkId));
   if (current->second.meta.cacheState == CacheChunkState::NONE) return makeError(CacheCode::kNotFound);
   return cacheGenerationInfo(current->second.meta);
+}
+
+Result<std::optional<CacheChunkDescriptor>> ChunkStore::queryCacheChunkDescriptor(const ChunkId &chunkId) {
+  CHECK_RESULT(current, get(chunkId));
+  if (current->second.meta.cacheState == CacheChunkState::NONE) return makeError(CacheCode::kNotFound);
+  return metaStore_.getCacheDescriptor(chunkId);
 }
 
 Result<Void> ChunkStore::createChunk(const ChunkId &chunkId,

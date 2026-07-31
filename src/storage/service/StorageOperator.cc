@@ -1212,9 +1212,18 @@ CoTryTask<GetAllChunkMetadataRsp> StorageOperator::getAllChunkMetadata(const Get
 }
 
 CoTryTask<ReplaceCacheChunksRsp> StorageOperator::replaceCacheChunks(const ReplaceCacheChunksReq &req) {
+  if (req.items.size() > kMaxCacheStorageBatchItems) {
+    co_return makeError(CacheCode::kRequestTooLarge, "too many cache chunks");
+  }
+  if (config_.enable_cache_phase2()) {
+    CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, true));
+  }
   ReplaceCacheChunksRsp response;
   response.results.reserve(req.items.size());
+  response.descriptors.reserve(req.items.size());
   for (const auto &item : req.items) {
+    std::optional<CacheChunkDescriptor> responseDescriptor;
+    auto appendDescriptor = folly::makeGuard([&] { response.descriptors.push_back(std::move(responseDescriptor)); });
     auto valid = item.valid();
     if (!valid) {
       response.results.push_back(makeError(std::move(valid.error())));
@@ -1230,16 +1239,64 @@ CoTryTask<ReplaceCacheChunksRsp> StorageOperator::replaceCacheChunks(const Repla
       response.results.push_back(makeError(CacheCode::kStateConflict, "chain is not CACHE_DATA"));
       continue;
     }
+    auto localItem = item;
+    bool pinned = false;
+    if (config_.enable_cache_phase2()) {
+      if (!item.permit || !item.logicalKey) {
+        response.results.push_back(makeError(CacheCode::kPermitExpired, "phase two cache replace requires a permit"));
+        continue;
+      }
+      if (target->storageRole != StorageRole::CACHE_ONLY || target->storageTarget == nullptr) {
+        response.results.push_back(makeError(CacheCode::kRoleMismatch, "cache replace target is not cache-only"));
+        continue;
+      }
+      if (!std::binary_search(item.permit->placement.expectedReplicaTargets.begin(),
+                              item.permit->placement.expectedReplicaTargets.end(),
+                              target->targetId)) {
+        response.results.push_back(
+            makeError(CacheCode::kPlacementMismatch, "local target is outside permit placement"));
+        continue;
+      }
+      auto footprint = item.permit->footprintByTarget.find(target->targetId);
+      auto actualFootprint = target->storageTarget->physicalFootprint(item.chunkSize, item.data.size());
+      if (footprint == item.permit->footprintByTarget.end() || actualFootprint.hasError() ||
+          footprint->second != *actualFootprint) {
+        response.results.push_back(
+            makeError(CacheCode::kPermitConflict, "cache replace footprint differs from permit"));
+        continue;
+      }
+      const auto nowNs = static_cast<uint64_t>(UtcClock::now().toMicroseconds()) * 1000;
+      auto pin = pinLocalPermit(*item.permit, nowNs);
+      if (pin.hasError()) {
+        response.results.push_back(makeError(std::move(pin.error())));
+        continue;
+      }
+      pinned = true;
+      localItem.descriptor = CacheChunkDescriptor{*item.logicalKey,
+                                                  item.cacheGeneration,
+                                                  item.permit->placement,
+                                                  target->targetId,
+                                                  nowNs,
+                                                  nowNs};
+    } else if (item.permit || item.logicalKey || item.descriptor) {
+      response.results.push_back(makeError(CacheCode::kFeatureDisabled, "phase two cache replace is disabled"));
+      continue;
+    }
 
     folly::coro::Baton baton;
     auto lock = target->storageTarget->lockChunk(baton, item.key.chunkId, "replaceCacheChunk");
     if (!lock.locked()) co_await lock.lock();
-    auto result = target->storageTarget->replaceCacheChunk(item, updateWorker_.backgroundExecutor());
+    auto result = target->storageTarget->replaceCacheChunk(localItem, updateWorker_.backgroundExecutor());
+    if (pinned) {
+      auto consumed = consumeLocalPermit(*item.permit);
+      if (consumed.hasError() && result.hasValue()) result = makeError(std::move(consumed.error()));
+    }
     if (!result && result.error().code() == CacheCode::kStaleGeneration) {
       storageCacheStaleReplaceCount.addSample(1);
       cache::metrics::recordCount(cache::metrics::Event::STORAGE_GENERATION_STALE, 1, {.reason = "replace"});
     }
     if (result) {
+      responseDescriptor = localItem.descriptor;
       storageCacheReplaceCount.addSample(1);
       cache::metrics::recordCount(cache::metrics::Event::STORAGE_GENERATION_REPLACE, 1, {.reason = "replace"});
     }
@@ -1258,7 +1315,10 @@ CoTryTask<RetireCacheChunkGenerationsRsp> StorageOperator::retireCacheChunkGener
     const RetireCacheChunkGenerationsReq &req) {
   RetireCacheChunkGenerationsRsp response;
   response.results.reserve(req.items.size());
+  response.descriptors.reserve(req.items.size());
   for (const auto &item : req.items) {
+    std::optional<CacheChunkDescriptor> responseDescriptor;
+    auto appendDescriptor = folly::makeGuard([&] { response.descriptors.push_back(std::move(responseDescriptor)); });
     auto valid = item.valid();
     if (!valid) {
       response.results.push_back(makeError(std::move(valid.error())));
@@ -1280,6 +1340,8 @@ CoTryTask<RetireCacheChunkGenerationsRsp> StorageOperator::retireCacheChunkGener
     if (!lock.locked()) co_await lock.lock();
     auto result = target->storageTarget->retireCacheChunk(item);
     if (result) {
+      auto descriptor = target->storageTarget->queryCacheChunkDescriptor(item.key.chunkId);
+      if (descriptor) responseDescriptor = std::move(*descriptor);
       storageCacheRetireCount.addSample(1);
       storageCacheTombstoneCount.addSample(1);
       cache::metrics::recordCount(cache::metrics::Event::STORAGE_TOMBSTONE, 1, {.reason = "retire"});
@@ -1299,7 +1361,10 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageOperator::queryCacheChunkGenerat
     const QueryCacheChunkGenerationsReq &req) {
   QueryCacheChunkGenerationsRsp response;
   response.results.reserve(req.keys.size());
+  response.descriptors.reserve(req.keys.size());
   for (const auto &key : req.keys) {
+    std::optional<CacheChunkDescriptor> responseDescriptor;
+    auto appendDescriptor = folly::makeGuard([&] { response.descriptors.push_back(std::move(responseDescriptor)); });
     auto valid = key.valid();
     if (!valid) {
       response.results.push_back(makeError(std::move(valid.error())));
@@ -1315,7 +1380,12 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageOperator::queryCacheChunkGenerat
       response.results.push_back(makeError(CacheCode::kStateConflict, "chain is not CACHE_DATA"));
       continue;
     }
-    response.results.push_back(target->storageTarget->queryCacheChunk(key.chunkId));
+    auto result = target->storageTarget->queryCacheChunk(key.chunkId);
+    if (result) {
+      auto descriptor = target->storageTarget->queryCacheChunkDescriptor(key.chunkId);
+      if (descriptor) responseDescriptor = std::move(*descriptor);
+    }
+    response.results.push_back(std::move(result));
   }
   co_return response;
 }
@@ -1479,6 +1549,34 @@ Result<CachePermitResult> StorageOperator::queryLocalPermit(const PermitIdentity
   for (auto *gate : gates) {
     result = gate->query(permit, nowNs);
     if (!result) break;
+  }
+  return result;
+}
+
+Result<CachePermitResult> StorageOperator::pinLocalPermit(const PermitIdentity &permit, uint64_t nowNs) {
+  CHECK_RESULT(gates, resolveLocalPermitGates(permit));
+  std::vector<CacheSpaceGate *> pinned;
+  Result<CachePermitResult> result = makeError(CacheCode::kUnavailable);
+  for (auto *gate : gates) {
+    result = gate->pin(permit, nowNs);
+    if (!result) break;
+    pinned.push_back(gate);
+  }
+  if (!result) {
+    for (auto *gate : pinned) {
+      auto rollback = gate->consume(permit);
+      XLOGF_IF(ERR, rollback.hasError(), "rollback pinned cache permit failed: {}", rollback.error());
+    }
+  }
+  return result;
+}
+
+Result<Void> StorageOperator::consumeLocalPermit(const PermitIdentity &permit) {
+  CHECK_RESULT(gates, resolveLocalPermitGates(permit));
+  Result<Void> result = Void{};
+  for (auto *gate : gates) {
+    auto consumed = gate->consume(permit);
+    if (consumed.hasError() && result.hasValue()) result = makeError(std::move(consumed.error()));
   }
   return result;
 }

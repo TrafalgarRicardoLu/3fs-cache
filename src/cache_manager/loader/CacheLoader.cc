@@ -4,6 +4,11 @@
 #include <limits>
 
 namespace hf3fs::cache_manager {
+namespace {
+
+uint64_t loaderWallClockNs() { return static_cast<uint64_t>(UtcClock::now().toMicroseconds()) * 1000; }
+
+}  // namespace
 
 RealCacheManagerBackend::RealCacheManagerBackend(const Config &config,
                                                  std::shared_ptr<meta::client::MetaClient> metaClient,
@@ -183,14 +188,28 @@ CoTryTask<storage::CacheChunkGenerationInfo> RealCacheManagerBackend::replace(co
   item.data = std::move(data);
   item.chunkSize = blockSize;
   item.checksumType = storage::ChecksumType::CRC32C;
+  if (lease.permit) {
+    item.logicalKey = cache::CacheBlockKey{inode.id.u64(), block};
+    item.permit = lease.permit;
+    req.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  }
   req.items.push_back(std::move(item));
   auto result = co_await storageClient_->replaceCacheChunks(req);
   CO_RETURN_ON_ERROR(result);
   if (result->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid replace result count");
+  if (lease.permit && result->descriptors.size() != 1)
+    co_return makeError(CacheCode::kInvalidResponse, "invalid replace descriptor count");
   CO_RETURN_ON_ERROR(result->results.front());
   const auto &stored = *result->results.front();
   if (stored.cacheGeneration != lease.cacheGeneration || stored.retired || stored.length != req.items[0].data.size()) {
     co_return makeError(CacheCode::kInvalidResponse, "storage returned an unexpected cache generation");
+  }
+  if (lease.permit) {
+    const auto &descriptor = result->descriptors.front();
+    if (!descriptor || descriptor->logicalKey != *req.items[0].logicalKey ||
+        descriptor->generation != lease.cacheGeneration || descriptor->placement != lease.permit->placement) {
+      co_return makeError(CacheCode::kPlacementMismatch, "storage returned a mismatched cache descriptor");
+    }
   }
   co_return stored;
 }
@@ -200,13 +219,17 @@ CoTryTask<void> RealCacheManagerBackend::commit(const meta::CacheBlockRequestBas
                                                 const storage::CacheChunkGenerationInfo &stored) {
   meta::CommitCacheBlocksReq req;
   req.service = service();
-  req.items.push_back({item.key,
-                       lease.loaderId,
-                       lease.loadEpoch,
-                       lease.cacheGeneration,
-                       item.blockLength,
-                       static_cast<uint8_t>(stored.checksum.type),
-                       stored.checksum.value});
+  meta::CommitCacheBlockItem commit;
+  commit.key = item.key;
+  commit.loaderId = lease.loaderId;
+  commit.loadEpoch = lease.loadEpoch;
+  commit.cacheGeneration = lease.cacheGeneration;
+  commit.blockLength = item.blockLength;
+  commit.checksumType = static_cast<uint8_t>(stored.checksum.type);
+  commit.checksumValue = stored.checksum.value;
+  commit.permit = lease.permit;
+  if (lease.permit) commit.placement = lease.permit->placement;
+  req.items.push_back(std::move(commit));
   auto result = co_await metaClient_->commitCacheBlocks(std::move(req));
   CO_RETURN_ON_ERROR(result);
   if (result->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid commit result count");
@@ -355,6 +378,7 @@ Result<std::vector<cache::ByteRange>> CacheLoader::mergeRanges(std::span<const L
 
 CoTryTask<void> CacheLoader::fail(const cache::CacheBlockKey &key, const meta::CacheBlockLease &lease, Status error) {
   (void)co_await backend_->fail(key, lease);
+  if (lease.permit) (void)co_await backend_->releasePermit(*lease.permit);
   co_return makeError(std::move(error));
 }
 
@@ -428,7 +452,7 @@ CoTryTask<void> CacheLoader::loadBatch(std::vector<LoadHint> hints) {
     }
     if (permit.hasError()) {
       remember(permit.error());
-      for (size_t i = begin; i < end; ++i) (void)co_await backend_->fail(work[i].item.key, *work[i].lease);
+      for (size_t i = begin; i < end; ++i) (void)co_await fail(work[i].item.key, *work[i].lease, permit.error());
       begin = end;
       continue;
     }
@@ -436,7 +460,7 @@ CoTryTask<void> CacheLoader::loadBatch(std::vector<LoadHint> hints) {
     if (data.hasError() || data->size() != rangeLength) {
       auto error = data.hasError() ? data.error() : Status(CacheCode::kInvalidResponse, "origin range length mismatch");
       remember(error);
-      for (size_t i = begin; i < end; ++i) (void)co_await backend_->fail(work[i].item.key, *work[i].lease);
+      for (size_t i = begin; i < end; ++i) (void)co_await fail(work[i].item.key, *work[i].lease, error);
       begin = end;
       continue;
     }
@@ -445,10 +469,30 @@ CoTryTask<void> CacheLoader::loadBatch(std::vector<LoadHint> hints) {
       auto length = work[i].item.blockLength;
       std::vector<uint8_t> blockData(data->begin() + dataOffset, data->begin() + dataOffset + length);
       dataOffset += length;
+      if (work[i].lease->permit) {
+        auto nowNs = wallClockNs_ ? wallClockNs_() : loaderWallClockNs();
+        auto ttlNs = permitTtl_.count();
+        if (ttlNs <= 0 || nowNs > std::numeric_limits<uint64_t>::max() - static_cast<uint64_t>(ttlNs)) {
+          auto error = Status(CacheCode::kPermitExpired, "invalid cache permit renewal deadline");
+          remember(error);
+          (void)co_await fail(work[i].item.key, *work[i].lease, error);
+          continue;
+        }
+        auto renewed = co_await backend_->renewPermit(*work[i].lease->permit, nowNs + static_cast<uint64_t>(ttlNs));
+        if (renewed.hasError() || renewed->state != cache::CachePermitState::RESERVED ||
+            renewed->expiresAtNs <= nowNs) {
+          auto error = renewed.hasError()
+                           ? renewed.error()
+                           : Status(CacheCode::kPermitExpired, "cache permit is not reserved and unexpired");
+          remember(error);
+          (void)co_await fail(work[i].item.key, *work[i].lease, error);
+          continue;
+        }
+      }
       auto stored = co_await backend_->replace(*inode, work[i].hint.block, *work[i].lease, std::move(blockData));
       if (stored.hasError()) {
         remember(stored.error());
-        (void)co_await backend_->fail(work[i].item.key, *work[i].lease);
+        (void)co_await fail(work[i].item.key, *work[i].lease, stored.error());
       } else {
         work[i].stored = std::move(*stored);
       }
@@ -466,7 +510,7 @@ CoTryTask<void> CacheLoader::loadBatch(std::vector<LoadHint> hints) {
                                       : Status(CacheCode::kVersionMismatch, "OriginFile changed while loading");
       remember(error);
       for (auto &item : work) {
-        if (item.stored) (void)co_await backend_->fail(item.item.key, *item.lease);
+        if (item.stored) (void)co_await fail(item.item.key, *item.lease, error);
       }
     } else {
       for (auto &item : work) {
@@ -474,7 +518,7 @@ CoTryTask<void> CacheLoader::loadBatch(std::vector<LoadHint> hints) {
         auto committed = co_await backend_->commit(item.item, *item.lease, *item.stored);
         if (committed.hasError()) {
           remember(committed.error());
-          (void)co_await backend_->fail(item.item.key, *item.lease);
+          (void)co_await fail(item.item.key, *item.lease, committed.error());
         }
       }
     }

@@ -29,12 +29,13 @@ std::string ChunkEngine::encodeCacheTag(CacheTag tag) {
   auto generation = tag.generation.toUnderType();
   encoded.append(reinterpret_cast<const char *>(&generation), sizeof(generation));
   encoded.append(tag.operationId.asStringView());
+  if (tag.descriptor) encoded.append(serde::serialize(*tag.descriptor));
   return encoded;
 }
 
 std::optional<ChunkEngine::CacheTag> ChunkEngine::decodeCacheTag(rust::Slice<const uint8_t> tag) {
   constexpr auto expectedSize = kCacheTagMagic.size() + 1 + sizeof(uint64_t) + sizeof(Uuid);
-  if (tag.size() != expectedSize ||
+  if (tag.size() < expectedSize ||
       std::string_view{reinterpret_cast<const char *>(tag.data()), kCacheTagMagic.size()} != kCacheTagMagic) {
     return std::nullopt;
   }
@@ -46,6 +47,13 @@ std::optional<ChunkEngine::CacheTag> ChunkEngine::decodeCacheTag(rust::Slice<con
   std::memcpy(decoded.operationId.data,
               tag.data() + kCacheTagMagic.size() + 1 + sizeof(generation),
               sizeof(decoded.operationId.data));
+  if (tag.size() > expectedSize) {
+    CacheChunkDescriptor descriptor;
+    auto serialized =
+        std::string_view{reinterpret_cast<const char *>(tag.data() + expectedSize), tag.size() - expectedSize};
+    if (serde::deserialize(descriptor, serialized).hasError() || descriptor.valid().hasError()) return std::nullopt;
+    decoded.descriptor = std::move(descriptor);
+  }
   return decoded;
 }
 
@@ -168,7 +176,8 @@ Result<CacheChunkGenerationInfo> ChunkEngine::replaceCacheChunk(chunk_engine::En
     if (tag->generation == item.cacheGeneration) {
       auto checksum = ChecksumInfo::create(item.checksumType, item.data.data(), item.data.size());
       if (tag->state == CacheChunkState::ACTIVE && tag->operationId == item.operationId &&
-          meta.len == item.data.size() && ChecksumInfo{ChecksumType::CRC32C, ~meta.checksum} == checksum) {
+          tag->descriptor == item.descriptor && meta.len == item.data.size() &&
+          ChecksumInfo{ChecksumType::CRC32C, ~meta.checksum} == checksum) {
         return CacheChunkGenerationInfo{tag->generation, false, meta.len, checksum};
       }
       return makeError(tag->state == CacheChunkState::RETIRED ? CacheCode::kStaleGeneration
@@ -177,7 +186,7 @@ Result<CacheChunkGenerationInfo> ChunkEngine::replaceCacheChunk(chunk_engine::En
     if (tag->generation > item.cacheGeneration) return makeError(CacheCode::kStaleGeneration);
   }
 
-  auto tag = encodeCacheTag(CacheTag{CacheChunkState::ACTIVE, item.cacheGeneration, item.operationId});
+  auto tag = encodeCacheTag(CacheTag{CacheChunkState::ACTIVE, item.cacheGeneration, item.operationId, item.descriptor});
   auto checksum = ChecksumInfo::create(item.checksumType, item.data.data(), item.data.size());
   chunk_engine::UpdateReq request{};
   request.is_syncing = true;
@@ -205,18 +214,20 @@ Result<CacheChunkGenerationInfo> ChunkEngine::retireCacheChunk(chunk_engine::Eng
   if (!error.empty()) return makeError(StorageCode::kChunkMetadataGetError, std::move(error));
 
   uint32_t currentVersion = 0;
+  std::optional<CacheChunkDescriptor> descriptor;
   if (current != nullptr) {
     auto release = folly::makeGuard([&] { engine.release_raw_chunk(current); });
     currentVersion = current->raw_meta().chunk_ver;
     auto tag = decodeCacheTag(current->raw_etag());
     if (!tag) return makeError(CacheCode::kStateConflict, "chunk has no cache generation tag");
+    descriptor = tag->descriptor;
     if (tag->generation > item.expectedGeneration) return makeError(CacheCode::kGenerationAdvanced);
     if (tag->generation == item.expectedGeneration && tag->state == CacheChunkState::RETIRED) {
       return CacheChunkGenerationInfo{tag->generation, true, 0, ChecksumInfo{}};
     }
   }
 
-  auto tag = encodeCacheTag(CacheTag{CacheChunkState::RETIRED, item.expectedGeneration, item.operationId});
+  auto tag = encodeCacheTag(CacheTag{CacheChunkState::RETIRED, item.expectedGeneration, item.operationId, descriptor});
   static const uint8_t tombstoneByte = 0;
   auto checksum = ChecksumInfo::create(ChecksumType::CRC32C, &tombstoneByte, 1);
   chunk_engine::UpdateReq request{};
@@ -251,6 +262,20 @@ Result<CacheChunkGenerationInfo> ChunkEngine::queryCacheChunk(chunk_engine::Engi
   }
   const auto &meta = current->raw_meta();
   return CacheChunkGenerationInfo{tag->generation, false, meta.len, ChecksumInfo{ChecksumType::CRC32C, ~meta.checksum}};
+}
+
+Result<std::optional<CacheChunkDescriptor>> ChunkEngine::queryCacheChunkDescriptor(chunk_engine::Engine &engine,
+                                                                                   const ChunkId &chunkId,
+                                                                                   ChainId chainId) {
+  auto key = cacheChunkKey(chainId, chunkId);
+  std::string error;
+  auto current = engine.get_raw_chunk(toSlice(key), error);
+  if (!error.empty()) return makeError(StorageCode::kChunkMetadataGetError, std::move(error));
+  if (current == nullptr) return makeError(CacheCode::kNotFound);
+  auto release = folly::makeGuard([&] { engine.release_raw_chunk(current); });
+  auto tag = decodeCacheTag(current->raw_etag());
+  if (!tag) return makeError(CacheCode::kNotFound);
+  return tag->descriptor;
 }
 
 }  // namespace hf3fs::storage

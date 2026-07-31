@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <span>
@@ -133,9 +134,16 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
 
 class CacheLoader {
  public:
-  CacheLoader(std::shared_ptr<CacheManagerBackend> backend, CapacityGate &capacityGate)
+  using WallClockNsFn = std::function<uint64_t()>;
+
+  CacheLoader(std::shared_ptr<CacheManagerBackend> backend,
+              CapacityGate &capacityGate,
+              Duration permitTtl = 0_ns,
+              WallClockNsFn wallClockNs = {})
       : backend_(std::move(backend)),
-        capacityGate_(capacityGate) {}
+        capacityGate_(capacityGate),
+        permitTtl_(permitTtl),
+        wallClockNs_(std::move(wallClockNs)) {}
 
   CoTryTask<void> load(const LoadHint &hint);
   CoTryTask<void> loadBatch(std::vector<LoadHint> hints);
@@ -146,6 +154,8 @@ class CacheLoader {
 
   std::shared_ptr<CacheManagerBackend> backend_;
   CapacityGate &capacityGate_;
+  Duration permitTtl_;
+  WallClockNsFn wallClockNs_;
 };
 
 }  // namespace hf3fs::cache_manager
