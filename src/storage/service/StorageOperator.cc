@@ -64,6 +64,9 @@ monitor::CountRecorder storageCacheRetireCount{"storage.cache.retire"};
 monitor::CountRecorder storageCacheTombstoneCount{"storage.cache.tombstone"};
 
 Result<Void> StorageOperator::init(uint32_t numberOfDisks) {
+  auto localEvictionPolicy = createLocalEvictionPolicy(config_.local_eviction_policy());
+  RETURN_ON_ERROR(localEvictionPolicy);
+  localEvictionPolicy_ = std::move(*localEvictionPolicy);
   storageReadAvgBytes.setLambda([&] {
     auto totalReadBytes = totalReadBytes_.exchange(0);
     auto totalReadIOs = totalReadIOs_.exchange(0);

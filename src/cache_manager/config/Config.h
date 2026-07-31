@@ -36,6 +36,9 @@ class Config : public ConfigBase<Config> {
     if (admission_policy() != "second_miss") {
       return makeError(StatusCode::kInvalidConfig, "unknown cache admission policy");
     }
+    if (eviction_policy() != "lru") {
+      return makeError(StatusCode::kInvalidConfig, "unknown cache eviction policy");
+    }
     std::set<uint32_t> ids;
     for (size_t i = 0; i < origins_length(); ++i) {
       const auto &origin = origins(i);
@@ -79,6 +82,7 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(hint_timeout, 500_ms, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(scheduler_interval, 100_ms, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(admission_policy, std::string{"second_miss"});
+  CONFIG_ITEM(eviction_policy, std::string{"lru"});
   CONFIG_ITEM(second_miss_window, 30_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(second_miss_max_entries, uint32_t{65536}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(capacity_high_watermark, 0.9, [](double value) { return value > 0.0 && value < 1.0; });

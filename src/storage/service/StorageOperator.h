@@ -21,6 +21,7 @@
 #include "storage/service/ReliableForwarding.h"
 #include "storage/service/ReliableUpdate.h"
 #include "storage/store/StorageTargets.h"
+#include "storage/store/cache/LocalEvictionPolicy.h"
 #include "storage/update/UpdateWorker.h"
 
 namespace hf3fs::storage {
@@ -41,6 +42,7 @@ class StorageOperator {
     CONFIG_HOT_UPDATED_ITEM(read_only, false);
     CONFIG_HOT_UPDATED_ITEM(enable_cache_phase2, false);
     CONFIG_HOT_UPDATED_ITEM(local_access_persist_interval, 30_s, [](Duration value) { return value > 0_ns; });
+    CONFIG_ITEM(local_eviction_policy, std::string{"lru"});
     CONFIG_HOT_UPDATED_ITEM(rdma_transmission_req_timeout, 0_ms);
     CONFIG_HOT_UPDATED_ITEM(apply_transmission_before_getting_semaphore, true);
   };
@@ -216,6 +218,7 @@ class StorageOperator {
   CoLockManager<> permitCoordinatorLocks_;
   std::atomic<uint64_t> totalReadBytes_{};
   std::atomic<uint64_t> totalReadIOs_{};
+  std::unique_ptr<LocalEvictionPolicy> localEvictionPolicy_;
 };
 
 }  // namespace hf3fs::storage

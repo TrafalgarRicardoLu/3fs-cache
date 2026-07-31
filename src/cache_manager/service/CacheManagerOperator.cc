@@ -43,6 +43,9 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
   reportInvalid_ = std::make_unique<ReportCacheBlockInvalid>(backend_, *cleanupWorker_);
   adminCleanup_ = std::make_unique<AdminCleanupCacheBlocks>(backend_, *cleanupWorker_);
   if (config_.enable_phase2()) {
+    auto evictionPolicy = createEvictionPolicy(config_.eviction_policy());
+    RETURN_ON_ERROR(evictionPolicy);
+    evictionPolicy_ = std::move(*evictionPolicy);
     auto admissionPolicy = createAdmissionPolicy(config_.admission_policy(),
                                                  config_.second_miss_window().count(),
                                                  config_.second_miss_max_entries());
