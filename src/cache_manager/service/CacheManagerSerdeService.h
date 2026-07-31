@@ -16,6 +16,8 @@ class CacheManagerSerdeService : public serde::ServiceWrapper<CacheManagerSerdeS
   CoTryTask<AdminCleanupCacheBlocksRsp> adminCleanupCacheBlocks(serde::CallContext &,
                                                                 const AdminCleanupCacheBlocksReq &req);
   CoTryTask<GetCacheStatusRsp> getCacheStatus(serde::CallContext &, const GetCacheStatusReq &req);
+  CoTryTask<ReportCacheAccessRsp> reportCacheAccess(serde::CallContext &, const ReportCacheAccessReq &req);
+  CoTryTask<GetPhase2CacheStatusRsp> getPhase2CacheStatus(serde::CallContext &, const GetPhase2CacheStatusReq &req);
 
  private:
   CacheManagerOperator &operator_;

@@ -116,6 +116,20 @@ class StorageService : public serde::ServiceWrapper<StorageService, storage::Sto
     return storageOperator_.queryCacheChunkGenerations(req);
   }
 
+#define PHASE2_STORAGE_SERVICE_METHOD(NAME, REQ, RSP)            \
+  CoTryTask<RSP> NAME(serde::CallContext &ctx, const REQ &req) { \
+    reportDefaultQueueLatency(ctx);                              \
+    return storageOperator_.NAME(req);                           \
+  }
+  PHASE2_STORAGE_SERVICE_METHOD(queryCacheSpace, QueryCacheSpaceReq, QueryCacheSpaceRsp);
+  PHASE2_STORAGE_SERVICE_METHOD(prepareCachePermits, PrepareCachePermitsReq, PrepareCachePermitsRsp);
+  PHASE2_STORAGE_SERVICE_METHOD(renewCachePermits, RenewCachePermitsReq, RenewCachePermitsRsp);
+  PHASE2_STORAGE_SERVICE_METHOD(releaseCachePermits, ReleaseCachePermitsReq, ReleaseCachePermitsRsp);
+  PHASE2_STORAGE_SERVICE_METHOD(queryCachePermits, QueryCachePermitsReq, QueryCachePermitsRsp);
+  PHASE2_STORAGE_SERVICE_METHOD(retireCacheReplicas, RetireCacheReplicasReq, RetireCacheReplicasRsp);
+  PHASE2_STORAGE_SERVICE_METHOD(coordinateCacheRetires, CoordinateCacheRetiresReq, CoordinateCacheRetiresRsp);
+#undef PHASE2_STORAGE_SERVICE_METHOD
+
  private:
   void reportReadQueueLatency(serde::CallContext &ctx);
   void reportUpdateQueueLatency(serde::CallContext &ctx);

@@ -55,4 +55,10 @@ enum class CleanupBlockStatus : uint8_t {
   CONFLICT,
 };
 
+enum class AccessReportStatus : uint8_t {
+  ACCEPTED,
+  STALE_GENERATION,
+  DROPPED,
+};
+
 }  // namespace hf3fs::cache_manager

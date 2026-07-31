@@ -62,6 +62,11 @@ class DummyMetaServiceStub : public IMetaServiceStub {
   NOT_IMPLEMENTED_FUNC(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
   NOT_IMPLEMENTED_FUNC(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
   NOT_IMPLEMENTED_FUNC(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
+  NOT_IMPLEMENTED_FUNC(updateCacheBlockAccess, UpdateCacheBlockAccessReq, UpdateCacheBlockAccessRsp);
+  NOT_IMPLEMENTED_FUNC(beginEvictCacheBlocks, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
+  NOT_IMPLEMENTED_FUNC(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);
+  NOT_IMPLEMENTED_FUNC(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
+  NOT_IMPLEMENTED_FUNC(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
 
   virtual CoTryTask<AuthRsp> authenticate(const AuthReq &req) { co_return AuthRsp{req.user}; }
   CoTryTask<AuthRsp> authenticate(const AuthReq &req, const net::UserRequestOptions &, serde::Timestamp *) override {
@@ -162,6 +167,11 @@ class MetaServiceStub<hf3fs::stubs::StubMockContext<IMetaServiceStub>> : public 
   FORWARD_RPC_FUNC(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
   FORWARD_RPC_FUNC(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
   FORWARD_RPC_FUNC(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
+  FORWARD_RPC_FUNC(updateCacheBlockAccess, UpdateCacheBlockAccessReq, UpdateCacheBlockAccessRsp);
+  FORWARD_RPC_FUNC(beginEvictCacheBlocks, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
+  FORWARD_RPC_FUNC(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);
+  FORWARD_RPC_FUNC(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
+  FORWARD_RPC_FUNC(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
 
 #undef FORWARD_RPC_FUNC
 

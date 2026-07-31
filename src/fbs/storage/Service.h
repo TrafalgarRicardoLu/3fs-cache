@@ -24,6 +24,13 @@ SERDE_SERVICE(StorageSerde, 3) {
   SERDE_SERVICE_METHOD(replaceCacheChunks, 18, ReplaceCacheChunksReq, ReplaceCacheChunksRsp);
   SERDE_SERVICE_METHOD(retireCacheChunkGenerations, 19, RetireCacheChunkGenerationsReq, RetireCacheChunkGenerationsRsp);
   SERDE_SERVICE_METHOD(queryCacheChunkGenerations, 20, QueryCacheChunkGenerationsReq, QueryCacheChunkGenerationsRsp);
+  SERDE_SERVICE_METHOD(queryCacheSpace, 21, QueryCacheSpaceReq, QueryCacheSpaceRsp);
+  SERDE_SERVICE_METHOD(prepareCachePermits, 22, PrepareCachePermitsReq, PrepareCachePermitsRsp);
+  SERDE_SERVICE_METHOD(renewCachePermits, 23, RenewCachePermitsReq, RenewCachePermitsRsp);
+  SERDE_SERVICE_METHOD(releaseCachePermits, 24, ReleaseCachePermitsReq, ReleaseCachePermitsRsp);
+  SERDE_SERVICE_METHOD(queryCachePermits, 25, QueryCachePermitsReq, QueryCachePermitsRsp);
+  SERDE_SERVICE_METHOD(retireCacheReplicas, 26, RetireCacheReplicasReq, RetireCacheReplicasRsp);
+  SERDE_SERVICE_METHOD(coordinateCacheRetires, 27, CoordinateCacheRetiresReq, CoordinateCacheRetiresRsp);
 };
 
 }  // namespace hf3fs::storage

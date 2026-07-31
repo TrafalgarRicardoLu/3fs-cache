@@ -102,6 +102,10 @@ Result<Void> CacheManagerOperator::checkProtocol(uint32_t version) const {
   return Void{};
 }
 
+Result<Void> CacheManagerOperator::checkPhase2Protocol(uint32_t version) const {
+  return cache::checkPhase2Capability(version, config_.enable_phase2());
+}
+
 Result<Void> CacheManagerOperator::checkService(const ServiceIdentity &service) const {
   RETURN_ON_ERROR(service.valid());
   if (service.name != config_.service_name() || service.token != config_.service_token()) {
@@ -168,6 +172,18 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
     }
   }
   co_return response;
+}
+
+CoTryTask<ReportCacheAccessRsp> CacheManagerOperator::reportCacheAccess(const ReportCacheAccessReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkPhase2Protocol(req.cacheProtocolVersion));
+  co_return makeError(StatusCode::kNotImplemented, "cache access aggregation is not implemented");
+}
+
+CoTryTask<GetPhase2CacheStatusRsp> CacheManagerOperator::getPhase2CacheStatus(const GetPhase2CacheStatusReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkPhase2Protocol(req.cacheProtocolVersion));
+  co_return makeError(StatusCode::kNotImplemented, "phase two status is not implemented");
 }
 
 }  // namespace hf3fs::cache_manager

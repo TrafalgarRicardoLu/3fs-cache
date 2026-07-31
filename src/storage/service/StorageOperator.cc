@@ -1319,4 +1319,19 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageOperator::queryCacheChunkGenerat
   co_return response;
 }
 
+#define PHASE2_STORAGE_DISABLED_METHOD(NAME, REQ, RSP)                                                         \
+  CoTryTask<RSP> StorageOperator::NAME(const REQ &req) {                                                       \
+    CO_RETURN_ON_ERROR(req.valid());                                                                           \
+    CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2())); \
+    co_return makeError(StatusCode::kNotImplemented, #NAME " is not implemented");                             \
+  }
+PHASE2_STORAGE_DISABLED_METHOD(queryCacheSpace, QueryCacheSpaceReq, QueryCacheSpaceRsp);
+PHASE2_STORAGE_DISABLED_METHOD(prepareCachePermits, PrepareCachePermitsReq, PrepareCachePermitsRsp);
+PHASE2_STORAGE_DISABLED_METHOD(renewCachePermits, RenewCachePermitsReq, RenewCachePermitsRsp);
+PHASE2_STORAGE_DISABLED_METHOD(releaseCachePermits, ReleaseCachePermitsReq, ReleaseCachePermitsRsp);
+PHASE2_STORAGE_DISABLED_METHOD(queryCachePermits, QueryCachePermitsReq, QueryCachePermitsRsp);
+PHASE2_STORAGE_DISABLED_METHOD(retireCacheReplicas, RetireCacheReplicasReq, RetireCacheReplicasRsp);
+PHASE2_STORAGE_DISABLED_METHOD(coordinateCacheRetires, CoordinateCacheRetiresReq, CoordinateCacheRetiresRsp);
+#undef PHASE2_STORAGE_DISABLED_METHOD
+
 }  // namespace hf3fs::storage

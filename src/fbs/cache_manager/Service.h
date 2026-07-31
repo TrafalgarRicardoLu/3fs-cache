@@ -4,6 +4,7 @@
 
 #include "common/serde/Service.h"
 #include "fbs/cache_manager/Common.h"
+#include "fbs/storage/StorageIdentity.h"
 
 namespace hf3fs::cache_manager {
 
@@ -97,11 +98,75 @@ struct GetCacheStatusRsp {
   SERDE_STRUCT_FIELD(lastBypassReason, BypassReason::NONE);
 };
 
+struct CacheAccessReportItem {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(generation, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(clientObservedTimeNs, uint64_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    if (generation == cache::CacheGeneration{}) return makeError(StatusCode::kInvalidArg, "generation not set");
+    return Void{};
+  }
+};
+struct ReportCacheAccessReq {
+  SERDE_STRUCT_FIELD(user, flat::UserInfo{});
+  SERDE_STRUCT_FIELD(items, std::vector<CacheAccessReportItem>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (items.size() > cache::kMaxPhase2BatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "too many access reports");
+    for (const auto &item : items) RETURN_ON_ERROR(item.valid());
+    return Void{};
+  }
+};
+struct CacheAccessReportResult {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(status, AccessReportStatus::DROPPED);
+};
+struct ReportCacheAccessRsp {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CacheAccessReportResult>>{});
+};
+
+struct GetPhase2CacheStatusReq {
+  SERDE_STRUCT_FIELD(user, flat::UserInfo{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const { return Void{}; }
+};
+struct Phase2DiskStatus {
+  SERDE_STRUCT_FIELD(physicalDiskId, storage::PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(role, storage::StorageRole::INVALID);
+  SERDE_STRUCT_FIELD(capacityBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(physicalUsedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(allocatableBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(reservedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(snapshotAgeNs, uint64_t{0});
+  SERDE_STRUCT_FIELD(admissionPaused, false);
+  SERDE_STRUCT_FIELD(pauseReason, String{});
+};
+struct GetPhase2CacheStatusRsp {
+  SERDE_STRUCT_FIELD(enabled, false);
+  SERDE_STRUCT_FIELD(managerEpoch, Uuid::zero());
+  SERDE_STRUCT_FIELD(admissionPolicy, String{});
+  SERDE_STRUCT_FIELD(evictionPolicy, String{});
+  SERDE_STRUCT_FIELD(disks, std::vector<Phase2DiskStatus>{});
+  SERDE_STRUCT_FIELD(evicting, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventBacklog, uint64_t{0});
+  SERDE_STRUCT_FIELD(deadLetters, uint64_t{0});
+};
+
 SERDE_SERVICE(CacheManagerSerde, 1) {
   SERDE_SERVICE_METHOD(ensureCached, 1, EnsureCachedReq, EnsureCachedRsp);
   SERDE_SERVICE_METHOD(reportCacheBlockInvalid, 2, ReportCacheBlockInvalidReq, ReportCacheBlockInvalidRsp);
   SERDE_SERVICE_METHOD(adminCleanupCacheBlocks, 3, AdminCleanupCacheBlocksReq, AdminCleanupCacheBlocksRsp);
   SERDE_SERVICE_METHOD(getCacheStatus, 4, GetCacheStatusReq, GetCacheStatusRsp);
+  SERDE_SERVICE_METHOD(reportCacheAccess, 5, ReportCacheAccessReq, ReportCacheAccessRsp);
+  SERDE_SERVICE_METHOD(getPhase2CacheStatus, 6, GetPhase2CacheStatusReq, GetPhase2CacheStatusRsp);
 };
 
 }  // namespace hf3fs::cache_manager

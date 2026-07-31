@@ -13,6 +13,8 @@ CACHE_MANAGER_STUB_METHOD(ensureCached, EnsureCachedReq, EnsureCachedRsp);
 CACHE_MANAGER_STUB_METHOD(reportCacheBlockInvalid, ReportCacheBlockInvalidReq, ReportCacheBlockInvalidRsp);
 CACHE_MANAGER_STUB_METHOD(adminCleanupCacheBlocks, AdminCleanupCacheBlocksReq, AdminCleanupCacheBlocksRsp);
 CACHE_MANAGER_STUB_METHOD(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
+CACHE_MANAGER_STUB_METHOD(reportCacheAccess, ReportCacheAccessReq, ReportCacheAccessRsp);
+CACHE_MANAGER_STUB_METHOD(getPhase2CacheStatus, GetPhase2CacheStatusReq, GetPhase2CacheStatusRsp);
 #undef CACHE_MANAGER_STUB_METHOD
 
 template class CacheManagerServiceStub<serde::ClientContext>;

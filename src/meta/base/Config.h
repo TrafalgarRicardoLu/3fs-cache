@@ -123,6 +123,7 @@ struct Config : ConfigBase<Config> {
   CONFIG_HOT_UPDATED_ITEM(cache_service_name, std::string("cache-manager"));
   CONFIG_HOT_UPDATED_ITEM(cache_service_token, std::string{});
   CONFIG_HOT_UPDATED_ITEM(cache_load_lease, 1_min);
+  CONFIG_HOT_UPDATED_ITEM(enable_cache_phase2, false);
 
   CONFIG_OBJ(retry_transaction, TransactionRetry);
   CONFIG_OBJ(retry_remove_chunks, storage::client::RetryOptions, [](auto &c) {

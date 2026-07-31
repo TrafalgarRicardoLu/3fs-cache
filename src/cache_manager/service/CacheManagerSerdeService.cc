@@ -23,4 +23,14 @@ CoTryTask<GetCacheStatusRsp> CacheManagerSerdeService::getCacheStatus(serde::Cal
   co_return co_await operator_.getCacheStatus(req);
 }
 
+CoTryTask<ReportCacheAccessRsp> CacheManagerSerdeService::reportCacheAccess(serde::CallContext &,
+                                                                            const ReportCacheAccessReq &req) {
+  co_return co_await operator_.reportCacheAccess(req);
+}
+
+CoTryTask<GetPhase2CacheStatusRsp> CacheManagerSerdeService::getPhase2CacheStatus(serde::CallContext &,
+                                                                                  const GetPhase2CacheStatusReq &req) {
+  co_return co_await operator_.getPhase2CacheStatus(req);
+}
+
 }  // namespace hf3fs::cache_manager

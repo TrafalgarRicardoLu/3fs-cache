@@ -304,6 +304,11 @@ Result<Void> MetaOperator::checkCacheFeature(uint32_t protocolVersion) const {
   return Void{};
 }
 
+Result<Void> MetaOperator::checkCachePhase2(uint32_t protocolVersion) const {
+  RETURN_ON_ERROR(cache::checkPhase2Capability(protocolVersion, config_.enable_cache_phase2()));
+  return checkCacheFeature(protocolVersion);
+}
+
 Result<Void> MetaOperator::checkCacheService(const CacheServiceIdentity &service) const {
   RETURN_ON_ERROR(service.valid());
   if (config_.cache_service_token().empty() || service.name != config_.cache_service_name() ||
@@ -627,5 +632,18 @@ CoTryTask<ListCacheBlocksRsp> MetaOperator::listCacheBlocks(ListCacheBlocksReq r
   co_return co_await kv::WithTransaction(kv::FDBRetryStrategy(createRetryConfig()))
       .run(kvEngine_->createReadonlyTransaction(), std::move(handler));
 }
+
+#define META_PHASE2_DISABLED_METHOD(NAME, REQ, RSP)                                \
+  CoTryTask<RSP> MetaOperator::NAME(REQ req) {                                     \
+    CO_RETURN_ON_ERROR(req.valid());                                               \
+    CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));                \
+    co_return makeError(StatusCode::kNotImplemented, #NAME " is not implemented"); \
+  }
+META_PHASE2_DISABLED_METHOD(updateCacheBlockAccess, UpdateCacheBlockAccessReq, UpdateCacheBlockAccessRsp);
+META_PHASE2_DISABLED_METHOD(beginEvictCacheBlocks, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
+META_PHASE2_DISABLED_METHOD(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);
+META_PHASE2_DISABLED_METHOD(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
+META_PHASE2_DISABLED_METHOD(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
+#undef META_PHASE2_DISABLED_METHOD
 
 }  // namespace hf3fs::meta::server

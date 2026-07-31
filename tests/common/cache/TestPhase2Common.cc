@@ -3,11 +3,24 @@
 
 #include "common/serde/Serde.h"
 #include "fbs/cache/Common.h"
+#include "fbs/cache_manager/Service.h"
+#include "fbs/meta/Service.h"
 #include "fbs/storage/Common.h"
+#include "fbs/storage/Service.h"
 #include "tests/GtestHelpers.h"
 
 namespace hf3fs::cache::test {
 namespace {
+
+static_assert(meta::MetaSerde<>::listCacheBlocksMethodId == 33);
+static_assert(meta::MetaSerde<>::updateCacheBlockAccessMethodId == 34);
+static_assert(meta::MetaSerde<>::listCacheEventDeadLettersMethodId == 38);
+static_assert(storage::StorageSerde<>::queryCacheChunkGenerationsMethodId == 20);
+static_assert(storage::StorageSerde<>::queryCacheSpaceMethodId == 21);
+static_assert(storage::StorageSerde<>::coordinateCacheRetiresMethodId == 27);
+static_assert(cache_manager::CacheManagerSerde<>::getCacheStatusMethodId == 4);
+static_assert(cache_manager::CacheManagerSerde<>::reportCacheAccessMethodId == 5);
+static_assert(cache_manager::CacheManagerSerde<>::getPhase2CacheStatusMethodId == 6);
 
 storage::PlacementIdentity placement() {
   auto result = storage::PlacementIdentity::create({flat::ChainId{7}, flat::ChainVersion{3}},
@@ -22,6 +35,29 @@ TEST(Phase2CacheCommon, UsesPhase2CapabilityVersions) {
   EXPECT_EQ(kCacheSchemaVersion, 2);
   EXPECT_EQ(kCacheProtocolVersion, 2);
   EXPECT_NE(kCacheProtocolVersion, 1);
+}
+
+TEST(Phase2CacheCommon, CapabilityGateRejectsOldAndDisabledComponents) {
+  ASSERT_ERROR(checkPhase2Capability(kCacheProtocolVersion - 1, true), CacheCode::kUpgradeRequired);
+  ASSERT_ERROR(checkPhase2Capability(kCacheProtocolVersion, false), CacheCode::kFeatureDisabled);
+  EXPECT_TRUE(checkPhase2Capability(kCacheProtocolVersion, true));
+}
+
+TEST(Phase2CacheCommon, ServiceContractsRoundTripAndEnforceBatchLimit) {
+  cache_manager::ReportCacheAccessReq original;
+  original.items.push_back({CacheBlockKey{42, CacheBlockIndex{3}}, CacheGeneration{7}, 123});
+  original.cacheProtocolVersion = kCacheProtocolVersion;
+  cache_manager::ReportCacheAccessReq decoded;
+  ASSERT_TRUE(serde::deserialize(decoded, serde::serialize(original)));
+  ASSERT_EQ(decoded.items.size(), 1);
+  EXPECT_EQ(decoded.items.front().key, original.items.front().key);
+
+  original.items.resize(kMaxPhase2BatchItems + 1);
+  ASSERT_ERROR(original.valid(), CacheCode::kRequestTooLarge);
+
+  storage::PrepareCachePermitsReq permits;
+  permits.items.resize(kMaxPhase2BatchItems + 1);
+  ASSERT_ERROR(permits.valid(), CacheCode::kRequestTooLarge);
 }
 
 TEST(Phase2CacheCommon, KeepsCapacityErrorNamesStable) {

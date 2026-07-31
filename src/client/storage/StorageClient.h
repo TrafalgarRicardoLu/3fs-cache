@@ -572,6 +572,27 @@ class StorageClient : public folly::MoveOnly {
       const RetireCacheChunkGenerationsReq &req) = 0;
   virtual CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(
       const QueryCacheChunkGenerationsReq &req) = 0;
+  virtual CoTryTask<QueryCacheSpaceRsp> queryCacheSpace(const QueryCacheSpaceReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+  virtual CoTryTask<PrepareCachePermitsRsp> prepareCachePermits(const PrepareCachePermitsReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+  virtual CoTryTask<RenewCachePermitsRsp> renewCachePermits(const RenewCachePermitsReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+  virtual CoTryTask<ReleaseCachePermitsRsp> releaseCachePermits(const ReleaseCachePermitsReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+  virtual CoTryTask<QueryCachePermitsRsp> queryCachePermits(const QueryCachePermitsReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+  virtual CoTryTask<RetireCacheReplicasRsp> retireCacheReplicas(const RetireCacheReplicasReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+  virtual CoTryTask<CoordinateCacheRetiresRsp> coordinateCacheRetires(const CoordinateCacheRetiresReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
 
  protected:
   static const Config kDefaultConfig;

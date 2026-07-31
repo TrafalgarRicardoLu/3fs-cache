@@ -37,9 +37,12 @@ class CacheManagerOperator {
   CoTryTask<ReportCacheBlockInvalidRsp> reportCacheBlockInvalid(const ReportCacheBlockInvalidReq &req);
   CoTryTask<AdminCleanupCacheBlocksRsp> adminCleanupCacheBlocks(const AdminCleanupCacheBlocksReq &req);
   CoTryTask<GetCacheStatusRsp> getCacheStatus(const GetCacheStatusReq &req);
+  CoTryTask<ReportCacheAccessRsp> reportCacheAccess(const ReportCacheAccessReq &req);
+  CoTryTask<GetPhase2CacheStatusRsp> getPhase2CacheStatus(const GetPhase2CacheStatusReq &req);
 
  private:
   Result<Void> checkProtocol(uint32_t version) const;
+  Result<Void> checkPhase2Protocol(uint32_t version) const;
   Result<Void> checkService(const ServiceIdentity &service) const;
 
   const Config &config_;

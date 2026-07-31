@@ -67,6 +67,7 @@ class Config : public ConfigBase<Config> {
   CONFIG_OBJ(storage_client, storage::client::StorageClient::Config);
   CONFIG_OBJ(meta_client, meta::client::MetaClient::Config);
   CONFIG_ITEM(service_name, std::string{"cache-manager"});
+  CONFIG_ITEM(enable_phase2, false);
   CONFIG_ITEM(service_token, std::string{});
   CONFIG_ITEM(global_concurrency, uint32_t{64}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(max_inflight_bytes, uint64_t{1_GB}, ConfigCheckers::checkPositive);

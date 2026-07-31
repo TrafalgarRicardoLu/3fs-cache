@@ -39,6 +39,7 @@ class StorageOperator {
     CONFIG_HOT_UPDATED_ITEM(max_concurrent_rdma_writes, 256U);
     CONFIG_HOT_UPDATED_ITEM(max_concurrent_rdma_reads, 256U);
     CONFIG_HOT_UPDATED_ITEM(read_only, false);
+    CONFIG_HOT_UPDATED_ITEM(enable_cache_phase2, false);
     CONFIG_HOT_UPDATED_ITEM(rdma_transmission_req_timeout, 0_ms);
     CONFIG_HOT_UPDATED_ITEM(apply_transmission_before_getting_semaphore, true);
   };
@@ -100,6 +101,13 @@ class StorageOperator {
   CoTryTask<ReplaceCacheChunksRsp> replaceCacheChunks(const ReplaceCacheChunksReq &req);
   CoTryTask<RetireCacheChunkGenerationsRsp> retireCacheChunkGenerations(const RetireCacheChunkGenerationsReq &req);
   CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(const QueryCacheChunkGenerationsReq &req);
+  CoTryTask<QueryCacheSpaceRsp> queryCacheSpace(const QueryCacheSpaceReq &req);
+  CoTryTask<PrepareCachePermitsRsp> prepareCachePermits(const PrepareCachePermitsReq &req);
+  CoTryTask<RenewCachePermitsRsp> renewCachePermits(const RenewCachePermitsReq &req);
+  CoTryTask<ReleaseCachePermitsRsp> releaseCachePermits(const ReleaseCachePermitsReq &req);
+  CoTryTask<QueryCachePermitsRsp> queryCachePermits(const QueryCachePermitsReq &req);
+  CoTryTask<RetireCacheReplicasRsp> retireCacheReplicas(const RetireCacheReplicasReq &req);
+  CoTryTask<CoordinateCacheRetiresRsp> coordinateCacheRetires(const CoordinateCacheRetiresReq &req);
 
  protected:
   using ChunkMetadataProcessor = std::function<CoTryTask<void>(const ChunkId &, const ChunkMetadata &)>;

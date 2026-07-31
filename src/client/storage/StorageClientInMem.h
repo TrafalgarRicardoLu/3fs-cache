@@ -81,6 +81,16 @@ class StorageClientInMem : public StorageClient {
   CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(const QueryCacheChunkGenerationsReq &) override {
     co_return makeError(CacheCode::kFeatureDisabled);
   }
+#define PHASE2_INMEM_DISABLED(NAME, REQ, RSP) \
+  CoTryTask<RSP> NAME(const REQ &) override { co_return makeError(CacheCode::kFeatureDisabled); }
+  PHASE2_INMEM_DISABLED(queryCacheSpace, QueryCacheSpaceReq, QueryCacheSpaceRsp);
+  PHASE2_INMEM_DISABLED(prepareCachePermits, PrepareCachePermitsReq, PrepareCachePermitsRsp);
+  PHASE2_INMEM_DISABLED(renewCachePermits, RenewCachePermitsReq, RenewCachePermitsRsp);
+  PHASE2_INMEM_DISABLED(releaseCachePermits, ReleaseCachePermitsReq, ReleaseCachePermitsRsp);
+  PHASE2_INMEM_DISABLED(queryCachePermits, QueryCachePermitsReq, QueryCachePermitsRsp);
+  PHASE2_INMEM_DISABLED(retireCacheReplicas, RetireCacheReplicasReq, RetireCacheReplicasRsp);
+  PHASE2_INMEM_DISABLED(coordinateCacheRetires, CoordinateCacheRetiresReq, CoordinateCacheRetiresRsp);
+#undef PHASE2_INMEM_DISABLED
 
   CoTryTask<ChunkMetaVector> getAllChunkMetadata(const ChainId &chainId, const TargetId &targetId) override;
 

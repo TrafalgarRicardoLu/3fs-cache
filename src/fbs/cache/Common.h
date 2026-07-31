@@ -12,6 +12,15 @@ namespace hf3fs::cache {
 
 inline constexpr uint32_t kCacheSchemaVersion = 2;
 inline constexpr uint32_t kCacheProtocolVersion = 2;
+inline constexpr size_t kMaxPhase2BatchItems = 1000;
+
+inline Result<Void> checkPhase2Capability(uint32_t protocolVersion, bool enabled) {
+  if (protocolVersion != kCacheProtocolVersion) {
+    return makeError(CacheCode::kUpgradeRequired, "incompatible cache protocol version");
+  }
+  if (!enabled) return makeError(CacheCode::kFeatureDisabled, "cache phase two is disabled");
+  return Void{};
+}
 
 STRONG_TYPEDEF(uint32_t, OriginId);
 STRONG_TYPEDEF(uint32_t, CacheBlockIndex);

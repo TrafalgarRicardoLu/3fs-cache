@@ -109,4 +109,136 @@ struct QueryCacheChunkGenerationsRsp {
   SERDE_STRUCT_FIELD(results, std::vector<Result<CacheChunkGenerationInfo>>{});
 };
 
+struct CacheSpaceInfo {
+  SERDE_STRUCT_FIELD(physicalDiskId, PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(role, StorageRole::INVALID);
+  SERDE_STRUCT_FIELD(targets, std::vector<TargetId>{});
+  SERDE_STRUCT_FIELD(capacityBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(physicalUsedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(allocatableBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(reservedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(enforcedHighWatermark, double{0});
+  SERDE_STRUCT_FIELD(sampledAtNs, uint64_t{0});
+};
+
+struct QueryCacheSpaceReq {
+  SERDE_STRUCT_FIELD(targetIds, std::vector<TargetId>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (targetIds.size() > cache::kMaxPhase2BatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "too many cache targets");
+    for (auto targetId : targetIds)
+      if (targetId == TargetId{}) return makeError(StatusCode::kInvalidArg, "targetId not set");
+    return Void{};
+  }
+};
+struct QueryCacheSpaceRsp {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CacheSpaceInfo>>{});
+};
+
+struct CachePermitRequestItem {
+  SERDE_STRUCT_FIELD(permit, PermitIdentity{});
+  SERDE_STRUCT_FIELD(expiresAtNs, uint64_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(permit.valid());
+    if (expiresAtNs == 0) return makeError(StatusCode::kInvalidArg, "permit expiry not set");
+    return Void{};
+  }
+};
+struct CachePermitResult {
+  SERDE_STRUCT_FIELD(permit, PermitIdentity{});
+  SERDE_STRUCT_FIELD(state, cache::CachePermitState::INVALID);
+  SERDE_STRUCT_FIELD(expiresAtNs, uint64_t{0});
+};
+
+#define STORAGE_PHASE2_BOUNDED_REQ(NAME, FIELD, ITEM)                           \
+  struct NAME##Req {                                                            \
+    SERDE_STRUCT_FIELD(userInfo, flat::UserInfo{});                             \
+    SERDE_STRUCT_FIELD(FIELD, std::vector<ITEM>{});                             \
+    SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});                      \
+                                                                                \
+   public:                                                                      \
+    Result<Void> valid() const {                                                \
+      if (FIELD.size() > cache::kMaxPhase2BatchItems)                           \
+        return makeError(CacheCode::kRequestTooLarge, "cache batch too large"); \
+      for (const auto &item : FIELD) RETURN_ON_ERROR(item.valid());             \
+      return Void{};                                                            \
+    }                                                                           \
+  }
+
+STORAGE_PHASE2_BOUNDED_REQ(PrepareCachePermits, items, CachePermitRequestItem);
+STORAGE_PHASE2_BOUNDED_REQ(RenewCachePermits, items, CachePermitRequestItem);
+STORAGE_PHASE2_BOUNDED_REQ(ReleaseCachePermits, permits, PermitIdentity);
+STORAGE_PHASE2_BOUNDED_REQ(QueryCachePermits, permits, PermitIdentity);
+struct PrepareCachePermitsRsp {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CachePermitResult>>{});
+};
+struct RenewCachePermitsRsp {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CachePermitResult>>{});
+};
+struct ReleaseCachePermitsRsp {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<Void>>{});
+};
+struct QueryCachePermitsRsp {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CachePermitResult>>{});
+};
+
+struct RetireCacheReplicaItem {
+  SERDE_STRUCT_FIELD(key, CacheChunkKey{});
+  SERDE_STRUCT_FIELD(expectedGeneration, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(placement, PlacementIdentity{});
+  SERDE_STRUCT_FIELD(evictionEpoch, cache::EvictionEpoch{});
+  SERDE_STRUCT_FIELD(operationId, Uuid::zero());
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    RETURN_ON_ERROR(placement.valid());
+    if (expectedGeneration == cache::CacheGeneration{} || evictionEpoch == cache::EvictionEpoch{} ||
+        operationId == Uuid::zero())
+      return makeError(StatusCode::kInvalidArg, "invalid replica retire identity");
+    return Void{};
+  }
+};
+STORAGE_PHASE2_BOUNDED_REQ(RetireCacheReplicas, items, RetireCacheReplicaItem);
+struct RetireCacheReplicaResult {
+  SERDE_STRUCT_FIELD(operationId, Uuid::zero());
+  SERDE_STRUCT_FIELD(durableRetired, false);
+};
+struct RetireCacheReplicasRsp {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<RetireCacheReplicaResult>>{});
+};
+
+struct CoordinateCacheRetireItem {
+  SERDE_STRUCT_FIELD(key, CacheChunkKey{});
+  SERDE_STRUCT_FIELD(expectedGeneration, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(placement, PlacementIdentity{});
+  SERDE_STRUCT_FIELD(evictionEpoch, cache::EvictionEpoch{});
+  SERDE_STRUCT_FIELD(operationId, Uuid::zero());
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    RETURN_ON_ERROR(placement.valid());
+    if (expectedGeneration == cache::CacheGeneration{} || evictionEpoch == cache::EvictionEpoch{} ||
+        operationId == Uuid::zero())
+      return makeError(StatusCode::kInvalidArg, "invalid coordinated retire identity");
+    return Void{};
+  }
+};
+STORAGE_PHASE2_BOUNDED_REQ(CoordinateCacheRetires, items, CoordinateCacheRetireItem);
+struct CoordinateCacheRetireResult {
+  SERDE_STRUCT_FIELD(operationId, Uuid::zero());
+  SERDE_STRUCT_FIELD(allReplicasDurableRetired, false);
+};
+struct CoordinateCacheRetiresRsp {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CoordinateCacheRetireResult>>{});
+};
+
+#undef STORAGE_PHASE2_BOUNDED_REQ
+
 }  // namespace hf3fs::storage

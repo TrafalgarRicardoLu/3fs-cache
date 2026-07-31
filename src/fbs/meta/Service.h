@@ -21,6 +21,7 @@
 #include "fbs/meta/Common.h"
 #include "fbs/meta/Schema.h"
 #include "fbs/mgmtd/MgmtdTypes.h"
+#include "fbs/storage/Cache.h"
 
 #define META_SERVICE_VERSION 1
 
@@ -1022,6 +1023,158 @@ struct ListCacheBlocksRsp : RspBase {
   SERDE_STRUCT_FIELD(more, false);
 };
 
+struct UpdateCacheBlockAccessItem {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(generation, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(managerReceiveTimeNs, uint64_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    if (generation == cache::CacheGeneration{} || managerReceiveTimeNs == 0)
+      return makeError(StatusCode::kInvalidArg, "invalid access update identity");
+    return Void{};
+  }
+};
+struct UpdateCacheBlockAccessReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(items, std::vector<UpdateCacheBlockAccessItem>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (items.size() > cache::kMaxPhase2BatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "too many access updates");
+    for (const auto &item : items) RETURN_ON_ERROR(item.valid());
+    return Void{};
+  }
+};
+struct UpdateCacheBlockAccessResult {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(updated, false);
+};
+struct UpdateCacheBlockAccessRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<UpdateCacheBlockAccessResult>>{});
+};
+
+struct BeginEvictCacheBlockItem {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(expectedReady, cache::ReadyIdentity{});
+  SERDE_STRUCT_FIELD(reason, cache::EvictionReason::INVALID);
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    RETURN_ON_ERROR(expectedReady.valid());
+    if (reason == cache::EvictionReason::INVALID) return makeError(StatusCode::kInvalidArg, "reason not set");
+    return Void{};
+  }
+};
+struct BeginEvictCacheBlocksReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(items, std::vector<BeginEvictCacheBlockItem>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (items.size() > cache::kMaxPhase2BatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "too many eviction items");
+    for (const auto &item : items) RETURN_ON_ERROR(item.valid());
+    return Void{};
+  }
+};
+struct CacheEvictionIdentity {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(ready, cache::ReadyIdentity{});
+  SERDE_STRUCT_FIELD(placement, storage::PlacementIdentity{});
+  SERDE_STRUCT_FIELD(evictionEpoch, cache::EvictionEpoch{});
+  SERDE_STRUCT_FIELD(retireOperationId, Uuid::zero());
+};
+struct BeginEvictCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CacheEvictionIdentity>>{});
+};
+struct ListEvictingCacheBlocksReq : ReqBase {
+  SERDE_STRUCT_FIELD(beginInode, uint64_t{0});
+  SERDE_STRUCT_FIELD(beginBlock, cache::CacheBlockIndex{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{1000});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (limit > cache::kMaxPhase2BatchItems) return makeError(CacheCode::kRequestTooLarge, "limit too large");
+    return Void{};
+  }
+};
+struct ListEvictingCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(items, std::vector<CacheEvictionIdentity>{});
+  SERDE_STRUCT_FIELD(more, false);
+};
+
+struct CacheStorageEvent {
+  SERDE_STRUCT_FIELD(sourceId, storage::PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(sequence, uint64_t{0});
+  SERDE_STRUCT_FIELD(type, cache::CacheStorageEventType::DELETED);
+  SERDE_STRUCT_FIELD(key, storage::CacheChunkKey{});
+  SERDE_STRUCT_FIELD(generation, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(placement, storage::PlacementIdentity{});
+  SERDE_STRUCT_FIELD(evictionEpoch, cache::EvictionEpoch{});
+  SERDE_STRUCT_FIELD(operationId, Uuid::zero());
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(sourceId.valid());
+    RETURN_ON_ERROR(key.valid());
+    RETURN_ON_ERROR(placement.valid());
+    if (sequence == 0 || generation == cache::CacheGeneration{} || operationId == Uuid::zero())
+      return makeError(StatusCode::kInvalidArg, "invalid storage event identity");
+    return Void{};
+  }
+};
+struct ReportCacheStorageEventsReq : ReqBase {
+  SERDE_STRUCT_FIELD(events, std::vector<CacheStorageEvent>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (events.size() > cache::kMaxPhase2BatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "too many storage events");
+    for (const auto &event : events) RETURN_ON_ERROR(event.valid());
+    return Void{};
+  }
+};
+struct CacheStorageEventAck {
+  SERDE_STRUCT_FIELD(sourceId, storage::PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(sequence, uint64_t{0});
+  SERDE_STRUCT_FIELD(deadLettered, false);
+};
+struct ReportCacheStorageEventsRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CacheStorageEventAck>>{});
+};
+
+struct ListCacheEventDeadLettersReq : ReqBase {
+  SERDE_STRUCT_FIELD(sourceId, std::optional<storage::PhysicalDiskId>{});
+  SERDE_STRUCT_FIELD(beginSequence, uint64_t{0});
+  SERDE_STRUCT_FIELD(limit, uint32_t{1000});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (limit > cache::kMaxPhase2BatchItems) return makeError(CacheCode::kRequestTooLarge, "limit too large");
+    return Void{};
+  }
+};
+struct CacheEventDeadLetter {
+  SERDE_STRUCT_FIELD(event, CacheStorageEvent{});
+  SERDE_STRUCT_FIELD(errorCode, uint32_t{0});
+  SERDE_STRUCT_FIELD(reason, String{});
+};
+struct ListCacheEventDeadLettersRsp : RspBase {
+  SERDE_STRUCT_FIELD(items, std::vector<CacheEventDeadLetter>{});
+  SERDE_STRUCT_FIELD(more, false);
+};
+
 // testRpc
 struct TestRpcReq : ReqBase {
   SERDE_STRUCT_FIELD(path, PathAt());
@@ -1078,6 +1231,11 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(finishCleanCacheBlocks, 31, FinishCleanCacheBlocksReq, FinishCleanCacheBlocksRsp);
   META_SERVICE_METHOD(getCacheStatus, 32, GetCacheStatusReq, GetCacheStatusRsp);
   META_SERVICE_METHOD(listCacheBlocks, 33, ListCacheBlocksReq, ListCacheBlocksRsp);
+  META_SERVICE_METHOD(updateCacheBlockAccess, 34, UpdateCacheBlockAccessReq, UpdateCacheBlockAccessRsp);
+  META_SERVICE_METHOD(beginEvictCacheBlocks, 35, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
+  META_SERVICE_METHOD(listEvictingCacheBlocks, 36, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);
+  META_SERVICE_METHOD(reportCacheStorageEvents, 37, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
+  META_SERVICE_METHOD(listCacheEventDeadLetters, 38, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 
