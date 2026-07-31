@@ -4,6 +4,7 @@
 #include <memory>
 #include <mutex>
 
+#include "cache_manager/access/AccessFlushWorker.h"
 #include "cache_manager/admission/AdmissionPolicy.h"
 #include "cache_manager/capacity/PhysicalPreflight.h"
 #include "cache_manager/capacity/SpacePoller.h"
@@ -66,6 +67,7 @@ class CacheManagerOperator {
   std::unique_ptr<PhysicalPreflight> physicalPreflight_;
   std::unique_ptr<AdmissionPolicy> admissionPolicy_;
   std::unique_ptr<PermitRecovery> permitRecovery_;
+  std::unique_ptr<AccessFlushWorker> accessFlushWorker_;
   Uuid managerEpoch_{Uuid::zero()};
   std::unique_ptr<BackgroundRunner> scheduler_;
   SchedulerStopHook schedulerStopHook_;

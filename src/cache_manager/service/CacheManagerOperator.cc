@@ -52,6 +52,13 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     permitRecovery_ = std::make_unique<PermitRecovery>(backend_, hints_, managerEpoch_, config_.storage_permit_ttl());
     auto recovered = folly::coro::blockingWait(permitRecovery_->run());
     RETURN_ON_ERROR(recovered);
+    AccessFlushWorker::Config accessConfig;
+    accessConfig.flushThreshold = config_.access_flush_threshold();
+    accessConfig.batchSize = config_.access_flush_batch_size();
+    accessConfig.maxEntries = config_.access_max_entries();
+    accessConfig.flushInterval = config_.access_flush_interval();
+    accessFlushWorker_ = std::make_unique<AccessFlushWorker>(backend_, accessConfig);
+    RETURN_ON_ERROR(accessFlushWorker_->start());
     physicalTopology_ = std::make_unique<PhysicalTopology>();
     spacePoller_ = std::make_unique<SpacePoller>(
         *physicalTopology_,
@@ -74,6 +81,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
           "CacheManagerScheduler",
           [this]() -> CoTask<void> { co_await loaderScheduler_->runOne(); },
           [this] { return config_.scheduler_interval(); })) {
+    if (accessFlushWorker_) accessFlushWorker_->stop();
     return makeError(StatusCode::kQueueConflict, "failed to start cache manager scheduler");
   }
   if (spacePoller_ && !scheduler->start(
@@ -97,12 +105,14 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                           },
                           [this] { return config_.space_poll_interval(); })) {
     folly::coro::blockingWait(scheduler->stopAll());
+    if (accessFlushWorker_) accessFlushWorker_->stop();
     return makeError(StatusCode::kQueueConflict, "failed to start cache manager space poller");
   }
   auto lock = std::unique_lock(mutex_);
   if (running_) {
     lock.unlock();
     folly::coro::blockingWait(scheduler->stopAll());
+    if (accessFlushWorker_) accessFlushWorker_->stop();
     return Void{};
   }
   scheduler_ = std::move(scheduler);
@@ -138,6 +148,7 @@ void CacheManagerOperator::stop() {
     stopHook = std::move(schedulerStopHook_);
   }
   if (scheduler) folly::coro::blockingWait(scheduler->stopAll());
+  if (accessFlushWorker_) accessFlushWorker_->stop();
   if (stopHook) stopHook();
 }
 
@@ -228,7 +239,14 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
 CoTryTask<ReportCacheAccessRsp> CacheManagerOperator::reportCacheAccess(const ReportCacheAccessReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkPhase2Protocol(req.cacheProtocolVersion));
-  co_return makeError(StatusCode::kNotImplemented, "cache access aggregation is not implemented");
+  if (!accessFlushWorker_) co_return makeError(CacheCode::kUnavailable, "cache access aggregator is not running");
+  auto statuses = accessFlushWorker_->submit(req.items);
+  ReportCacheAccessRsp response;
+  response.results.reserve(req.items.size());
+  for (size_t i = 0; i < req.items.size(); ++i) {
+    response.results.push_back(CacheAccessReportResult{req.items[i].key, statuses[i]});
+  }
+  co_return response;
 }
 
 CoTryTask<GetPhase2CacheStatusRsp> CacheManagerOperator::getPhase2CacheStatus(const GetPhase2CacheStatusReq &req) {

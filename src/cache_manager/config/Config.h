@@ -85,6 +85,10 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(space_poll_interval, 5_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(space_snapshot_max_age, 15_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(storage_permit_ttl, 60_s, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(access_flush_threshold, uint32_t{256}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(access_flush_batch_size, uint32_t{512}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(access_max_entries, uint32_t{65536}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(access_flush_interval, 1_s, [](Duration value) { return value > 0_ns; });
   CONFIG_OBJ_ARRAY(origins, OriginConfig, 64, [](auto &) { return 0; });
 };
 

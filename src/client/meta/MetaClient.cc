@@ -993,6 +993,7 @@ META_CACHE_CLIENT_METHOD(getCacheStatus, GetCacheStatusReq, GetCacheStatusRsp);
 META_CACHE_CLIENT_METHOD(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
 META_CACHE_CLIENT_METHOD(listRecoverableCachePermits, ListRecoverableCachePermitsReq, ListRecoverableCachePermitsRsp);
 META_CACHE_CLIENT_METHOD(cancelQueuedAdmissions, CancelQueuedAdmissionsReq, CancelQueuedAdmissionsRsp);
+META_CACHE_CLIENT_METHOD(updateCacheBlockAccess, UpdateCacheBlockAccessReq, UpdateCacheBlockAccessRsp);
 #undef META_CACHE_CLIENT_METHOD
 
 }  // namespace hf3fs::meta::client

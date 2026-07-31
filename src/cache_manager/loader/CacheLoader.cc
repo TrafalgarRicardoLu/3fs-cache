@@ -158,6 +158,15 @@ CoTryTask<void> RealCacheManagerBackend::cancelQueuedAdmission(const cache::Cach
   co_return Void{};
 }
 
+CoTryTask<meta::UpdateCacheBlockAccessRsp> RealCacheManagerBackend::updateAccess(
+    std::vector<meta::UpdateCacheBlockAccessItem> items) {
+  meta::UpdateCacheBlockAccessReq request;
+  request.service = service();
+  request.items = std::move(items);
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  co_return co_await metaClient_->updateCacheBlockAccess(std::move(request));
+}
+
 CoTryTask<meta::EnqueueCacheBlocksRsp> RealCacheManagerBackend::enqueue(
     std::vector<meta::CacheBlockRequestBase> items) {
   meta::EnqueueCacheBlocksReq req;

@@ -83,6 +83,9 @@ class CacheManagerBackend {
   virtual CoTryTask<void> cancelQueuedAdmission(const cache::CacheBlockKey &, const storage::PermitIdentity &) {
     co_return makeError(StatusCode::kNotImplemented);
   }
+  virtual CoTryTask<meta::UpdateCacheBlockAccessRsp> updateAccess(std::vector<meta::UpdateCacheBlockAccessItem>) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
 };
 
 class RealCacheManagerBackend final : public CacheManagerBackend {
@@ -133,6 +136,7 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
                                                                          uint32_t limit) final;
   CoTryTask<void> cancelQueuedAdmission(const cache::CacheBlockKey &key,
                                         const storage::PermitIdentity &expectedPermit) final;
+  CoTryTask<meta::UpdateCacheBlockAccessRsp> updateAccess(std::vector<meta::UpdateCacheBlockAccessItem> items) final;
 
  private:
   meta::CacheServiceIdentity service() const;

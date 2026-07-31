@@ -7,6 +7,10 @@ range_size = 4194304
 load_lease = "30s"
 hint_timeout = "500ms"
 scheduler_interval = "100ms"
+access_flush_threshold = 256
+access_flush_batch_size = 512
+access_max_entries = 65536
+access_flush_interval = "1s"
 
 [[server.origins]]
 origin_id = 1
