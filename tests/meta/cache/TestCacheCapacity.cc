@@ -1,5 +1,6 @@
 #include <folly/experimental/coro/BlockingWait.h>
 #include <gtest/gtest.h>
+#include <limits>
 
 #include "common/kv/mem/MemKVEngine.h"
 #include "meta/store/cache/CacheBlockStore.h"
@@ -64,7 +65,7 @@ TEST_F(TestCacheCapacity, EnqueueCommitAndFinishCleanChargeExactlyOnce) {
   }());
 }
 
-TEST_F(TestCacheCapacity, CapacityCeilingAndReenqueueAccounting) {
+TEST_F(TestCacheCapacity, ReferenceCapacityDoesNotLimitReservationsOrReenqueueAccounting) {
   folly::coro::blockingWait([&]() -> CoTask<void> {
     auto txn = engine_.createReadWriteTransaction();
     CO_ASSERT_OK(co_await CacheCapacityStore::setLogicalCapacity(*txn, 100));
@@ -73,12 +74,8 @@ TEST_F(TestCacheCapacity, CapacityCeilingAndReenqueueAccounting) {
     for (uint32_t block = 0; block < 100; ++block) {
       txn = engine_.createReadWriteTransaction();
       auto result = co_await CacheBlockStore::enqueue(*txn, capacityKey(block), flat::ChainId{3}, 2);
-      if (block < 50) {
-        CO_ASSERT_OK(result);
-        CO_ASSERT_OK(co_await txn->commit());
-      } else {
-        CO_ASSERT_ERROR(result, CacheCode::kCapacityExceeded);
-      }
+      CO_ASSERT_OK(result);
+      CO_ASSERT_OK(co_await txn->commit());
     }
 
     txn = engine_.createReadWriteTransaction();
@@ -92,13 +89,23 @@ TEST_F(TestCacheCapacity, CapacityCeilingAndReenqueueAccounting) {
     auto read = engine_.createReadonlyTransaction();
     auto capacity = co_await CacheCapacityStore::snapshotLoad(*read);
     CO_ASSERT_OK(capacity);
-    CO_ASSERT_EQ(capacity->usedBytes, uint64_t{100});
-    CO_ASSERT_EQ(capacity->reservedBytes, uint64_t{100});
+    CO_ASSERT_EQ(capacity->logicalCapacity, uint64_t{100});
+    CO_ASSERT_EQ(capacity->usedBytes, uint64_t{200});
+    CO_ASSERT_EQ(capacity->reservedBytes, uint64_t{200});
     CO_ASSERT_EQ(capacity->committedBytes, uint64_t{0});
+
+    txn = engine_.createReadWriteTransaction();
+    CO_ASSERT_OK(co_await CacheCapacityStore::setLogicalCapacity(*txn, 1));
+    CO_ASSERT_OK(co_await txn->commit());
+    read = engine_.createReadonlyTransaction();
+    capacity = co_await CacheCapacityStore::snapshotLoad(*read);
+    CO_ASSERT_OK(capacity);
+    CO_ASSERT_EQ(capacity->logicalCapacity, uint64_t{1});
+    CO_ASSERT_EQ(capacity->usedBytes, uint64_t{200});
   }());
 }
 
-TEST_F(TestCacheCapacity, ConcurrentReservationsConflictBeforeOvercommit) {
+TEST_F(TestCacheCapacity, ConcurrentReservationsPreserveExactCountersAboveReference) {
   folly::coro::blockingWait([&]() -> CoTask<void> {
     auto setup = engine_.createReadWriteTransaction();
     CO_ASSERT_OK(co_await CacheCapacityStore::setLogicalCapacity(*setup, 100));
@@ -112,8 +119,8 @@ TEST_F(TestCacheCapacity, ConcurrentReservationsConflictBeforeOvercommit) {
     CO_ASSERT_ERROR(co_await second->commit(), TransactionCode::kConflict);
 
     auto retry = engine_.createReadWriteTransaction();
-    CO_ASSERT_ERROR(co_await CacheBlockStore::enqueue(*retry, capacityKey(201), flat::ChainId{3}, 60),
-                    CacheCode::kCapacityExceeded);
+    CO_ASSERT_OK(co_await CacheBlockStore::enqueue(*retry, capacityKey(201), flat::ChainId{3}, 60));
+    CO_ASSERT_OK(co_await retry->commit());
 
     auto idempotent = engine_.createReadWriteTransaction();
     CO_ASSERT_OK(co_await CacheBlockStore::enqueue(*idempotent, capacityKey(200), flat::ChainId{3}, 60));
@@ -122,7 +129,18 @@ TEST_F(TestCacheCapacity, ConcurrentReservationsConflictBeforeOvercommit) {
     auto read = engine_.createReadonlyTransaction();
     auto capacity = co_await CacheCapacityStore::snapshotLoad(*read);
     CO_ASSERT_OK(capacity);
-    CO_ASSERT_EQ(capacity->usedBytes, uint64_t{60});
+    CO_ASSERT_EQ(capacity->logicalCapacity, uint64_t{100});
+    CO_ASSERT_EQ(capacity->usedBytes, uint64_t{120});
+    CO_ASSERT_EQ(capacity->reservedBytes, uint64_t{120});
+  }());
+}
+
+TEST_F(TestCacheCapacity, LogicalCounterOverflowStillFailsClosed) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto txn = engine_.createReadWriteTransaction();
+    CO_ASSERT_OK(co_await CacheCapacityStore::setLogicalCapacity(*txn, 1));
+    CO_ASSERT_OK(co_await CacheCapacityStore::reserve(*txn, std::numeric_limits<uint64_t>::max()));
+    CO_ASSERT_ERROR(co_await CacheCapacityStore::reserve(*txn, 1), CacheCode::kCapacityExceeded);
   }());
 }
 

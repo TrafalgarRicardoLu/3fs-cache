@@ -31,7 +31,6 @@ Result<Void> CacheCapacityRecord::valid() const {
   if (addOverflows(reservedBytes, committedBytes) || reservedBytes + committedBytes != usedBytes) {
     return makeError(StatusCode::kInvalidArg, "cache capacity counters are inconsistent");
   }
-  if (usedBytes > logicalCapacity) return makeError(StatusCode::kInvalidArg, "cache capacity is overcommitted");
   return Void{};
 }
 
@@ -53,7 +52,6 @@ CoTryTask<Void> CacheCapacityStore::store(kv::IReadWriteTransaction &txn, const 
 CoTryTask<Void> CacheCapacityStore::setLogicalCapacity(kv::IReadWriteTransaction &txn, uint64_t logicalCapacity) {
   auto record = co_await load(txn);
   CO_RETURN_ON_ERROR(record);
-  if (logicalCapacity < record->usedBytes) co_return makeError(CacheCode::kCapacityExceeded, "capacity below usage");
   record->logicalCapacity = logicalCapacity;
   co_return co_await store(txn, *record);
 }
@@ -62,9 +60,8 @@ CoTryTask<Void> CacheCapacityStore::reserve(kv::IReadWriteTransaction &txn, uint
   if (bytes == 0) co_return makeError(StatusCode::kInvalidArg, "cannot reserve zero bytes");
   auto record = co_await load(txn);
   CO_RETURN_ON_ERROR(record);
-  if (addOverflows(record->usedBytes, bytes) || record->usedBytes + bytes > record->logicalCapacity) {
-    co_return makeError(CacheCode::kCapacityExceeded, "cache capacity exceeded");
-  }
+  if (addOverflows(record->usedBytes, bytes) || addOverflows(record->reservedBytes, bytes))
+    co_return makeError(CacheCode::kCapacityExceeded, "cache logical usage counter overflow");
   record->usedBytes += bytes;
   record->reservedBytes += bytes;
   co_return co_await store(txn, *record);
