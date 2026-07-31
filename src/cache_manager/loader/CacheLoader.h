@@ -54,6 +54,26 @@ class CacheManagerBackend {
   virtual CoTryTask<storage::QueryCacheSpaceRsp> queryCacheSpace(const storage::QueryCacheSpaceReq &) {
     co_return makeError(StatusCode::kNotImplemented);
   }
+  virtual CoTryTask<storage::PermitIdentity> makePermit(const meta::Inode &,
+                                                        cache::CacheBlockIndex,
+                                                        uint64_t,
+                                                        Uuid,
+                                                        Uuid,
+                                                        uint64_t) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<storage::CachePermitResult> preparePermit(const storage::PermitIdentity &, uint64_t) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<storage::CachePermitResult> renewPermit(const storage::PermitIdentity &, uint64_t) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<storage::CachePermitResult> queryPermit(const storage::PermitIdentity &) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<void> releasePermit(const storage::PermitIdentity &) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
 };
 
 class RealCacheManagerBackend final : public CacheManagerBackend {
@@ -88,6 +108,17 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
   CoTryTask<void> finishClean(const meta::FinishCleanCacheBlockItem &item) final;
   std::shared_ptr<client::RoutingInfo> routingInfo() final;
   CoTryTask<storage::QueryCacheSpaceRsp> queryCacheSpace(const storage::QueryCacheSpaceReq &req) final;
+  CoTryTask<storage::PermitIdentity> makePermit(const meta::Inode &inode,
+                                                cache::CacheBlockIndex block,
+                                                uint64_t blockLength,
+                                                Uuid managerEpoch,
+                                                Uuid admissionAttemptId,
+                                                uint64_t permitGeneration) final;
+  CoTryTask<storage::CachePermitResult> preparePermit(const storage::PermitIdentity &permit,
+                                                      uint64_t expiresAtNs) final;
+  CoTryTask<storage::CachePermitResult> renewPermit(const storage::PermitIdentity &permit, uint64_t expiresAtNs) final;
+  CoTryTask<storage::CachePermitResult> queryPermit(const storage::PermitIdentity &permit) final;
+  CoTryTask<void> releasePermit(const storage::PermitIdentity &permit) final;
 
  private:
   meta::CacheServiceIdentity service() const;

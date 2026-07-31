@@ -31,6 +31,101 @@ CoTryTask<storage::QueryCacheSpaceRsp> RealCacheManagerBackend::queryCacheSpace(
   co_return co_await storageClient_->queryCacheSpace(req);
 }
 
+CoTryTask<storage::PermitIdentity> RealCacheManagerBackend::makePermit(const meta::Inode &inode,
+                                                                       cache::CacheBlockIndex block,
+                                                                       uint64_t blockLength,
+                                                                       Uuid managerEpoch,
+                                                                       Uuid admissionAttemptId,
+                                                                       uint64_t permitGeneration) {
+  auto routing = mgmtdClient_->getRoutingInfo();
+  if (!routing || !routing->raw()) co_return makeError(CacheCode::kUnavailable, "routing info is unavailable");
+  auto offset = uint64_t{block.toUnderType()} * inode.fileLayout().chunkSize;
+  auto chainId = inode.getChainId(inode, offset, *routing->raw());
+  CO_RETURN_ON_ERROR(chainId);
+  auto chain = routing->getChain(*chainId);
+  if (!chain || chain->targets.empty()) co_return makeError(CacheCode::kUnavailable, "cache chain is unavailable");
+  std::vector<flat::TargetId> targets;
+  targets.reserve(chain->targets.size());
+  for (const auto &target : chain->targets) targets.push_back(target.targetId);
+  auto placement = storage::PlacementIdentity::create({*chainId, chain->chainVersion},
+                                                      targets,
+                                                      *std::min_element(targets.begin(), targets.end()),
+                                                      admissionAttemptId);
+  CO_RETURN_ON_ERROR(placement);
+
+  storage::QueryCacheSpaceReq footprintRequest;
+  for (auto targetId : placement->expectedReplicaTargets) {
+    footprintRequest.footprints.push_back({targetId, static_cast<uint32_t>(inode.fileLayout().chunkSize), blockLength});
+  }
+  footprintRequest.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  auto footprintResponse = co_await storageClient_->queryCacheSpace(footprintRequest);
+  CO_RETURN_ON_ERROR(footprintResponse);
+  if (footprintResponse->footprintResults.size() != placement->expectedReplicaTargets.size()) {
+    co_return makeError(CacheCode::kInvalidResponse, "cache footprint result count mismatch");
+  }
+  storage::FootprintByTarget footprints;
+  for (size_t index = 0; index < footprintResponse->footprintResults.size(); ++index) {
+    const auto &result = footprintResponse->footprintResults[index];
+    CO_RETURN_ON_ERROR(result);
+    auto expectedTarget = placement->expectedReplicaTargets[index];
+    if (result->targetId != expectedTarget || result->footprintBytes == 0) {
+      co_return makeError(CacheCode::kInvalidResponse, "cache footprint result target mismatch");
+    }
+    footprints.emplace(expectedTarget, result->footprintBytes);
+  }
+  storage::PermitIdentity permit{managerEpoch, std::move(*placement), permitGeneration, std::move(footprints)};
+  CO_RETURN_ON_ERROR(permit.valid());
+  co_return permit;
+}
+
+CoTryTask<storage::CachePermitResult> RealCacheManagerBackend::preparePermit(const storage::PermitIdentity &permit,
+                                                                             uint64_t expiresAtNs) {
+  storage::PrepareCachePermitsReq request;
+  request.items.push_back({permit, expiresAtNs});
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  auto response = co_await storageClient_->prepareCachePermits(request);
+  CO_RETURN_ON_ERROR(response);
+  if (response->results.size() != 1)
+    co_return makeError(CacheCode::kInvalidResponse, "invalid permit prepare response");
+  CO_RETURN_ON_ERROR(response->results.front());
+  co_return *response->results.front();
+}
+
+CoTryTask<storage::CachePermitResult> RealCacheManagerBackend::renewPermit(const storage::PermitIdentity &permit,
+                                                                           uint64_t expiresAtNs) {
+  storage::RenewCachePermitsReq request;
+  request.items.push_back({permit, expiresAtNs});
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  auto response = co_await storageClient_->renewCachePermits(request);
+  CO_RETURN_ON_ERROR(response);
+  if (response->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid permit renew response");
+  CO_RETURN_ON_ERROR(response->results.front());
+  co_return *response->results.front();
+}
+
+CoTryTask<storage::CachePermitResult> RealCacheManagerBackend::queryPermit(const storage::PermitIdentity &permit) {
+  storage::QueryCachePermitsReq request;
+  request.permits.push_back(permit);
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  auto response = co_await storageClient_->queryCachePermits(request);
+  CO_RETURN_ON_ERROR(response);
+  if (response->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid permit query response");
+  CO_RETURN_ON_ERROR(response->results.front());
+  co_return *response->results.front();
+}
+
+CoTryTask<void> RealCacheManagerBackend::releasePermit(const storage::PermitIdentity &permit) {
+  storage::ReleaseCachePermitsReq request;
+  request.permits.push_back(permit);
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  auto response = co_await storageClient_->releaseCachePermits(request);
+  CO_RETURN_ON_ERROR(response);
+  if (response->results.size() != 1)
+    co_return makeError(CacheCode::kInvalidResponse, "invalid permit release response");
+  CO_RETURN_ON_ERROR(response->results.front());
+  co_return Void{};
+}
+
 CoTryTask<meta::EnqueueCacheBlocksRsp> RealCacheManagerBackend::enqueue(
     std::vector<meta::CacheBlockRequestBase> items) {
   meta::EnqueueCacheBlocksReq req;

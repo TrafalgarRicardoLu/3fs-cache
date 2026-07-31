@@ -38,10 +38,15 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
   loader_ = std::make_unique<CacheLoader>(backend_, *capacityGate_);
   loaderScheduler_ = std::make_unique<LoaderScheduler>(hints_, *loader_, config_.range_size());
   cleanupWorker_ = std::make_unique<CacheCleanupWorker>(backend_);
-  ensureCached_ = std::make_unique<EnsureCached>(backend_, hints_, cleanupWorker_.get());
   reportInvalid_ = std::make_unique<ReportCacheBlockInvalid>(backend_, *cleanupWorker_);
   adminCleanup_ = std::make_unique<AdminCleanupCacheBlocks>(backend_, *cleanupWorker_);
   if (config_.enable_phase2()) {
+    auto admissionPolicy = createAdmissionPolicy(config_.admission_policy(),
+                                                 config_.second_miss_window().count(),
+                                                 config_.second_miss_max_entries());
+    RETURN_ON_ERROR(admissionPolicy);
+    admissionPolicy_ = std::move(*admissionPolicy);
+    managerEpoch_ = Uuid::random();
     physicalTopology_ = std::make_unique<PhysicalTopology>();
     spacePoller_ = std::make_unique<SpacePoller>(
         *physicalTopology_,
@@ -49,6 +54,15 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     physicalPreflight_ = std::make_unique<PhysicalPreflight>(*physicalTopology_,
                                                              config_.space_snapshot_max_age(),
                                                              config_.capacity_high_watermark());
+    ensureCached_ = std::make_unique<EnsureCached>(backend_,
+                                                   hints_,
+                                                   cleanupWorker_.get(),
+                                                   *admissionPolicy_,
+                                                   *physicalPreflight_,
+                                                   managerEpoch_,
+                                                   config_.storage_permit_ttl());
+  } else {
+    ensureCached_ = std::make_unique<EnsureCached>(backend_, hints_, cleanupWorker_.get());
   }
   auto scheduler = std::make_unique<BackgroundRunner>(executor);
   if (!scheduler->start(

@@ -21,16 +21,19 @@ class EnqueueCacheBlocksOp : public Operation<EnqueueCacheBlocksRsp> {
     CHECK_REQUEST(req_);
     EnqueueCacheBlocksRsp response;
     response.results.reserve(req_.items.size());
+    response.permits.reserve(req_.items.size());
     auto routing = chainAlloc().getRoutingInfo();
     if (!routing) co_return makeError(CacheCode::kUnavailable, "routing info is unavailable");
     for (const auto &item : req_.items) {
       if (auto valid = item.valid(); valid.hasError()) {
         response.results.emplace_back(makeError(valid.error()));
+        response.permits.emplace_back(std::nullopt);
         continue;
       }
       auto layout = co_await resolveCacheBlockLayout(txn, item.key, item.blockLength, *routing);
       if (layout.hasError()) {
         response.results.emplace_back(makeError(layout.error()));
+        response.permits.emplace_back(std::nullopt);
         continue;
       }
       if (item.permit.has_value()) {
@@ -38,12 +41,14 @@ class EnqueueCacheBlocksOp : public Operation<EnqueueCacheBlocksRsp> {
         if (placement.versionedChain != storage::VersionedChainId{layout->chainId, layout->chainVersion} ||
             placement.expectedReplicaTargets != layout->replicaTargets) {
           response.results.emplace_back(makeError(CacheCode::kPlacementMismatch, "permit placement changed"));
+          response.permits.emplace_back(std::nullopt);
           continue;
         }
       }
       auto before = co_await CacheBlockStore::load(txn, item.key);
       if (before.hasError()) {
         response.results.emplace_back(makeError(before.error()));
+        response.permits.emplace_back(std::nullopt);
         continue;
       }
       auto record = co_await CacheBlockStore::enqueue(txn,
@@ -57,6 +62,7 @@ class EnqueueCacheBlocksOp : public Operation<EnqueueCacheBlocksRsp> {
                                                       item.expectedLoadEpoch);
       if (record.hasError()) {
         response.results.emplace_back(makeError(record.error()));
+        response.permits.emplace_back(std::nullopt);
         continue;
       }
       auto outcome = cache::CacheEnqueueOutcome::CREATED;
@@ -77,6 +83,7 @@ class EnqueueCacheBlocksOp : public Operation<EnqueueCacheBlocksRsp> {
         }
       }
       response.results.emplace_back(CacheBlockMutationResult{record->key, record->state, outcome, record->placement});
+      response.permits.emplace_back(record->permit);
     }
     co_return response;
   }

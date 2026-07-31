@@ -302,11 +302,13 @@ TEST_F(TestCacheStateMachine, PersistsPermitAndPlacementAcrossAdmissionLifecycle
     CO_ASSERT_OK(created);
     CO_ASSERT_OK(created->results[0]);
     CO_ASSERT_EQ(created->results[0]->enqueueOutcome, cache::CacheEnqueueOutcome::CREATED);
+    CO_ASSERT_EQ(created->permits, std::vector<std::optional<storage::PermitIdentity>>{*initial});
 
     auto repeated = co_await meta.enqueueCacheBlocks(enqueue);
     CO_ASSERT_OK(repeated);
     CO_ASSERT_OK(repeated->results[0]);
     CO_ASSERT_EQ(repeated->results[0]->enqueueOutcome, cache::CacheEnqueueOutcome::QUEUED);
+    CO_ASSERT_EQ(repeated->permits, std::vector<std::optional<storage::PermitIdentity>>{*initial});
 
     auto acquired = co_await meta.acquireCacheBlocks(acquireReq(*inode, 0));
     CO_ASSERT_OK(acquired);
@@ -322,6 +324,7 @@ TEST_F(TestCacheStateMachine, PersistsPermitAndPlacementAcrossAdmissionLifecycle
     CO_ASSERT_OK(observed);
     CO_ASSERT_OK(observed->results[0]);
     CO_ASSERT_EQ(observed->results[0]->enqueueOutcome, cache::CacheEnqueueOutcome::LOADING);
+    CO_ASSERT_EQ(observed->permits, std::vector<std::optional<storage::PermitIdentity>>{*initial});
 
     auto observedRead = cluster.kvEngine()->createReadonlyTransaction();
     auto observedRecord = co_await CacheBlockStore::snapshotLoad(*observedRead, block(*inode, 0).key);

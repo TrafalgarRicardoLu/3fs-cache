@@ -40,6 +40,8 @@ enum class BypassReason : uint8_t {
   ADMISSION_DISABLED,
   EMPTY_RANGE,
   CAPACITY,
+  POLICY,
+  UNAVAILABLE,
 };
 
 enum class InvalidReason : uint8_t {

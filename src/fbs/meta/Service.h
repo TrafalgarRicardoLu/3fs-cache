@@ -901,6 +901,7 @@ struct CacheBlockMutationResult {
 CACHE_BOUNDED_REQ(EnqueueCacheBlocks, CacheBlockRequestBase);
 struct EnqueueCacheBlocksRsp : RspBase {
   SERDE_STRUCT_FIELD(results, std::vector<Result<CacheBlockMutationResult>>{});
+  SERDE_STRUCT_FIELD(permits, std::vector<std::optional<storage::PermitIdentity>>{});
 };
 
 CACHE_BOUNDED_REQ(AcquireCacheBlocks, CacheBlockRequestBase);
