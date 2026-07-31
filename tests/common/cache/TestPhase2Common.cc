@@ -133,6 +133,9 @@ TEST(Phase2CacheCommon, PermitRoundTripsAndCoversExactPlacement) {
   storage::PermitIdentity decoded;
   ASSERT_TRUE(serde::deserialize(decoded, serde::serialize(original)));
   EXPECT_EQ(decoded, original);
+  storage::PermitIdentity jsonDecoded;
+  ASSERT_OK(serde::fromJsonString(jsonDecoded, serde::toJsonString(original)));
+  EXPECT_EQ(jsonDecoded, original);
 
   original.footprintByTarget.erase(flat::TargetId{3});
   ASSERT_ERROR(original.valid(), CacheCode::kPermitConflict);

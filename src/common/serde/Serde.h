@@ -623,13 +623,13 @@ inline Result<Void> deserialize(auto &o, auto &&in) requires is_specialization<s
         KeyType first;
         if constexpr (requires { first = KeyType{key}; }) {
           first = KeyType{key};
-        } else if constexpr (requires { scn::scan(key, "{}", first); }) {
-          auto result = scn::scan(key, "{}", first);
+        } else if constexpr (requires { scn::scan(key, "{}", first.toUnderType()); }) {
+          auto result = scn::scan(key, "{}", first.toUnderType());
           if (!result) {
             return makeError(StatusCode::kInvalidArg);
           }
-        } else if constexpr (requires { scn::scan(key, "{}", first.toUnderType()); }) {
-          auto result = scn::scan(key, "{}", first.toUnderType());
+        } else if constexpr (requires { scn::scan(key, "{}", first); }) {
+          auto result = scn::scan(key, "{}", first);
           if (!result) {
             return makeError(StatusCode::kInvalidArg);
           }
