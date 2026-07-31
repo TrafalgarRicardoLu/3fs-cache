@@ -1,6 +1,8 @@
 #pragma once
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <map>
+#include <mutex>
 
 #include "chunk_engine/src/cxx.rs.h"
 #include "common/utils/CPUExecutorGroup.h"
@@ -9,6 +11,7 @@
 #include "common/utils/RobinHood.h"
 #include "fbs/mgmtd/HeartbeatInfo.h"
 #include "fbs/storage/Common.h"
+#include "kv/KVStore.h"
 #include "storage/service/TargetMap.h"
 #include "storage/store/StorageTarget.h"
 
@@ -23,6 +26,63 @@ struct CacheDiskPhysicalCapacity {
   uint64_t physicalUsedBytes = 0;
   uint64_t allocatableBytes = 0;
   uint64_t reservedBytes = 0;
+};
+
+struct CacheSpacePermitRecord {
+  SERDE_STRUCT_FIELD(physicalDiskId, PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(permit, PermitIdentity{});
+  SERDE_STRUCT_FIELD(footprintBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(expiresAtNs, uint64_t{0});
+  SERDE_STRUCT_FIELD(state, cache::CachePermitState::INVALID);
+
+ public:
+  Result<Void> valid() const;
+};
+
+class CacheSpacePermitStore {
+ public:
+  CacheSpacePermitStore(std::unique_ptr<kv::KVStore> store, size_t maxRecords, uint64_t maxBytes);
+
+  Result<std::map<std::string, CacheSpacePermitRecord>> loadAll() const;
+  Result<Void> put(std::string_view key, const CacheSpacePermitRecord &record) const;
+  Result<Void> remove(std::string_view key) const;
+  size_t maxRecords() const { return maxRecords_; }
+  uint64_t maxBytes() const { return maxBytes_; }
+
+ private:
+  std::unique_ptr<kv::KVStore> store_;
+  size_t maxRecords_;
+  uint64_t maxBytes_;
+};
+
+class CacheSpaceGate {
+ public:
+  CacheSpaceGate(PhysicalDiskId diskId, std::unique_ptr<CacheSpacePermitStore> store);
+
+  Result<Void> init();
+  Result<CachePermitResult> prepare(const CachePermitRequestItem &item,
+                                    uint64_t footprintBytes,
+                                    const CacheDiskPhysicalCapacity &capacity,
+                                    double highWatermark,
+                                    uint64_t nowNs);
+  Result<CachePermitResult> renew(const CachePermitRequestItem &item, uint64_t nowNs);
+  Result<Void> release(const PermitIdentity &permit, uint64_t nowNs);
+  Result<CachePermitResult> query(const PermitIdentity &permit, uint64_t nowNs);
+  Result<CachePermitResult> pin(const PermitIdentity &permit, uint64_t nowNs);
+  Result<Void> consume(const PermitIdentity &permit);
+  Result<uint64_t> reservedBytes(uint64_t nowNs);
+  const PhysicalDiskId &diskId() const { return diskId_; }
+
+ private:
+  Result<Void> expireLocked(uint64_t nowNs);
+  Result<Void> persistLocked(std::string_view key, const CacheSpacePermitRecord &record, bool replacing);
+  static std::string key(const PermitIdentity &permit);
+
+  PhysicalDiskId diskId_;
+  std::unique_ptr<CacheSpacePermitStore> store_;
+  std::mutex mutex_;
+  std::map<std::string, CacheSpacePermitRecord> records_;
+  uint64_t serializedBytes_ = 0;
 };
 
 CacheDiskPhysicalCapacity calculateCacheDiskPhysicalCapacity(const CacheTargetPhysicalUsage &targetUsage,
@@ -43,6 +103,9 @@ class StorageTargets {
     CONFIG_HOT_UPDATED_ITEM(cache_admission_high_watermark, 0.9, [](double value) {
       return value > 0.0 && value <= 1.0;
     });
+    CONFIG_OBJ(cache_permit_store, kv::KVStore::Config);
+    CONFIG_ITEM(cache_permit_max_records, size_t{100000}, ConfigCheckers::checkPositive);
+    CONFIG_ITEM(cache_permit_max_bytes, uint64_t{64_MB}, ConfigCheckers::checkPositive);
     CONFIG_OBJ(storage_target, StorageTarget::Config);
   };
 
@@ -92,6 +155,11 @@ class StorageTargets {
   // chunk engines.
   auto &engines() const { return engines_; }
 
+  CacheSpaceGate *cacheSpaceGate(const PhysicalDiskId &diskId) const {
+    auto gate = cacheSpaceGates_.find(diskId);
+    return gate == cacheSpaceGates_.end() ? nullptr : gate->second.get();
+  }
+
   // remove target.
   Result<Void> removeChunkEngineTarget(ChainId chainId, uint32_t diskIndex) {
     auto &engine = *engines_[diskIndex];
@@ -110,6 +178,7 @@ class StorageTargets {
   std::vector<PhysicalDiskConfig> diskConfigs_;
   std::map<Path, uint32_t> pathToDiskIndex_;
   std::vector<rust::Box<chunk_engine::Engine>> engines_;
+  std::map<PhysicalDiskId, std::unique_ptr<CacheSpaceGate>> cacheSpaceGates_;
 
   CoLockManager<> targetLocks_;
   RelativeTime spaceInfoUpdatedTime_;

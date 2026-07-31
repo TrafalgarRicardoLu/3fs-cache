@@ -1,8 +1,11 @@
+#include <atomic>
 #include <folly/experimental/TestUtil.h>
+#include <thread>
 
 #include "client/mgmtd/RoutingInfo.h"
 #include "common/utils/CPUExecutorGroup.h"
 #include "common/utils/SysResource.h"
+#include "kv/MemDBStore.h"
 #include "storage/store/StorageTargets.h"
 #include "tests/GtestHelpers.h"
 
@@ -44,6 +47,22 @@ std::shared_ptr<client::RoutingInfo> routingInfo(TargetId targetId, ChainId chai
   table.role = role;
   raw->chainTables[table.chainTableId][table.chainTableVersion] = table;
   return std::make_shared<client::RoutingInfo>(std::move(raw), SteadyClock::now());
+}
+
+PermitIdentity permit(uint64_t attempt, uint64_t generation, uint64_t footprint = 100) {
+  auto placement =
+      PlacementIdentity::create({ChainId{1}, ChainVer{1}}, {TargetId{1}}, TargetId{1}, Uuid::from(0, attempt));
+  return PermitIdentity{Uuid::from(9, 9), *placement, generation, {{TargetId{1}, footprint}}};
+}
+
+std::unique_ptr<CacheSpaceGate> memoryGate(const kv::KVStore::Config &config,
+                                           PhysicalDiskId diskId,
+                                           size_t maxRecords = 100,
+                                           uint64_t maxBytes = 1_MB) {
+  auto store = std::make_unique<CacheSpacePermitStore>(std::make_unique<kv::MemDBStore>(config), maxRecords, maxBytes);
+  auto gate = std::make_unique<CacheSpaceGate>(diskId, std::move(store));
+  EXPECT_TRUE(gate->init());
+  return gate;
 }
 
 TEST(TestStorageTargets, Normal) {
@@ -221,6 +240,106 @@ TEST(TestStorageTargets, CacheFootprintUsesActualAllocationUnit) {
   EXPECT_EQ(*physicalFootprint(true, units, 1_MB, 1_MB), 1_MB);
   EXPECT_TRUE(physicalFootprint(false, units, 1_MB, 1_MB + 1).hasError());
   EXPECT_TRUE(physicalFootprint(false, units, 2_MB, 1).hasError());
+}
+
+TEST(TestStorageTargets, CacheSpaceGateReservesRenewsAndReleases) {
+  kv::KVStore::Config config;
+  PhysicalDiskId diskId{Uuid::from(3, 4)};
+  auto gate = memoryGate(config, diskId);
+  CacheDiskPhysicalCapacity capacity{1000, 100, 800, 100};
+  auto identity = permit(1, 1, 200);
+  CachePermitRequestItem item{identity, 200};
+
+  auto prepared = gate->prepare(item, 200, capacity, 0.8, 100);
+  ASSERT_OK(prepared);
+  EXPECT_EQ(prepared->state, cache::CachePermitState::RESERVED);
+  EXPECT_EQ(*gate->reservedBytes(100), 200);
+  EXPECT_EQ(gate->prepare(item, 200, capacity, 0.8, 100)->expiresAtNs, 200);
+
+  item.expiresAtNs = 300;
+  ASSERT_OK(gate->renew(item, 150));
+  EXPECT_EQ(gate->query(identity, 250)->expiresAtNs, 300);
+  ASSERT_OK(gate->release(identity, 250));
+  ASSERT_OK(gate->release(identity, 250));
+  EXPECT_EQ(*gate->reservedBytes(250), 0);
+}
+
+TEST(TestStorageTargets, CacheSpaceGateEnforcesHighWatermarkAndIdentity) {
+  kv::KVStore::Config config;
+  auto gate = memoryGate(config, PhysicalDiskId{Uuid::from(3, 5)});
+  CacheDiskPhysicalCapacity capacity{1000, 100, 800, 100};
+  auto first = permit(1, 1, 250);
+  ASSERT_OK(gate->prepare({first, 500}, 250, capacity, 0.5, 100));
+  ASSERT_ERROR(gate->prepare({permit(2, 1, 100), 500}, 100, capacity, 0.5, 100), CacheCode::kCapacityExceeded);
+  ASSERT_ERROR(gate->prepare({first, 500}, 251, capacity, 0.9, 100), CacheCode::kPermitConflict);
+}
+
+TEST(TestStorageTargets, CacheSpaceGateExpiresButPinsExecutingPermit) {
+  kv::KVStore::Config config;
+  auto gate = memoryGate(config, PhysicalDiskId{Uuid::from(3, 6)});
+  CacheDiskPhysicalCapacity capacity{1000, 0, 1000, 0};
+  auto expired = permit(1, 1);
+  ASSERT_OK(gate->prepare({expired, 200}, 100, capacity, 0.9, 100));
+  EXPECT_EQ(*gate->reservedBytes(201), 0);
+  ASSERT_ERROR(gate->query(expired, 201), CacheCode::kNotFound);
+
+  auto executing = permit(2, 1);
+  ASSERT_OK(gate->prepare({executing, 300}, 100, capacity, 0.9, 100));
+  ASSERT_OK(gate->pin(executing, 150));
+  EXPECT_EQ(*gate->reservedBytes(301), 100);
+  ASSERT_ERROR(gate->release(executing, 301), CacheCode::kPermitConflict);
+  ASSERT_OK(gate->consume(executing));
+  EXPECT_EQ(*gate->reservedBytes(301), 0);
+}
+
+TEST(TestStorageTargets, CacheSpaceGateFailsClosedWhenStoreIsFull) {
+  kv::KVStore::Config config;
+  auto gate = memoryGate(config, PhysicalDiskId{Uuid::from(3, 7)}, 1);
+  CacheDiskPhysicalCapacity capacity{1000, 0, 1000, 0};
+  ASSERT_OK(gate->prepare({permit(1, 1), 500}, 100, capacity, 0.9, 100));
+  ASSERT_ERROR(gate->prepare({permit(2, 1), 500}, 100, capacity, 0.9, 100), CacheCode::kJournalFull);
+}
+
+TEST(TestStorageTargets, CacheSpaceGateRecoversPermitsAfterRestart) {
+  folly::test::TemporaryDirectory directory;
+  kv::KVStore::Config config;
+  config.set_type(kv::KVStore::Type::LevelDB);
+  PhysicalDiskId diskId{Uuid::from(3, 8)};
+  auto identity = permit(1, 1);
+  auto open = [&](bool create) {
+    kv::KVStore::Options options;
+    options.type = kv::KVStore::Type::LevelDB;
+    options.path = directory.path() / "permits";
+    options.createIfMissing = create;
+    auto store = std::make_unique<CacheSpacePermitStore>(kv::KVStore::create(config, options), 100, 1_MB);
+    auto gate = std::make_unique<CacheSpaceGate>(diskId, std::move(store));
+    EXPECT_TRUE(gate->init());
+    return gate;
+  };
+  {
+    auto gate = open(true);
+    CacheDiskPhysicalCapacity capacity{1000, 0, 1000, 0};
+    ASSERT_OK(gate->prepare({identity, 500}, 100, capacity, 0.9, 100));
+  }
+  auto recovered = open(false);
+  ASSERT_OK(recovered->query(identity, 200));
+  EXPECT_EQ(*recovered->reservedBytes(200), 100);
+}
+
+TEST(TestStorageTargets, CacheSpaceGateConcurrentPrepareCannotCrossHighWatermark) {
+  kv::KVStore::Config config;
+  auto gate = memoryGate(config, PhysicalDiskId{Uuid::from(3, 9)});
+  CacheDiskPhysicalCapacity capacity{1000, 0, 1000, 0};
+  std::atomic<uint32_t> accepted{0};
+  std::vector<std::thread> threads;
+  for (uint64_t index = 1; index <= 10; ++index) {
+    threads.emplace_back([&, index] {
+      if (gate->prepare({permit(index, 1), 500}, 100, capacity, 0.5, 100)) ++accepted;
+    });
+  }
+  for (auto &thread : threads) thread.join();
+  EXPECT_EQ(accepted, 5);
+  EXPECT_EQ(*gate->reservedBytes(100), 500);
 }
 
 }  // namespace

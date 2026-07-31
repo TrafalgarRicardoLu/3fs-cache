@@ -24,6 +24,15 @@
 namespace hf3fs::storage {
 namespace {
 
+constexpr std::string_view kCachePermitPrefix = "phase2/cache-permit/";
+constexpr std::string_view kCachePermitStoreDirectory = ".cache-space-permits";
+
+struct CachePermitStoreKey {
+  SERDE_STRUCT_FIELD(managerEpoch, Uuid::zero());
+  SERDE_STRUCT_FIELD(admissionAttemptId, Uuid::zero());
+  SERDE_STRUCT_FIELD(permitGeneration, uint64_t{0});
+};
+
 Result<Void> writePhysicalDiskConfig(const Path &diskPath, const PhysicalDiskConfig &config) {
   auto configPath = diskPath / kPhysicalDiskConfigFileName;
   auto tempPath = diskPath / fmt::format("{}.tmp", kPhysicalDiskConfigFileName);
@@ -86,6 +95,216 @@ uint64_t saturatingAdd(uint64_t lhs, uint64_t rhs) {
 
 using namespace std::chrono_literals;
 
+Result<Void> CacheSpacePermitRecord::valid() const {
+  RETURN_ON_ERROR(physicalDiskId.valid());
+  RETURN_ON_ERROR(permit.valid());
+  if (footprintBytes == 0 || expiresAtNs == 0) return makeError(CacheCode::kPermitConflict, "invalid permit record");
+  if (state != cache::CachePermitState::RESERVED && state != cache::CachePermitState::PINNED)
+    return makeError(CacheCode::kPermitConflict, "invalid permit state");
+  return Void{};
+}
+
+CacheSpacePermitStore::CacheSpacePermitStore(std::unique_ptr<kv::KVStore> store, size_t maxRecords, uint64_t maxBytes)
+    : store_(std::move(store)),
+      maxRecords_(maxRecords),
+      maxBytes_(maxBytes) {}
+
+Result<std::map<std::string, CacheSpacePermitRecord>> CacheSpacePermitStore::loadAll() const {
+  if (!store_) return makeError(CacheCode::kJournalFull, "cache permit store is unavailable");
+  std::map<std::string, CacheSpacePermitRecord> records;
+  auto limit = static_cast<uint32_t>(std::min<size_t>(maxRecords_ + 1, std::numeric_limits<uint32_t>::max()));
+  RETURN_ON_ERROR(store_->iterateKeysWithPrefix(kCachePermitPrefix, limit, [&](auto key, auto value) -> Result<Void> {
+    CacheSpacePermitRecord record;
+    RETURN_ON_ERROR(serde::deserialize(record, value));
+    RETURN_ON_ERROR(record.valid());
+    records.emplace(std::string{key}, std::move(record));
+    return Void{};
+  }));
+  if (records.size() > maxRecords_) return makeError(CacheCode::kJournalFull, "cache permit record limit exceeded");
+  return records;
+}
+
+Result<Void> CacheSpacePermitStore::put(std::string_view key, const CacheSpacePermitRecord &record) const {
+  if (!store_) return makeError(CacheCode::kJournalFull, "cache permit store is unavailable");
+  return store_->put(key, serde::serializeBytes(record), true);
+}
+
+Result<Void> CacheSpacePermitStore::remove(std::string_view key) const {
+  if (!store_) return makeError(CacheCode::kJournalFull, "cache permit store is unavailable");
+  return store_->remove(key);
+}
+
+CacheSpaceGate::CacheSpaceGate(PhysicalDiskId diskId, std::unique_ptr<CacheSpacePermitStore> store)
+    : diskId_(diskId),
+      store_(std::move(store)) {}
+
+std::string CacheSpaceGate::key(const PermitIdentity &permit) {
+  auto keyBytes = serde::serializeBytes(
+      CachePermitStoreKey{permit.managerEpoch, permit.placement.admissionAttemptId, permit.permitGeneration});
+  return std::string{kCachePermitPrefix} + keyBytes.toString();
+}
+
+Result<Void> CacheSpaceGate::init() {
+  RETURN_ON_ERROR(diskId_.valid());
+  if (!store_) return makeError(CacheCode::kJournalFull, "cache permit store is unavailable");
+  CHECK_RESULT(records, store_->loadAll());
+  uint64_t bytes = 0;
+  for (const auto &[key, record] : records) {
+    if (record.physicalDiskId != diskId_)
+      return makeError(CacheCode::kPermitConflict, "cache permit belongs to another physical disk");
+    bytes = saturatingAdd(bytes, key.size());
+    bytes = saturatingAdd(bytes, serde::serializeBytes(record).size());
+  }
+  if (bytes > store_->maxBytes()) return makeError(CacheCode::kJournalFull, "cache permit byte limit exceeded");
+  auto lock = std::unique_lock(mutex_);
+  records_ = std::move(records);
+  serializedBytes_ = bytes;
+  return Void{};
+}
+
+Result<Void> CacheSpaceGate::expireLocked(uint64_t nowNs) {
+  for (auto it = records_.begin(); it != records_.end();) {
+    if (it->second.state == cache::CachePermitState::PINNED || it->second.expiresAtNs > nowNs) {
+      ++it;
+      continue;
+    }
+    RETURN_ON_ERROR(store_->remove(it->first));
+    auto bytes = it->first.size() + serde::serializeBytes(it->second).size();
+    serializedBytes_ = serializedBytes_ > bytes ? serializedBytes_ - bytes : 0;
+    it = records_.erase(it);
+  }
+  return Void{};
+}
+
+Result<Void> CacheSpaceGate::persistLocked(std::string_view key, const CacheSpacePermitRecord &record, bool replacing) {
+  auto value = serde::serializeBytes(record);
+  uint64_t previousBytes = 0;
+  if (replacing) {
+    auto previous = records_.find(std::string{key});
+    if (previous != records_.end()) previousBytes = key.size() + serde::serializeBytes(previous->second).size();
+  } else if (records_.size() >= store_->maxRecords()) {
+    return makeError(CacheCode::kJournalFull, "cache permit record limit reached");
+  }
+  auto newBytes = key.size() + value.size();
+  auto projected = serializedBytes_ > previousBytes ? serializedBytes_ - previousBytes : 0;
+  projected = saturatingAdd(projected, newBytes);
+  if (projected > store_->maxBytes()) return makeError(CacheCode::kJournalFull, "cache permit byte limit reached");
+  RETURN_ON_ERROR(store_->put(key, record));
+  records_.insert_or_assign(std::string{key}, record);
+  serializedBytes_ = projected;
+  return Void{};
+}
+
+Result<uint64_t> CacheSpaceGate::reservedBytes(uint64_t nowNs) {
+  auto lock = std::unique_lock(mutex_);
+  RETURN_ON_ERROR(expireLocked(nowNs));
+  uint64_t reserved = 0;
+  for (const auto &[_, record] : records_) reserved = saturatingAdd(reserved, record.footprintBytes);
+  return reserved;
+}
+
+Result<CachePermitResult> CacheSpaceGate::prepare(const CachePermitRequestItem &item,
+                                                  uint64_t footprintBytes,
+                                                  const CacheDiskPhysicalCapacity &capacity,
+                                                  double highWatermark,
+                                                  uint64_t nowNs) {
+  RETURN_ON_ERROR(item.valid());
+  if (footprintBytes == 0 || item.expiresAtNs <= nowNs) return makeError(CacheCode::kPermitExpired);
+  auto lock = std::unique_lock(mutex_);
+  RETURN_ON_ERROR(expireLocked(nowNs));
+  auto recordKey = key(item.permit);
+  auto existing = records_.find(recordKey);
+  if (existing != records_.end()) {
+    if (existing->second.permit != item.permit || existing->second.footprintBytes != footprintBytes)
+      return makeError(CacheCode::kPermitConflict, "permit identity was reused with different footprint");
+    return CachePermitResult{existing->second.permit, existing->second.state, existing->second.expiresAtNs};
+  }
+  uint64_t permits = 0;
+  for (const auto &[_, record] : records_) permits = saturatingAdd(permits, record.footprintBytes);
+  auto projected =
+      static_cast<long double>(capacity.physicalUsedBytes) + capacity.reservedBytes + permits + footprintBytes;
+  if (capacity.capacityBytes == 0 || highWatermark <= 0.0 || highWatermark > 1.0 ||
+      projected > static_cast<long double>(capacity.capacityBytes) * highWatermark)
+    return makeError(CacheCode::kCapacityExceeded, "cache physical high watermark exceeded");
+  CacheSpacePermitRecord record{diskId_,
+                                item.permit,
+                                footprintBytes,
+                                item.expiresAtNs,
+                                cache::CachePermitState::RESERVED};
+  RETURN_ON_ERROR(persistLocked(recordKey, record, false));
+  return CachePermitResult{record.permit, record.state, record.expiresAtNs};
+}
+
+Result<CachePermitResult> CacheSpaceGate::renew(const CachePermitRequestItem &item, uint64_t nowNs) {
+  RETURN_ON_ERROR(item.valid());
+  if (item.expiresAtNs <= nowNs) return makeError(CacheCode::kPermitExpired);
+  auto lock = std::unique_lock(mutex_);
+  RETURN_ON_ERROR(expireLocked(nowNs));
+  auto recordKey = key(item.permit);
+  auto existing = records_.find(recordKey);
+  if (existing == records_.end()) return makeError(CacheCode::kPermitExpired, "permit is not active");
+  if (existing->second.permit != item.permit) return makeError(CacheCode::kPermitConflict);
+  auto updated = existing->second;
+  updated.expiresAtNs = std::max(updated.expiresAtNs, item.expiresAtNs);
+  RETURN_ON_ERROR(persistLocked(recordKey, updated, true));
+  return CachePermitResult{updated.permit, updated.state, updated.expiresAtNs};
+}
+
+Result<Void> CacheSpaceGate::release(const PermitIdentity &permit, uint64_t nowNs) {
+  RETURN_ON_ERROR(permit.valid());
+  auto lock = std::unique_lock(mutex_);
+  RETURN_ON_ERROR(expireLocked(nowNs));
+  auto recordKey = key(permit);
+  auto existing = records_.find(recordKey);
+  if (existing == records_.end()) return Void{};
+  if (existing->second.permit != permit) return makeError(CacheCode::kPermitConflict);
+  if (existing->second.state == cache::CachePermitState::PINNED)
+    return makeError(CacheCode::kPermitConflict, "executing permit is pinned");
+  RETURN_ON_ERROR(store_->remove(recordKey));
+  auto bytes = recordKey.size() + serde::serializeBytes(existing->second).size();
+  serializedBytes_ = serializedBytes_ > bytes ? serializedBytes_ - bytes : 0;
+  records_.erase(existing);
+  return Void{};
+}
+
+Result<CachePermitResult> CacheSpaceGate::query(const PermitIdentity &permit, uint64_t nowNs) {
+  RETURN_ON_ERROR(permit.valid());
+  auto lock = std::unique_lock(mutex_);
+  RETURN_ON_ERROR(expireLocked(nowNs));
+  auto existing = records_.find(key(permit));
+  if (existing == records_.end()) return makeError(CacheCode::kNotFound, "permit is not active");
+  if (existing->second.permit != permit) return makeError(CacheCode::kPermitConflict);
+  return CachePermitResult{existing->second.permit, existing->second.state, existing->second.expiresAtNs};
+}
+
+Result<CachePermitResult> CacheSpaceGate::pin(const PermitIdentity &permit, uint64_t nowNs) {
+  RETURN_ON_ERROR(permit.valid());
+  auto lock = std::unique_lock(mutex_);
+  RETURN_ON_ERROR(expireLocked(nowNs));
+  auto recordKey = key(permit);
+  auto existing = records_.find(recordKey);
+  if (existing == records_.end()) return makeError(CacheCode::kPermitExpired, "permit is not active");
+  if (existing->second.permit != permit) return makeError(CacheCode::kPermitConflict);
+  auto updated = existing->second;
+  updated.state = cache::CachePermitState::PINNED;
+  RETURN_ON_ERROR(persistLocked(recordKey, updated, true));
+  return CachePermitResult{updated.permit, updated.state, updated.expiresAtNs};
+}
+
+Result<Void> CacheSpaceGate::consume(const PermitIdentity &permit) {
+  RETURN_ON_ERROR(permit.valid());
+  auto lock = std::unique_lock(mutex_);
+  auto recordKey = key(permit);
+  auto existing = records_.find(recordKey);
+  if (existing == records_.end()) return Void{};
+  if (existing->second.permit != permit) return makeError(CacheCode::kPermitConflict);
+  RETURN_ON_ERROR(store_->remove(recordKey));
+  auto bytes = recordKey.size() + serde::serializeBytes(existing->second).size();
+  serializedBytes_ = serializedBytes_ > bytes ? serializedBytes_ - bytes : 0;
+  records_.erase(existing);
+  return Void{};
+}
+
 CacheDiskPhysicalCapacity calculateCacheDiskPhysicalCapacity(const CacheTargetPhysicalUsage &targetUsage,
                                                              uint64_t engineAllocatedBytes,
                                                              uint64_t engineReservedBytes,
@@ -108,6 +327,7 @@ Result<Void> StorageTargets::init(CPUExecutorGroup &executor) {
   pathToDiskIndex_.clear();
   diskConfigs_.clear();
   engines_.clear();
+  cacheSpaceGates_.clear();
 
   auto diskInfoResult = SysResource::scanDiskInfo();
   RETURN_AND_LOG_ON_ERROR(diskInfoResult);
@@ -141,6 +361,23 @@ Result<Void> StorageTargets::init(CPUExecutorGroup &executor) {
       CHECK_RESULT(config, loadOrCreatePhysicalDiskConfig(targetPaths_[index], diskRoles[index]));
       diskConfigs_[index] = std::move(config);
     }
+  }
+
+  for (size_t index = 0; index < diskConfigs_.size(); ++index) {
+    const auto &disk = diskConfigs_[index];
+    if (disk.storage_role != StorageRole::CACHE_ONLY) continue;
+    kv::KVStore::Options options;
+    options.type = config_.cache_permit_store().type();
+    options.path = targetPaths_[index] / std::string{kCachePermitStoreDirectory};
+    options.createIfMissing = true;
+    auto kvStore = kv::KVStore::create(config_.cache_permit_store(), options);
+    if (!kvStore) return makeError(CacheCode::kJournalFull, "failed to open cache permit store");
+    auto permitStore = std::make_unique<CacheSpacePermitStore>(std::move(kvStore),
+                                                               config_.cache_permit_max_records(),
+                                                               config_.cache_permit_max_bytes());
+    auto gate = std::make_unique<CacheSpaceGate>(disk.physical_disk_id, std::move(permitStore));
+    RETURN_ON_ERROR(gate->init());
+    cacheSpaceGates_.emplace(disk.physical_disk_id, std::move(gate));
   }
 
   uint32_t i = 0;
@@ -419,6 +656,14 @@ Result<std::vector<SpaceInfo>> StorageTargets::spaceInfos(bool force) {
       info.cacheReservedBytes = capacity.reservedBytes;
       info.cacheAllocatableBytes = capacity.allocatableBytes;
       info.cacheCapacityBytes = capacity.capacityBytes;
+      auto gate = cacheSpaceGate(info.physicalDiskId);
+      if (gate != nullptr) {
+        CHECK_RESULT(permitReserved,
+                     gate->reservedBytes(static_cast<uint64_t>(UtcClock::now().toMicroseconds()) * 1000));
+        info.cacheReservedBytes = saturatingAdd(info.cacheReservedBytes, permitReserved);
+        info.cacheAllocatableBytes =
+            permitReserved < info.cacheAllocatableBytes ? info.cacheAllocatableBytes - permitReserved : uint64_t{0};
+      }
       info.enforcedAdmissionHighWatermark = config_.cache_admission_high_watermark();
       info.sampledAtNs = static_cast<uint64_t>(UtcClock::now().toMicroseconds()) * 1000;
     }

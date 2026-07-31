@@ -1319,6 +1319,48 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageOperator::queryCacheChunkGenerat
   co_return response;
 }
 
+Result<std::vector<StorageOperator::LocalPermitDisk>> StorageOperator::resolveLocalPermitDisks(
+    const PermitIdentity &permit,
+    uint64_t nowNs) {
+  RETURN_ON_ERROR(permit.valid());
+  std::map<PhysicalDiskId, LocalPermitDisk> disks;
+  auto targets = components_.targetMap.snapshot();
+  for (const auto &[targetId, footprint] : permit.footprintByTarget) {
+    auto target = targets->getTargets().find(targetId);
+    if (target == targets->getTargets().end()) continue;
+    if (target->second.storageRole != StorageRole::CACHE_ONLY || target->second.storageTarget == nullptr)
+      return makeError(CacheCode::kRoleMismatch, "permit target is not cache-only");
+    auto &disk = disks[target->second.physicalDiskId];
+    disk.diskId = target->second.physicalDiskId;
+    disk.gate = components_.storageTargets.cacheSpaceGate(disk.diskId);
+    if (disk.gate == nullptr) return makeError(CacheCode::kUnavailable, "cache space gate is unavailable");
+    if (footprint > std::numeric_limits<uint64_t>::max() - disk.footprintBytes)
+      return makeError(CacheCode::kPermitConflict, "permit footprint overflow");
+    disk.footprintBytes += footprint;
+  }
+  if (disks.empty()) return makeError(CacheCode::kPlacementMismatch, "permit has no target on this storage node");
+
+  CHECK_RESULT(spaceInfos, components_.storageTargets.spaceInfos(true));
+  for (auto &[diskId, disk] : disks) {
+    auto expectedDiskId = diskId;
+    auto info = std::find_if(spaceInfos.begin(), spaceInfos.end(), [expectedDiskId](const SpaceInfo &candidate) {
+      return candidate.physicalDiskId == expectedDiskId;
+    });
+    if (info == spaceInfos.end()) return makeError(CacheCode::kUnavailable, "cache disk space snapshot is missing");
+    CHECK_RESULT(currentPermits, disk.gate->reservedBytes(nowNs));
+    disk.capacity.capacityBytes = info->cacheCapacityBytes;
+    disk.capacity.physicalUsedBytes = info->cachePhysicalUsedBytes;
+    disk.capacity.reservedBytes =
+        info->cacheReservedBytes >= currentPermits ? info->cacheReservedBytes - currentPermits : uint64_t{0};
+    disk.capacity.allocatableBytes = info->cacheAllocatableBytes;
+    disk.highWatermark = info->enforcedAdmissionHighWatermark;
+  }
+  std::vector<LocalPermitDisk> result;
+  result.reserve(disks.size());
+  for (auto &[_, disk] : disks) result.push_back(std::move(disk));
+  return result;
+}
+
 CoTryTask<QueryCacheSpaceRsp> StorageOperator::queryCacheSpace(const QueryCacheSpaceReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2()));
@@ -1378,16 +1420,109 @@ CoTryTask<QueryCacheSpaceRsp> StorageOperator::queryCacheSpace(const QueryCacheS
   co_return response;
 }
 
+CoTryTask<PrepareCachePermitsRsp> StorageOperator::prepareCachePermits(const PrepareCachePermitsReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2()));
+  const auto nowNs = static_cast<uint64_t>(UtcClock::now().toMicroseconds()) * 1000;
+  PrepareCachePermitsRsp response;
+  response.results.reserve(req.items.size());
+  for (const auto &item : req.items) {
+    auto disks = resolveLocalPermitDisks(item.permit, nowNs);
+    if (!disks) {
+      response.results.emplace_back(makeError(std::move(disks.error())));
+      continue;
+    }
+    std::vector<CacheSpaceGate *> newlyPrepared;
+    Result<CachePermitResult> result = makeError(CacheCode::kUnavailable);
+    for (auto &disk : *disks) {
+      bool existed = disk.gate->query(item.permit, nowNs).hasValue();
+      result = disk.gate->prepare(item, disk.footprintBytes, disk.capacity, disk.highWatermark, nowNs);
+      if (!result) break;
+      if (!existed) newlyPrepared.push_back(disk.gate);
+    }
+    if (!result) {
+      for (auto *gate : newlyPrepared) {
+        auto rollback = gate->release(item.permit, nowNs);
+        XLOGF_IF(ERR, rollback.hasError(), "rollback cache permit failed: {}", rollback.error());
+      }
+    }
+    response.results.emplace_back(std::move(result));
+  }
+  co_return response;
+}
+
+CoTryTask<RenewCachePermitsRsp> StorageOperator::renewCachePermits(const RenewCachePermitsReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2()));
+  const auto nowNs = static_cast<uint64_t>(UtcClock::now().toMicroseconds()) * 1000;
+  RenewCachePermitsRsp response;
+  response.results.reserve(req.items.size());
+  for (const auto &item : req.items) {
+    auto disks = resolveLocalPermitDisks(item.permit, nowNs);
+    if (!disks) {
+      response.results.emplace_back(makeError(std::move(disks.error())));
+      continue;
+    }
+    Result<CachePermitResult> result = makeError(CacheCode::kUnavailable);
+    for (auto &disk : *disks) {
+      result = disk.gate->renew(item, nowNs);
+      if (!result) break;
+    }
+    response.results.emplace_back(std::move(result));
+  }
+  co_return response;
+}
+
+CoTryTask<ReleaseCachePermitsRsp> StorageOperator::releaseCachePermits(const ReleaseCachePermitsReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2()));
+  const auto nowNs = static_cast<uint64_t>(UtcClock::now().toMicroseconds()) * 1000;
+  ReleaseCachePermitsRsp response;
+  response.results.reserve(req.permits.size());
+  for (const auto &permit : req.permits) {
+    auto disks = resolveLocalPermitDisks(permit, nowNs);
+    if (!disks) {
+      response.results.emplace_back(makeError(std::move(disks.error())));
+      continue;
+    }
+    Result<Void> result = Void{};
+    for (auto &disk : *disks) {
+      result = disk.gate->release(permit, nowNs);
+      if (!result) break;
+    }
+    response.results.emplace_back(std::move(result));
+  }
+  co_return response;
+}
+
+CoTryTask<QueryCachePermitsRsp> StorageOperator::queryCachePermits(const QueryCachePermitsReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2()));
+  const auto nowNs = static_cast<uint64_t>(UtcClock::now().toMicroseconds()) * 1000;
+  QueryCachePermitsRsp response;
+  response.results.reserve(req.permits.size());
+  for (const auto &permit : req.permits) {
+    auto disks = resolveLocalPermitDisks(permit, nowNs);
+    if (!disks) {
+      response.results.emplace_back(makeError(std::move(disks.error())));
+      continue;
+    }
+    Result<CachePermitResult> result = makeError(CacheCode::kUnavailable);
+    for (auto &disk : *disks) {
+      result = disk.gate->query(permit, nowNs);
+      if (!result) break;
+    }
+    response.results.emplace_back(std::move(result));
+  }
+  co_return response;
+}
+
 #define PHASE2_STORAGE_DISABLED_METHOD(NAME, REQ, RSP)                                                         \
   CoTryTask<RSP> StorageOperator::NAME(const REQ &req) {                                                       \
     CO_RETURN_ON_ERROR(req.valid());                                                                           \
     CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2())); \
     co_return makeError(StatusCode::kNotImplemented, #NAME " is not implemented");                             \
   }
-PHASE2_STORAGE_DISABLED_METHOD(prepareCachePermits, PrepareCachePermitsReq, PrepareCachePermitsRsp);
-PHASE2_STORAGE_DISABLED_METHOD(renewCachePermits, RenewCachePermitsReq, RenewCachePermitsRsp);
-PHASE2_STORAGE_DISABLED_METHOD(releaseCachePermits, ReleaseCachePermitsReq, ReleaseCachePermitsRsp);
-PHASE2_STORAGE_DISABLED_METHOD(queryCachePermits, QueryCachePermitsReq, QueryCachePermitsRsp);
 PHASE2_STORAGE_DISABLED_METHOD(retireCacheReplicas, RetireCacheReplicasReq, RetireCacheReplicasRsp);
 PHASE2_STORAGE_DISABLED_METHOD(coordinateCacheRetires, CoordinateCacheRetiresReq, CoordinateCacheRetiresRsp);
 #undef PHASE2_STORAGE_DISABLED_METHOD

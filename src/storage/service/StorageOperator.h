@@ -110,6 +110,16 @@ class StorageOperator {
   CoTryTask<CoordinateCacheRetiresRsp> coordinateCacheRetires(const CoordinateCacheRetiresReq &req);
 
  protected:
+  struct LocalPermitDisk {
+    PhysicalDiskId diskId;
+    CacheSpaceGate *gate = nullptr;
+    uint64_t footprintBytes = 0;
+    CacheDiskPhysicalCapacity capacity;
+    double highWatermark = 0;
+  };
+
+  Result<std::vector<LocalPermitDisk>> resolveLocalPermitDisks(const PermitIdentity &permit, uint64_t nowNs);
+
   using ChunkMetadataProcessor = std::function<CoTryTask<void>(const ChunkId &, const ChunkMetadata &)>;
 
   CoTask<IOResult> handleUpdate(ServiceRequestContext &requestCtx,
