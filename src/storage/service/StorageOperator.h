@@ -40,6 +40,7 @@ class StorageOperator {
     CONFIG_HOT_UPDATED_ITEM(max_concurrent_rdma_reads, 256U);
     CONFIG_HOT_UPDATED_ITEM(read_only, false);
     CONFIG_HOT_UPDATED_ITEM(enable_cache_phase2, false);
+    CONFIG_HOT_UPDATED_ITEM(local_access_persist_interval, 30_s, [](Duration value) { return value > 0_ns; });
     CONFIG_HOT_UPDATED_ITEM(rdma_transmission_req_timeout, 0_ms);
     CONFIG_HOT_UPDATED_ITEM(apply_transmission_before_getting_semaphore, true);
   };

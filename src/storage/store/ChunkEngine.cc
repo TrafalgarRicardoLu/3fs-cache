@@ -278,4 +278,62 @@ Result<std::optional<CacheChunkDescriptor>> ChunkEngine::queryCacheChunkDescript
   return tag->descriptor;
 }
 
+Result<bool> ChunkEngine::updateCacheChunkAccess(chunk_engine::Engine &engine,
+                                                 const ChunkId &chunkId,
+                                                 ChainId chainId,
+                                                 cache::CacheGeneration generation,
+                                                 uint64_t observedAtNs,
+                                                 bool sync) {
+  auto key = cacheChunkKey(chainId, chunkId);
+  std::string error;
+  auto current = engine.get_raw_chunk(toSlice(key), error);
+  if (!error.empty()) return makeError(StorageCode::kChunkMetadataGetError, std::move(error));
+  if (current == nullptr) return false;
+
+  uint32_t version;
+  uint32_t chainVersion;
+  uint32_t checksum;
+  uint32_t length;
+  std::string oldTag;
+  std::string newTag;
+  {
+    auto release = folly::makeGuard([&] { engine.release_raw_chunk(current); });
+    auto tag = decodeCacheTag(current->raw_etag());
+    if (!tag || tag->state != CacheChunkState::ACTIVE || tag->generation != generation || !tag->descriptor ||
+        tag->descriptor->generation != generation) {
+      return false;
+    }
+    if (tag->descriptor->lastAccessAtNs >= observedAtNs) return false;
+    const auto &meta = current->raw_meta();
+    if (meta.chunk_ver == std::numeric_limits<uint32_t>::max()) {
+      return makeError(CacheCode::kStateConflict, "cache chunk version exhausted");
+    }
+    version = meta.chunk_ver;
+    chainVersion = meta.chain_ver;
+    checksum = meta.checksum;
+    length = meta.len;
+    oldTag.assign(reinterpret_cast<const char *>(current->raw_etag().data()), current->raw_etag().size());
+    tag->descriptor->lastAccessAtNs = observedAtNs;
+    newTag = encodeCacheTag(std::move(*tag));
+  }
+
+  static const uint8_t emptyWrite = 0;
+  chunk_engine::UpdateReq request{};
+  request.is_syncing = true;
+  request.update_ver = version + 1;
+  request.chain_ver = chainVersion;
+  request.checksum = checksum;
+  request.offset = length;
+  request.length = 0;
+  request.data = reinterpret_cast<uint64_t>(&emptyWrite);
+  request.expected_tag = toSlice(oldTag);
+  request.desired_tag = toSlice(newTag);
+
+  auto writing = engine.update_raw_chunk(toSlice(key), request, error);
+  if (!error.empty()) return makeError(request.out_error_code, std::move(error));
+  engine.commit_raw_chunk(writing, sync, error);
+  if (!error.empty()) return makeError(StorageCode::kChunkMetadataSetError, std::move(error));
+  return true;
+}
+
 }  // namespace hf3fs::storage

@@ -108,6 +108,12 @@ struct ChunkEngine {
   static Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(chunk_engine::Engine &engine,
                                                                                const ChunkId &chunkId,
                                                                                ChainId chainId);
+  static Result<bool> updateCacheChunkAccess(chunk_engine::Engine &engine,
+                                             const ChunkId &chunkId,
+                                             ChainId chainId,
+                                             cache::CacheGeneration generation,
+                                             uint64_t observedAtNs,
+                                             bool sync);
 
   static Result<ChunkMetadata> queryChunk(chunk_engine::Engine &engine, const ChunkId &chunkId, ChainId chainId) {
     std::string key;

@@ -398,6 +398,21 @@ Result<Void> ChunkMetaStore::setCacheState(const ChunkId &chunkId,
   return Void{};
 }
 
+Result<Void> ChunkMetaStore::setCacheDescriptor(const ChunkId &chunkId, const CacheChunkDescriptor &descriptor) {
+  RETURN_ON_ERROR(descriptor.valid());
+  auto guard = storageMetaSet.record();
+  auto batchOp = kv_->createBatchOps();
+  batchOp->put(CacheDescriptorKey(chunkId), serde::serializeBytes(descriptor));
+  auto result = batchOp->commit();
+  if (UNLIKELY(!result)) {
+    auto msg = fmt::format("chunk id {} set cache descriptor error: {}", chunkId, result.error());
+    XLOG(ERR, msg);
+    return makeError(StorageCode::kChunkMetadataSetError, std::move(msg));
+  }
+  guard.succ();
+  return Void{};
+}
+
 Result<std::optional<CacheChunkDescriptor>> ChunkMetaStore::getCacheDescriptor(const ChunkId &chunkId) {
   auto result = kv_->get(CacheDescriptorKey(chunkId));
   if (!result) {

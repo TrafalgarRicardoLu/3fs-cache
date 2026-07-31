@@ -197,6 +197,20 @@ Result<std::optional<CacheChunkDescriptor>> ChunkStore::queryCacheChunkDescripto
   return metaStore_.getCacheDescriptor(chunkId);
 }
 
+Result<bool> ChunkStore::updateCacheChunkAccess(const ChunkId &chunkId,
+                                                cache::CacheGeneration generation,
+                                                uint64_t observedAtNs) {
+  CHECK_RESULT(current, get(chunkId));
+  const auto &meta = current->second.meta;
+  if (meta.cacheState != CacheChunkState::ACTIVE || meta.cacheGeneration != generation) return false;
+  CHECK_RESULT(descriptor, metaStore_.getCacheDescriptor(chunkId));
+  if (!descriptor || descriptor->generation != generation) return false;
+  if (descriptor->lastAccessAtNs >= observedAtNs) return false;
+  descriptor->lastAccessAtNs = observedAtNs;
+  RETURN_ON_ERROR(metaStore_.setCacheDescriptor(chunkId, *descriptor));
+  return true;
+}
+
 Result<Void> ChunkStore::createChunk(const ChunkId &chunkId,
                                      uint32_t chunkSize,
                                      ChunkInfo &chunkInfo,

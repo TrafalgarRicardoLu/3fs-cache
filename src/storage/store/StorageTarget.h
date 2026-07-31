@@ -15,6 +15,7 @@
 #include "storage/store/ChunkEngine.h"
 #include "storage/store/ChunkStore.h"
 #include "storage/store/PhysicalConfig.h"
+#include "storage/store/cache/LocalCacheAccess.h"
 #include "storage/update/UpdateJob.h"
 
 namespace hf3fs::storage {
@@ -115,6 +116,10 @@ class StorageTarget : public enable_shared_from_this<StorageTarget> {
   Result<CacheChunkGenerationInfo> retireCacheChunk(const RetireCacheChunkItem &item);
   Result<CacheChunkGenerationInfo> queryCacheChunk(const ChunkId &chunkId);
   Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(const ChunkId &chunkId);
+  CoTryTask<bool> recordCacheAccess(const ChunkId &chunkId,
+                                    cache::CacheGeneration generation,
+                                    uint64_t observedAtNs,
+                                    Duration persistInterval);
 
   // recycle a batch of chunks. return true if all holes are punched.
   Result<bool> punchHole() {
@@ -231,6 +236,7 @@ class StorageTarget : public enable_shared_from_this<StorageTarget> {
   monitor::Recorder::TagRef<monitor::ValueRecorder> targetUnrecycledSize_;
   PhysicalConfig targetConfig_;
   ChunkStore chunkStore_;
+  LocalCacheAccess localCacheAccess_;
   CoLockManager<> chunkLocks_;
   CoLockManager<> channelLocks_;
   folly::Synchronized<std::set<Size>, std::mutex> chunkSizeList_;

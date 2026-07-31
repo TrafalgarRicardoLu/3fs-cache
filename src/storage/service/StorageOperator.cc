@@ -179,6 +179,24 @@ CoTryTask<BatchReadRsp> StorageOperator::batchRead(ServiceRequestContext &reques
   co_await batch.complete();
   waitAioRecordGuard.report(true);
 
+  if (config_.enable_cache_phase2()) {
+    const auto observedAtNs = static_cast<uint64_t>(UtcClock::now().toMicroseconds()) * 1000;
+    for (AioReadJobIterator it(&batch); it; it++) {
+      if (!it->result().lengthInfo || it->result().cacheGeneration == cache::CacheGeneration{}) continue;
+      auto accessResult =
+          co_await it->state().storageTarget->recordCacheAccess(it->readIO().key.chunkId,
+                                                                it->result().cacheGeneration,
+                                                                observedAtNs,
+                                                                config_.local_access_persist_interval());
+      XLOGF_IF(WARN,
+               accessResult.hasError(),
+               "record local cache access failed for chunk {} generation {}: {}",
+               it->readIO().key.chunkId,
+               it->result().cacheGeneration,
+               accessResult.error());
+    }
+  }
+
   if (BITFLAGS_CONTAIN(req.featureFlags, FeatureFlags::SEND_DATA_INLINE)) {
     batch.copyToRespBuffer(rsp.inlinebuf.data);
   } else if (!BITFLAGS_CONTAIN(req.featureFlags, FeatureFlags::BYPASS_RDMAXMIT)) {

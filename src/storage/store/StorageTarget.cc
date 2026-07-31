@@ -427,6 +427,32 @@ Result<std::optional<CacheChunkDescriptor>> StorageTarget::queryCacheChunkDescri
   return chunkStore_.queryCacheChunkDescriptor(chunkId);
 }
 
+CoTryTask<bool> StorageTarget::recordCacheAccess(const ChunkId &chunkId,
+                                                 cache::CacheGeneration generation,
+                                                 uint64_t observedAtNs,
+                                                 Duration persistInterval) {
+  if (persistInterval.count() <= 0) co_return makeError(StatusCode::kInvalidArg, "invalid access persist interval");
+  folly::coro::Baton baton;
+  auto lock = lockChunk(baton, chunkId, "cacheAccess");
+  if (!lock.locked()) co_await lock.lock();
+  co_return localCacheAccess_.record(
+      chunkId,
+      generation,
+      observedAtNs,
+      static_cast<uint64_t>(persistInterval.count()),
+      [&](cache::CacheGeneration expectedGeneration, uint64_t accessAtNs) -> Result<bool> {
+        if (useChunkEngine()) {
+          return ChunkEngine::updateCacheChunkAccess(*engine_,
+                                                     chunkId,
+                                                     chainId(),
+                                                     expectedGeneration,
+                                                     accessAtNs,
+                                                     config_.kv_store().sync_when_write());
+        }
+        return chunkStore_.updateCacheChunkAccess(chunkId, expectedGeneration, accessAtNs);
+      });
+}
+
 Result<Void> StorageTarget::reportUnrecycledSize() {
   targetUsedSize_->set(usedSize());
 

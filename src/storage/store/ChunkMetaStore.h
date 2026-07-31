@@ -53,6 +53,7 @@ class ChunkMetaStore {
   Result<Void> setCacheState(const ChunkId &chunkId,
                              const ChunkMetadata &meta,
                              const std::optional<CacheChunkDescriptor> &descriptor);
+  Result<Void> setCacheDescriptor(const ChunkId &chunkId, const CacheChunkDescriptor &descriptor);
   Result<std::optional<CacheChunkDescriptor>> getCacheDescriptor(const ChunkId &chunkId);
 
   // remove metadata of chunk. [thread-safe]
