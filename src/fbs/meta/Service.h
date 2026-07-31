@@ -1289,19 +1289,42 @@ struct CacheStorageEvent {
   SERDE_STRUCT_FIELD(sourceId, storage::PhysicalDiskId{});
   SERDE_STRUCT_FIELD(sequence, uint64_t{0});
   SERDE_STRUCT_FIELD(type, cache::CacheStorageEventType::DELETED);
-  SERDE_STRUCT_FIELD(key, storage::CacheChunkKey{});
+  SERDE_STRUCT_FIELD(storageOperationId, Uuid::zero());
+  SERDE_STRUCT_FIELD(logicalRetireOperationId, std::optional<Uuid>{});
+  SERDE_STRUCT_FIELD(logicalKey, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(storageKey, storage::CacheChunkKey{});
   SERDE_STRUCT_FIELD(generation, cache::CacheGeneration{});
   SERDE_STRUCT_FIELD(placement, storage::PlacementIdentity{});
-  SERDE_STRUCT_FIELD(evictionEpoch, cache::EvictionEpoch{});
-  SERDE_STRUCT_FIELD(operationId, Uuid::zero());
+  SERDE_STRUCT_FIELD(evictionEpoch, std::optional<cache::EvictionEpoch>{});
+  SERDE_STRUCT_FIELD(diskId, storage::PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(timestamp, UtcTime{});
 
  public:
   Result<Void> valid() const {
     RETURN_ON_ERROR(sourceId.valid());
-    RETURN_ON_ERROR(key.valid());
+    RETURN_ON_ERROR(logicalKey.valid());
+    RETURN_ON_ERROR(storageKey.valid());
     RETURN_ON_ERROR(placement.valid());
-    if (sequence == 0 || generation == cache::CacheGeneration{} || operationId == Uuid::zero())
+    RETURN_ON_ERROR(diskId.valid());
+    if (sequence == 0 || generation == cache::CacheGeneration{} || storageOperationId == Uuid::zero() ||
+        timestamp.isZero()) {
       return makeError(StatusCode::kInvalidArg, "invalid storage event identity");
+    }
+    if (storageKey.vChainId != placement.versionedChain) {
+      return makeError(CacheCode::kPlacementMismatch, "storage event key differs from placement");
+    }
+    if (type == cache::CacheStorageEventType::DELETED) {
+      if (!logicalRetireOperationId.has_value() || *logicalRetireOperationId == Uuid::zero() ||
+          !evictionEpoch.has_value() || *evictionEpoch == cache::EvictionEpoch{}) {
+        return makeError(StatusCode::kInvalidArg, "logical deletion event has no retirement identity");
+      }
+    } else if (type == cache::CacheStorageEventType::EMERGENCY_EVICTED) {
+      if (logicalRetireOperationId.has_value() || evictionEpoch.has_value()) {
+        return makeError(StatusCode::kInvalidArg, "local eviction cannot claim logical retirement");
+      }
+    } else {
+      return makeError(StatusCode::kInvalidArg, "unsupported cache storage event type");
+    }
     return Void{};
   }
 };
@@ -1334,6 +1357,11 @@ struct ListCacheEventDeadLettersReq : ReqBase {
 
  public:
   Result<Void> valid() const {
+    if (sourceId.has_value()) RETURN_ON_ERROR(sourceId->valid());
+    if (!sourceId.has_value() && beginSequence != 0) {
+      return makeError(StatusCode::kInvalidArg, "begin sequence requires an event source");
+    }
+    if (limit == 0) return makeError(StatusCode::kInvalidArg, "limit is zero");
     if (limit > cache::kMaxPhase2BatchItems) return makeError(CacheCode::kRequestTooLarge, "limit too large");
     return Void{};
   }

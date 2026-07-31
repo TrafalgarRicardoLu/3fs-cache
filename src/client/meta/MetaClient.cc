@@ -997,6 +997,8 @@ META_CACHE_CLIENT_METHOD(updateCacheBlockAccess, UpdateCacheBlockAccessReq, Upda
 META_CACHE_CLIENT_METHOD(beginEvictCacheBlocks, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
 META_CACHE_CLIENT_METHOD(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);
 META_CACHE_CLIENT_METHOD(listReadyCacheBlocks, ListReadyCacheBlocksReq, ListReadyCacheBlocksRsp);
+META_CACHE_CLIENT_METHOD(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
+META_CACHE_CLIENT_METHOD(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
 #undef META_CACHE_CLIENT_METHOD
 
 }  // namespace hf3fs::meta::client

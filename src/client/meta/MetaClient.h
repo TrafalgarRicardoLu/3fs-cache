@@ -239,6 +239,8 @@ class MetaClient {
   CoTryTask<BeginEvictCacheBlocksRsp> beginEvictCacheBlocks(BeginEvictCacheBlocksReq req);
   CoTryTask<ListEvictingCacheBlocksRsp> listEvictingCacheBlocks(ListEvictingCacheBlocksReq req);
   CoTryTask<ListReadyCacheBlocksRsp> listReadyCacheBlocks(ListReadyCacheBlocksReq req);
+  CoTryTask<ReportCacheStorageEventsRsp> reportCacheStorageEvents(ReportCacheStorageEventsReq req);
+  CoTryTask<ListCacheEventDeadLettersRsp> listCacheEventDeadLetters(ListCacheEventDeadLettersReq req);
 
   CoTryTask<Inode> extendStripe(const UserInfo &userInfo, InodeId inodeId, uint32_t stripe);
 

@@ -154,6 +154,8 @@ class MetaStore {
 
   OpPtr<BeginCleanCacheBlocksRsp> beginCleanCacheBlocks(const BeginCleanCacheBlocksReq &req);
   OpPtr<BeginEvictCacheBlocksRsp> beginEvictCacheBlocks(const BeginEvictCacheBlocksReq &req);
+  OpPtr<ReportCacheStorageEventsRsp> reportCacheStorageEvents(const ReportCacheStorageEventsReq &req);
+  OpPtr<ListCacheEventDeadLettersRsp> listCacheEventDeadLetters(const ListCacheEventDeadLettersReq &req);
 
   OpPtr<FinishCleanCacheBlocksRsp> finishCleanCacheBlocks(const FinishCleanCacheBlocksReq &req);
 

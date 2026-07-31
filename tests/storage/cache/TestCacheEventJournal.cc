@@ -4,6 +4,7 @@
 
 #include "kv/MemDBStore.h"
 #include "storage/cache/event/CacheEventOutbox.h"
+#include "storage/cache/event/CacheEventReporter.h"
 #include "tests/GtestHelpers.h"
 
 namespace hf3fs::storage::test {
@@ -202,6 +203,30 @@ TEST(TestCacheEventJournal, ValidatesEventKindsAndBatchBounds) {
   ASSERT_ERROR(journal->deliveryBatch(0), CacheCode::kRequestTooLarge);
   ASSERT_ERROR(journal->deliveryBatch(cache::kMaxPhase2BatchItems + 1), CacheCode::kRequestTooLarge);
   ASSERT_ERROR(journal->markDeliverable(Uuid::random()), CacheCode::kNotFound);
+}
+
+TEST(TestCacheEventJournal, ReporterPreservesTheDurableEventIdentity) {
+  kv::KVStore::Config config;
+  auto journal = memoryJournal(config);
+  auto deletion = intent(8);
+  ASSERT_OK(journal->prepare(deletion));
+  auto envelope = journal->markDeliverable(deletion.storageOperationId);
+  ASSERT_OK(envelope);
+  auto event = CacheEventReporter::toWire(*envelope);
+  ASSERT_OK(event.valid());
+  EXPECT_EQ(event.sourceId, envelope->sourceId);
+  EXPECT_EQ(event.sequence, envelope->sequence);
+  EXPECT_EQ(event.type, deletion.type);
+  EXPECT_EQ(event.storageOperationId, deletion.storageOperationId);
+  EXPECT_EQ(event.logicalRetireOperationId, deletion.logicalRetireOperationId);
+  EXPECT_EQ(event.logicalKey, deletion.logicalKey);
+  EXPECT_EQ(event.storageKey.vChainId, deletion.storageKey.vChainId);
+  EXPECT_EQ(event.storageKey.chunkId, deletion.storageKey.chunkId);
+  EXPECT_EQ(event.generation, deletion.generation);
+  EXPECT_EQ(event.placement, deletion.placement);
+  EXPECT_EQ(event.evictionEpoch, deletion.evictionEpoch);
+  EXPECT_EQ(event.diskId, deletion.diskId);
+  EXPECT_EQ(event.timestamp, deletion.timestamp);
 }
 
 }  // namespace

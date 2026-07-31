@@ -713,15 +713,17 @@ CoTryTask<CancelQueuedAdmissionsRsp> MetaOperator::cancelQueuedAdmissions(Cancel
       .run(kvEngine_->createReadWriteTransaction(), std::move(handler));
 }
 
-#define META_PHASE2_DISABLED_METHOD(NAME, REQ, RSP)                                \
-  CoTryTask<RSP> MetaOperator::NAME(REQ req) {                                     \
-    CO_RETURN_ON_ERROR(req.valid());                                               \
-    CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));                \
-    co_return makeError(StatusCode::kNotImplemented, #NAME " is not implemented"); \
-  }
-META_PHASE2_DISABLED_METHOD(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
-META_PHASE2_DISABLED_METHOD(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
-#undef META_PHASE2_DISABLED_METHOD
+CoTryTask<ReportCacheStorageEventsRsp> MetaOperator::reportCacheStorageEvents(ReportCacheStorageEventsReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::reportCacheStorageEvents, req);
+}
+
+CoTryTask<ListCacheEventDeadLettersRsp> MetaOperator::listCacheEventDeadLetters(ListCacheEventDeadLettersReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::listCacheEventDeadLetters, req);
+}
 
 CoTryTask<BeginEvictCacheBlocksRsp> MetaOperator::beginEvictCacheBlocks(BeginEvictCacheBlocksReq req) {
   CO_RETURN_ON_ERROR(req.valid());
