@@ -127,6 +127,12 @@ class StorageOperator {
     bool local = false;
   };
 
+  struct RetireReplicaNode {
+    TargetId targetId;
+    std::optional<net::Address> address;
+    bool local = false;
+  };
+
   Result<std::vector<LocalPermitDisk>> resolveLocalPermitDisks(const PermitIdentity &permit, uint64_t nowNs);
   Result<std::vector<CacheSpaceGate *>> resolveLocalPermitGates(const PermitIdentity &permit) const;
   Result<std::vector<PermitReplicaNode>> resolvePermitReplicaNodes(const PermitIdentity &permit,
@@ -158,6 +164,12 @@ class StorageOperator {
                                                     const flat::UserInfo &userInfo,
                                                     uint32_t cacheProtocolVersion,
                                                     uint64_t nowNs);
+  Result<RetireReplicaNode> resolveRetireReplicaNode(TargetId targetId, const PlacementIdentity &placement) const;
+  CoTryTask<RetireCacheReplicaResult> retireCacheReplica(const RetireCacheReplicaItem &item);
+  CoTryTask<RetireCacheReplicaResult> retireReplicaOnNode(const RetireReplicaNode &node,
+                                                          const RetireCacheReplicaItem &item,
+                                                          const flat::UserInfo &userInfo,
+                                                          uint32_t cacheProtocolVersion);
 
   using ChunkMetadataProcessor = std::function<CoTryTask<void>(const ChunkId &, const ChunkMetadata &)>;
 

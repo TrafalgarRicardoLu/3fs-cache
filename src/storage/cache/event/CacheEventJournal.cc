@@ -192,7 +192,8 @@ Result<Void> CacheEventJournal::init() {
   }
   RETURN_ON_ERROR(header_.valid());
   RETURN_ON_ERROR(loadLocked());
-  journalFull_ = operations_.size() >= maxRecords_ || accountedBytes_ >= maxBytes_;
+  journalFull_ = operations_.size() + externalRecords_ >= maxRecords_ ||
+                 saturatingAdd(accountedBytes_, externalBytes_) >= maxBytes_;
   initialized_ = true;
   return Void{};
 }
@@ -209,7 +210,8 @@ Result<CacheEventJournalRecord> CacheEventJournal::prepare(const CacheEventInten
   }
   if (journalFull_) return makeError(CacheCode::kJournalFull, "cache event journal is fail-closed");
   auto accounted = estimateAccountedBytes(header_.sourceId, intent);
-  if (operations_.size() >= maxRecords_ || accounted > maxBytes_ - std::min(accountedBytes_, maxBytes_)) {
+  auto usedBytes = saturatingAdd(accountedBytes_, externalBytes_);
+  if (operations_.size() + externalRecords_ >= maxRecords_ || accounted > maxBytes_ - std::min(usedBytes, maxBytes_)) {
     journalFull_ = true;
     return makeError(CacheCode::kJournalFull, "cache event journal reservation limit reached");
   }
@@ -221,7 +223,8 @@ Result<CacheEventJournalRecord> CacheEventJournal::prepare(const CacheEventInten
   }
   operations_.emplace(intent.storageOperationId, record);
   accountedBytes_ += accounted;
-  journalFull_ = operations_.size() >= maxRecords_ || accountedBytes_ >= maxBytes_;
+  journalFull_ = operations_.size() + externalRecords_ >= maxRecords_ ||
+                 saturatingAdd(accountedBytes_, externalBytes_) >= maxBytes_;
   return record;
 }
 
@@ -323,14 +326,16 @@ Result<Void> CacheEventJournal::acknowledge(uint64_t sequence) {
     }
   }
   header_ = nextHeader;
-  journalFull_ = operations_.size() >= maxRecords_ || accountedBytes_ >= maxBytes_;
+  journalFull_ = operations_.size() + externalRecords_ >= maxRecords_ ||
+                 saturatingAdd(accountedBytes_, externalBytes_) >= maxBytes_;
   return Void{};
 }
 
 Result<Void> CacheEventJournal::requireWritable() const {
   auto lock = std::unique_lock(mutex_);
   if (!initialized_) return makeError(CacheCode::kUnavailable, "cache event journal is not initialized");
-  if (journalFull_ || operations_.size() >= maxRecords_ || accountedBytes_ >= maxBytes_) {
+  if (journalFull_ || operations_.size() + externalRecords_ >= maxRecords_ ||
+      saturatingAdd(accountedBytes_, externalBytes_) >= maxBytes_) {
     return makeError(CacheCode::kJournalFull, "cache event journal cannot reserve another operation");
   }
   return Void{};
@@ -338,14 +343,14 @@ Result<Void> CacheEventJournal::requireWritable() const {
 
 CacheEventJournalStats CacheEventJournal::stats() const {
   auto lock = std::unique_lock(mutex_);
-  CacheEventJournalStats result{
-      header_.sourceId,
-      header_.nextSequence,
-      header_.acknowledgedSequence,
-      0,
-      deliveries_.size(),
-      accountedBytes_,
-      initialized_ && !journalFull_ && operations_.size() < maxRecords_ && accountedBytes_ < maxBytes_};
+  CacheEventJournalStats result{header_.sourceId,
+                                header_.nextSequence,
+                                header_.acknowledgedSequence,
+                                0,
+                                deliveries_.size(),
+                                saturatingAdd(accountedBytes_, externalBytes_),
+                                initialized_ && !journalFull_ && operations_.size() + externalRecords_ < maxRecords_ &&
+                                    saturatingAdd(accountedBytes_, externalBytes_) < maxBytes_};
   for (const auto &[_, record] : operations_)
     if (record.state == cache::CacheStorageEventState::PREPARED) ++result.prepared;
   return result;

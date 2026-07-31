@@ -42,7 +42,7 @@ RetireCacheChunkItem retireItem(ChunkId chunkId, uint64_t generation, Uuid opera
 Result<cache::CacheGeneration> prepareRead(StorageTarget &target, ChunkId chunkId) {
   BatchReadReq request;
   request.payloads.emplace_back();
-  request.payloads.front().key = {{target.chainId(), ChainVer{1}}, chunkId};
+  request.payloads.front().key = {kChain, chunkId};
   request.payloads.front().length = 5;
   BatchReadRsp response;
   response.results.resize(1);
@@ -94,6 +94,7 @@ TEST_P(TestReplicaRetireOperation, DurableTombstoneIsIdempotentAndGenerationFenc
     auto firstRead = prepareRead(*target, chunk);
     ASSERT_OK(firstRead);
     ASSERT_EQ(*firstRead, cache::CacheGeneration{1});
+    ASSERT_OK(target->setChainId(ChainId{2}));
 
     auto operation = Uuid::from(43, 1);
     auto retired = target->retireCacheChunkDurable(retireItem(chunk, 1, operation));
@@ -128,7 +129,7 @@ TEST_P(TestReplicaRetireOperation, DurableTombstoneIsIdempotentAndGenerationFenc
     auto targetResult = targetMap.snapshot()->getTarget(kTarget);
     ASSERT_OK(targetResult);
     auto target = (*targetResult)->storageTarget;
-    auto tombstone = target->queryCacheChunk(absent);
+    auto tombstone = target->queryCacheChunk(CacheChunkKey{kChain, absent});
     ASSERT_OK(tombstone);
     ASSERT_TRUE(tombstone->retired);
     ASSERT_EQ(tombstone->cacheGeneration, cache::CacheGeneration{5});
@@ -143,6 +144,7 @@ INSTANTIATE_TEST_SUITE_P(ChunkStoreAndChunkEngine, TestReplicaRetireOperation, :
 TEST(TestReplicaRetireWire, RequiresExactPlacementChain) {
   RetireCacheReplicaItem item;
   item.key = {kChain, ChunkId{0xDA, 3}};
+  item.targetId = kTarget;
   item.expectedGeneration = cache::CacheGeneration{1};
   item.placement = placement(1);
   item.evictionEpoch = cache::EvictionEpoch{1};

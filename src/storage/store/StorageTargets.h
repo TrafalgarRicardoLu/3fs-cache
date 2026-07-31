@@ -13,6 +13,7 @@
 #include "fbs/storage/Common.h"
 #include "kv/KVStore.h"
 #include "storage/cache/event/CacheEventJournal.h"
+#include "storage/cache/retire/RetireOperationStore.h"
 #include "storage/service/TargetMap.h"
 #include "storage/store/StorageTarget.h"
 
@@ -169,6 +170,11 @@ class StorageTargets {
     return journal == cacheEventJournals_.end() ? nullptr : journal->second.get();
   }
 
+  RetireOperationStore *retireOperationStore(const PhysicalDiskId &diskId) const {
+    auto store = retireOperationStores_.find(diskId);
+    return store == retireOperationStores_.end() ? nullptr : store->second.get();
+  }
+
   // remove target.
   Result<Void> removeChunkEngineTarget(ChainId chainId, uint32_t diskIndex) {
     auto &engine = *engines_[diskIndex];
@@ -189,6 +195,7 @@ class StorageTargets {
   std::vector<rust::Box<chunk_engine::Engine>> engines_;
   std::map<PhysicalDiskId, std::unique_ptr<CacheSpaceGate>> cacheSpaceGates_;
   std::map<PhysicalDiskId, std::unique_ptr<CacheEventJournal>> cacheEventJournals_;
+  std::map<PhysicalDiskId, std::unique_ptr<RetireOperationStore>> retireOperationStores_;
 
   CoLockManager<> targetLocks_;
   RelativeTime spaceInfoUpdatedTime_;

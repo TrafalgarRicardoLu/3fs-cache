@@ -278,6 +278,7 @@ PHASE2_STORAGE_MESSENGER_METHOD(renewCachePermits, RenewCachePermitsReq, RenewCa
 PHASE2_STORAGE_MESSENGER_METHOD(releaseCachePermits, ReleaseCachePermitsReq, ReleaseCachePermitsRsp);
 PHASE2_STORAGE_MESSENGER_METHOD(queryCachePermits, QueryCachePermitsReq, QueryCachePermitsRsp);
 PHASE2_STORAGE_MESSENGER_METHOD(retireCacheReplicas, RetireCacheReplicasReq, RetireCacheReplicasRsp);
+PHASE2_STORAGE_MESSENGER_METHOD(coordinateCacheRetires, CoordinateCacheRetiresReq, CoordinateCacheRetiresRsp);
 #undef PHASE2_STORAGE_MESSENGER_METHOD
 
 }  // namespace hf3fs::storage::client

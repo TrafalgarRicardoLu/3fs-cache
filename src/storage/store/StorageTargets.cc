@@ -329,6 +329,7 @@ Result<Void> StorageTargets::init(CPUExecutorGroup &executor) {
   diskConfigs_.clear();
   engines_.clear();
   cacheSpaceGates_.clear();
+  retireOperationStores_.clear();
   cacheEventJournals_.clear();
 
   auto diskInfoResult = SysResource::scanDiskInfo();
@@ -389,7 +390,11 @@ Result<Void> StorageTargets::init(CPUExecutorGroup &executor) {
                                                        config_.cache_event_journal_max_records(),
                                                        config_.cache_event_journal_max_bytes());
     RETURN_ON_ERROR(journal->init());
-    cacheEventJournals_.emplace(disk.physical_disk_id, std::move(journal));
+    auto [eventJournal, inserted] = cacheEventJournals_.emplace(disk.physical_disk_id, std::move(journal));
+    if (!inserted) return makeError(StatusCode::kDataCorruption, "duplicate cache event journal disk identity");
+    auto retireStore = std::make_unique<RetireOperationStore>(*eventJournal->second);
+    RETURN_ON_ERROR(retireStore->init());
+    retireOperationStores_.emplace(disk.physical_disk_id, std::move(retireStore));
   }
 
   uint32_t i = 0;

@@ -11,6 +11,7 @@
 #include "common/utils/Result.h"
 #include "common/utils/SemaphoreGuard.h"
 #include "storage/aio/BatchReadJob.h"
+#include "storage/cache/retire/RetireCoordinator.h"
 #include "storage/service/CachePermitCoordinator.h"
 #include "storage/service/Components.h"
 #include "storage/update/UpdateJob.h"
@@ -1844,78 +1845,143 @@ CoTryTask<QueryCachePermitsRsp> StorageOperator::queryCachePermits(const QueryCa
   co_return response;
 }
 
+Result<StorageOperator::RetireReplicaNode> StorageOperator::resolveRetireReplicaNode(
+    TargetId targetId,
+    const PlacementIdentity &placement) const {
+  RETURN_ON_ERROR(placement.valid());
+  if (!std::binary_search(placement.expectedReplicaTargets.begin(), placement.expectedReplicaTargets.end(), targetId)) {
+    return makeError(CacheCode::kPlacementMismatch, "retire target is outside recorded placement");
+  }
+  auto mgmtd = components_.mgmtdClient.load();
+  if (!mgmtd) return makeError(CacheCode::kUnavailable, "routing client is unavailable");
+  auto routing = mgmtd->getRoutingInfo();
+  if (!routing || !routing->raw()) return makeError(CacheCode::kUnavailable, "routing info is unavailable");
+  auto target = routing->getTarget(targetId);
+  if (!target || !target->nodeId)
+    return makeError(CacheCode::kUnavailable, "recorded retire target has no storage node");
+  if (target->storageRole != StorageRole::CACHE_ONLY)
+    return makeError(CacheCode::kRoleMismatch, "recorded retire target is not cache-only");
+  auto node = routing->getNode(*target->nodeId);
+  if (!node || node->type != flat::NodeType::STORAGE)
+    return makeError(CacheCode::kUnavailable, "recorded retire storage node is unavailable");
+  RetireReplicaNode result{targetId, std::nullopt, *target->nodeId == components_.getAppInfo().nodeId};
+  if (!result.local) {
+    auto addresses = node->extractAddresses("StorageSerde");
+    if (addresses.empty()) return makeError(CacheCode::kUnavailable, "retire storage node has no address");
+    result.address = addresses.front();
+  }
+  return result;
+}
+
+CoTryTask<RetireCacheReplicaResult> StorageOperator::retireCacheReplica(const RetireCacheReplicaItem &item) {
+  CO_RETURN_ON_ERROR(item.valid());
+  auto targetResult = components_.targetMap.getByTargetId(item.targetId);
+  CO_RETURN_ON_ERROR(targetResult);
+  auto target = std::move(*targetResult);
+  if (!target->cacheData || target->storageRole != StorageRole::CACHE_ONLY || target->storageTarget == nullptr) {
+    co_return makeError(CacheCode::kRoleMismatch, "replica retire target is not cache-only");
+  }
+
+  folly::coro::Baton baton;
+  auto lock = target->storageTarget->lockChunk(baton, item.key.chunkId, "retireCacheReplica");
+  if (!lock.locked()) co_await lock.lock();
+  auto current = target->storageTarget->queryCacheChunk(item.key);
+  if (current && current->cacheGeneration > item.expectedGeneration) {
+    co_return makeError(CacheCode::kGenerationAdvanced);
+  }
+  if (current && current->cacheGeneration == item.expectedGeneration) {
+    auto descriptor = target->storageTarget->queryCacheChunkDescriptor(item.key);
+    if (descriptor.hasError() && descriptor.error().code() != CacheCode::kNotFound) {
+      co_return makeError(std::move(descriptor.error()));
+    }
+    if (descriptor && descriptor->has_value() &&
+        ((*descriptor)->generation != item.expectedGeneration || (*descriptor)->placement != item.placement)) {
+      co_return makeError(CacheCode::kPlacementMismatch, "replica retire identity differs from cache descriptor");
+    }
+  } else if (current.hasError() && current.error().code() != CacheCode::kNotFound) {
+    co_return makeError(std::move(current.error()));
+  }
+
+  RetireCacheChunkItem retire{item.key, item.expectedGeneration, item.operationId};
+  auto retired = target->storageTarget->retireCacheChunkDurable(retire);
+  CO_RETURN_ON_ERROR(retired);
+  if (!retired->retired || retired->cacheGeneration != item.expectedGeneration) {
+    co_return makeError(CacheCode::kStateConflict, "replica retirement did not produce a durable tombstone");
+  }
+  storageCacheRetireCount.addSample(1);
+  storageCacheTombstoneCount.addSample(1);
+  cache::metrics::recordCount(cache::metrics::Event::STORAGE_TOMBSTONE, 1, {.reason = "durable_retire"});
+  co_return RetireCacheReplicaResult{item.operationId, true};
+}
+
+CoTryTask<RetireCacheReplicaResult> StorageOperator::retireReplicaOnNode(const RetireReplicaNode &node,
+                                                                         const RetireCacheReplicaItem &item,
+                                                                         const flat::UserInfo &userInfo,
+                                                                         uint32_t cacheProtocolVersion) {
+  if (node.local) co_return co_await retireCacheReplica(item);
+  if (!node.address) co_return makeError(CacheCode::kUnavailable, "retire replica address missing");
+  RetireCacheReplicasReq request;
+  request.userInfo = userInfo;
+  request.items.push_back(item);
+  request.cacheProtocolVersion = cacheProtocolVersion;
+  auto response = co_await components_.messenger.retireCacheReplicas(*node.address, request);
+  CO_RETURN_ON_ERROR(response);
+  if (response->results.size() != 1)
+    co_return makeError(CacheCode::kInvalidResponse, "retire replica result count mismatch");
+  co_return std::move(response->results.front());
+}
+
 CoTryTask<RetireCacheReplicasRsp> StorageOperator::retireCacheReplicas(const RetireCacheReplicasReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2()));
   RetireCacheReplicasRsp response;
   response.results.reserve(req.items.size());
-  for (const auto &item : req.items) {
-    auto targetResult = components_.targetMap.getByChainId(item.key.vChainId);
-    if (targetResult.hasError()) {
-      response.results.emplace_back(makeError(std::move(targetResult.error())));
-      continue;
-    }
-    auto target = std::move(*targetResult);
-    if (!target->cacheData || target->storageRole != StorageRole::CACHE_ONLY || target->storageTarget == nullptr) {
-      response.results.emplace_back(makeError(CacheCode::kRoleMismatch, "replica retire target is not cache-only"));
-      continue;
-    }
-    if (!std::binary_search(item.placement.expectedReplicaTargets.begin(),
-                            item.placement.expectedReplicaTargets.end(),
-                            target->targetId)) {
-      response.results.emplace_back(
-          makeError(CacheCode::kPlacementMismatch, "local retire target is outside the recorded placement"));
-      continue;
-    }
-
-    folly::coro::Baton baton;
-    auto lock = target->storageTarget->lockChunk(baton, item.key.chunkId, "retireCacheReplica");
-    if (!lock.locked()) co_await lock.lock();
-    auto current = target->storageTarget->queryCacheChunk(item.key.chunkId);
-    if (current && current->cacheGeneration > item.expectedGeneration) {
-      response.results.emplace_back(makeError(CacheCode::kGenerationAdvanced));
-      continue;
-    }
-    if (current && current->cacheGeneration == item.expectedGeneration) {
-      auto descriptor = target->storageTarget->queryCacheChunkDescriptor(item.key.chunkId);
-      if (descriptor.hasError() && descriptor.error().code() != CacheCode::kNotFound) {
-        response.results.emplace_back(makeError(std::move(descriptor.error())));
-        continue;
-      }
-      if (descriptor && descriptor->has_value() &&
-          ((*descriptor)->generation != item.expectedGeneration || (*descriptor)->placement != item.placement)) {
-        response.results.emplace_back(
-            makeError(CacheCode::kPlacementMismatch, "replica retire identity differs from cache descriptor"));
-        continue;
-      }
-    } else if (current.hasError() && current.error().code() != CacheCode::kNotFound) {
-      response.results.emplace_back(makeError(std::move(current.error())));
-      continue;
-    }
-
-    RetireCacheChunkItem retire{item.key, item.expectedGeneration, item.operationId};
-    auto retired = target->storageTarget->retireCacheChunkDurable(retire);
-    if (retired.hasError()) {
-      response.results.emplace_back(makeError(std::move(retired.error())));
-      continue;
-    }
-    if (!retired->retired || retired->cacheGeneration != item.expectedGeneration) {
-      response.results.emplace_back(
-          makeError(CacheCode::kStateConflict, "replica retirement did not produce a durable tombstone"));
-      continue;
-    }
-    storageCacheRetireCount.addSample(1);
-    storageCacheTombstoneCount.addSample(1);
-    cache::metrics::recordCount(cache::metrics::Event::STORAGE_TOMBSTONE, 1, {.reason = "durable_retire"});
-    response.results.emplace_back(RetireCacheReplicaResult{item.operationId, true});
-  }
+  for (const auto &item : req.items) response.results.emplace_back(co_await retireCacheReplica(item));
   co_return response;
 }
 
 CoTryTask<CoordinateCacheRetiresRsp> StorageOperator::coordinateCacheRetires(const CoordinateCacheRetiresReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(cache::checkPhase2Capability(req.cacheProtocolVersion, config_.enable_cache_phase2()));
-  co_return makeError(StatusCode::kNotImplemented, "coordinateCacheRetires is not implemented");
+  CoordinateCacheRetiresRsp response;
+  response.results.reserve(req.items.size());
+  for (const auto &item : req.items) {
+    auto coordinator = components_.targetMap.getByTargetId(item.placement.coordinatorTargetId);
+    if (coordinator.hasError()) {
+      response.results.emplace_back(makeError(std::move(coordinator.error())));
+      continue;
+    }
+    if (!(*coordinator)->cacheData || (*coordinator)->storageRole != StorageRole::CACHE_ONLY ||
+        (*coordinator)->storageTarget == nullptr) {
+      response.results.emplace_back(makeError(CacheCode::kRoleMismatch, "retire coordinator is not cache-only"));
+      continue;
+    }
+    auto descriptor = (*coordinator)->storageTarget->queryCacheChunkDescriptor(item.key);
+    if (descriptor.hasError()) {
+      response.results.emplace_back(makeError(std::move(descriptor.error())));
+      continue;
+    }
+    if (!descriptor->has_value() || (*descriptor)->logicalKey != item.logicalKey ||
+        (*descriptor)->generation != item.expectedGeneration || (*descriptor)->placement != item.placement) {
+      response.results.emplace_back(
+          makeError(CacheCode::kPlacementMismatch, "retire request differs from coordinator descriptor"));
+      continue;
+    }
+    auto store = components_.storageTargets.retireOperationStore((*coordinator)->physicalDiskId);
+    if (store == nullptr) {
+      response.results.emplace_back(makeError(CacheCode::kUnavailable, "retire operation store is unavailable"));
+      continue;
+    }
+    RetireCoordinator retireCoordinator(
+        *store,
+        [this, &req](TargetId targetId, const RetireCacheReplicaItem &replica) -> CoTryTask<RetireCacheReplicaResult> {
+          auto node = resolveRetireReplicaNode(targetId, replica.placement);
+          CO_RETURN_ON_ERROR(node);
+          co_return co_await retireReplicaOnNode(*node, replica, req.userInfo, req.cacheProtocolVersion);
+        });
+    response.results.emplace_back(co_await retireCoordinator.coordinate(item, (*coordinator)->physicalDiskId));
+  }
+  co_return response;
 }
 
 }  // namespace hf3fs::storage

@@ -405,24 +405,31 @@ Result<ChunkMetadata> StorageTarget::queryChunk(const ChunkId &chunkId) {
 Result<CacheChunkGenerationInfo> StorageTarget::replaceCacheChunk(const ReplaceCacheChunkItem &item,
                                                                   folly::CPUThreadPoolExecutor &executor) {
   if (useChunkEngine()) {
-    return ChunkEngine::replaceCacheChunk(*engine_, item, chainId(), config_.kv_store().sync_when_write());
+    return ChunkEngine::replaceCacheChunk(*engine_,
+                                          item,
+                                          item.key.vChainId.chainId,
+                                          config_.kv_store().sync_when_write());
   }
   return chunkStore_.replaceCacheChunk(item, executor);
 }
 
 Result<CacheChunkGenerationInfo> StorageTarget::retireCacheChunk(const RetireCacheChunkItem &item) {
   if (useChunkEngine()) {
-    return ChunkEngine::retireCacheChunk(*engine_, item, chainId(), config_.kv_store().sync_when_write());
+    return ChunkEngine::retireCacheChunk(*engine_,
+                                         item,
+                                         item.key.vChainId.chainId,
+                                         config_.kv_store().sync_when_write());
   }
   return chunkStore_.retireCacheChunk(item);
 }
 
 Result<CacheChunkGenerationInfo> StorageTarget::retireCacheChunkDurable(const RetireCacheChunkItem &item) {
-  Result<CacheChunkGenerationInfo> retired = useChunkEngine()
-                                                 ? ChunkEngine::retireCacheChunkDurable(*engine_, item, chainId())
-                                                 : chunkStore_.retireCacheChunk(item);
+  if (useChunkEngine()) {
+    return ChunkEngine::retireCacheChunkDurable(*engine_, item, item.key.vChainId.chainId);
+  }
+  Result<CacheChunkGenerationInfo> retired = chunkStore_.retireCacheChunk(item);
   RETURN_ON_ERROR(retired);
-  if (!useChunkEngine()) RETURN_ON_ERROR(chunkStore_.sync());
+  RETURN_ON_ERROR(chunkStore_.sync());
   auto query = queryCacheChunk(item.key.chunkId);
   RETURN_ON_ERROR(query);
   if (query->cacheGeneration > item.expectedGeneration) return makeError(CacheCode::kGenerationAdvanced);
@@ -437,9 +444,19 @@ Result<CacheChunkGenerationInfo> StorageTarget::queryCacheChunk(const ChunkId &c
   return chunkStore_.queryCacheChunk(chunkId);
 }
 
+Result<CacheChunkGenerationInfo> StorageTarget::queryCacheChunk(const CacheChunkKey &key) {
+  if (useChunkEngine()) return ChunkEngine::queryCacheChunk(*engine_, key.chunkId, key.vChainId.chainId);
+  return chunkStore_.queryCacheChunk(key.chunkId);
+}
+
 Result<std::optional<CacheChunkDescriptor>> StorageTarget::queryCacheChunkDescriptor(const ChunkId &chunkId) {
   if (useChunkEngine()) return ChunkEngine::queryCacheChunkDescriptor(*engine_, chunkId, chainId());
   return chunkStore_.queryCacheChunkDescriptor(chunkId);
+}
+
+Result<std::optional<CacheChunkDescriptor>> StorageTarget::queryCacheChunkDescriptor(const CacheChunkKey &key) {
+  if (useChunkEngine()) return ChunkEngine::queryCacheChunkDescriptor(*engine_, key.chunkId, key.vChainId.chainId);
+  return chunkStore_.queryCacheChunkDescriptor(key.chunkId);
 }
 
 CoTryTask<bool> StorageTarget::recordCacheAccess(const ChunkId &chunkId,

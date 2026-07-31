@@ -108,6 +108,10 @@ class StorageMessenger {
                                                         const RetireCacheReplicasReq &request,
                                                         const net::UserRequestOptions *options = nullptr,
                                                         serde::Timestamp *timestamp = nullptr);
+  CoTryTask<CoordinateCacheRetiresRsp> coordinateCacheRetires(const hf3fs::net::Address &address,
+                                                              const CoordinateCacheRetiresReq &request,
+                                                              const net::UserRequestOptions *options = nullptr,
+                                                              serde::Timestamp *timestamp = nullptr);
   CoTryTask<QueryCacheSpaceRsp> queryCacheSpace(const hf3fs::net::Address &address,
                                                 const QueryCacheSpaceReq &request,
                                                 const net::UserRequestOptions *options = nullptr,

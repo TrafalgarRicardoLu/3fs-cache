@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include "common/serde/Serde.h"
 #include "common/utils/Result.h"
 #include "fbs/cache/Common.h"
@@ -232,6 +234,7 @@ struct QueryCachePermitsRsp {
 
 struct RetireCacheReplicaItem {
   SERDE_STRUCT_FIELD(key, CacheChunkKey{});
+  SERDE_STRUCT_FIELD(targetId, TargetId{});
   SERDE_STRUCT_FIELD(expectedGeneration, cache::CacheGeneration{});
   SERDE_STRUCT_FIELD(placement, PlacementIdentity{});
   SERDE_STRUCT_FIELD(evictionEpoch, cache::EvictionEpoch{});
@@ -244,6 +247,8 @@ struct RetireCacheReplicaItem {
     if (key.vChainId != placement.versionedChain) {
       return makeError(CacheCode::kPlacementMismatch, "replica retire chain differs from placement");
     }
+    if (!std::binary_search(placement.expectedReplicaTargets.begin(), placement.expectedReplicaTargets.end(), targetId))
+      return makeError(CacheCode::kPlacementMismatch, "replica retire target is outside placement");
     if (expectedGeneration == cache::CacheGeneration{} || evictionEpoch == cache::EvictionEpoch{} ||
         operationId == Uuid::zero())
       return makeError(StatusCode::kInvalidArg, "invalid replica retire identity");
@@ -260,6 +265,7 @@ struct RetireCacheReplicasRsp {
 };
 
 struct CoordinateCacheRetireItem {
+  SERDE_STRUCT_FIELD(logicalKey, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(key, CacheChunkKey{});
   SERDE_STRUCT_FIELD(expectedGeneration, cache::CacheGeneration{});
   SERDE_STRUCT_FIELD(placement, PlacementIdentity{});
@@ -268,8 +274,12 @@ struct CoordinateCacheRetireItem {
 
  public:
   Result<Void> valid() const {
+    RETURN_ON_ERROR(logicalKey.valid());
     RETURN_ON_ERROR(key.valid());
     RETURN_ON_ERROR(placement.valid());
+    if (key.vChainId != placement.versionedChain) {
+      return makeError(CacheCode::kPlacementMismatch, "coordinated retire chain differs from placement");
+    }
     if (expectedGeneration == cache::CacheGeneration{} || evictionEpoch == cache::EvictionEpoch{} ||
         operationId == Uuid::zero())
       return makeError(StatusCode::kInvalidArg, "invalid coordinated retire identity");

@@ -9,6 +9,8 @@
 
 namespace hf3fs::storage {
 
+class RetireOperationStore;
+
 struct CacheEventIntent {
   SERDE_STRUCT_FIELD(type, cache::CacheStorageEventType::DELETED);
   SERDE_STRUCT_FIELD(storageOperationId, Uuid::zero());
@@ -77,6 +79,8 @@ class CacheEventJournal {
   CacheEventJournalStats stats() const;
 
  private:
+  friend class RetireOperationStore;
+
   struct Header {
     SERDE_STRUCT_FIELD(sourceId, PhysicalDiskId{});
     SERDE_STRUCT_FIELD(nextSequence, uint64_t{1});
@@ -100,6 +104,8 @@ class CacheEventJournal {
   std::map<Uuid, CacheEventJournalRecord> operations_;
   std::map<uint64_t, CacheEventEnvelope> deliveries_;
   uint64_t accountedBytes_{0};
+  size_t externalRecords_{0};
+  uint64_t externalBytes_{0};
   bool initialized_{false};
   bool journalFull_{false};
 };

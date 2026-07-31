@@ -116,7 +116,9 @@ class StorageTarget : public enable_shared_from_this<StorageTarget> {
   Result<CacheChunkGenerationInfo> retireCacheChunk(const RetireCacheChunkItem &item);
   Result<CacheChunkGenerationInfo> retireCacheChunkDurable(const RetireCacheChunkItem &item);
   Result<CacheChunkGenerationInfo> queryCacheChunk(const ChunkId &chunkId);
+  Result<CacheChunkGenerationInfo> queryCacheChunk(const CacheChunkKey &key);
   Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(const ChunkId &chunkId);
+  Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(const CacheChunkKey &key);
   CoTryTask<bool> recordCacheAccess(const ChunkId &chunkId,
                                     cache::CacheGeneration generation,
                                     uint64_t observedAtNs,

@@ -2564,10 +2564,6 @@ bool sameCacheGenerationInfo(const CacheChunkGenerationInfo &lhs, const CacheChu
          lhs.checksum == rhs.checksum;
 }
 
-bool sameCacheGenerationInfo(const RetireCacheReplicaResult &lhs, const RetireCacheReplicaResult &rhs) {
-  return lhs.operationId == rhs.operationId && lhs.durableRetired == rhs.durableRetired;
-}
-
 }  // namespace
 
 template <typename Req, typename Rsp, auto MessengerMethod>
@@ -2667,16 +2663,83 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageClientImpl::queryCacheChunkGener
 CoTryTask<RetireCacheReplicasRsp> StorageClientImpl::retireCacheReplicas(const RetireCacheReplicasReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   if (req.items.empty()) co_return RetireCacheReplicasRsp{};
-  auto vChainId = req.items.front().key.vChainId;
-  if (std::any_of(req.items.begin(), req.items.end(), [&](const auto &item) {
-        return item.key.vChainId != vChainId;
-      })) {
-    co_return makeError(StatusCode::kInvalidArg, "replica retire batch spans multiple chains");
+  ClientRequestContext requestCtx(MethodType::retireCacheReplicas,
+                                  req.userInfo,
+                                  DebugOptions(),
+                                  config_,
+                                  1,
+                                  0,
+                                  config_.retry().max_wait_time());
+  auto routingInfo = getCurrentRoutingInfo();
+  if (!routingInfo || !routingInfo->raw())
+    co_return makeError(StorageClientCode::kRoutingError, "replica retire routing info is unavailable");
+  struct NodeRetires {
+    RetireCacheReplicasReq request;
+    std::vector<size_t> resultIndexes;
+  };
+  std::map<NodeId, NodeRetires> nodes;
+  for (size_t index = 0; index < req.items.size(); ++index) {
+    auto target = getTargetInfo(routingInfo, req.items[index].targetId);
+    CO_RETURN_ON_ERROR(target);
+    if (!target->nodeId)
+      co_return makeError(StorageClientCode::kRoutingError, "replica retire target has no storage node");
+    auto &node = nodes[*target->nodeId];
+    node.request.userInfo = req.userInfo;
+    node.request.cacheProtocolVersion = req.cacheProtocolVersion;
+    node.request.items.push_back(req.items[index]);
+    node.resultIndexes.push_back(index);
   }
-  co_return co_await cacheRequestAllTargets<RetireCacheReplicasReq,
-                                            RetireCacheReplicasRsp,
-                                            &StorageMessenger::retireCacheReplicas>(MethodType::retireCacheReplicas,
-                                                                                    vChainId,
+  RetireCacheReplicasRsp merged;
+  merged.results.resize(req.items.size(), makeError(CacheCode::kInvalidResponse, "missing replica retire response"));
+  for (auto &[nodeId, node] : nodes) {
+    auto nodeInfo = getNodeInfo(routingInfo, nodeId);
+    CO_RETURN_ON_ERROR(nodeInfo);
+    auto response = co_await callMessengerMethod<RetireCacheReplicasReq,
+                                                 RetireCacheReplicasRsp,
+                                                 &StorageMessenger::retireCacheReplicas>(messenger_,
+                                                                                         requestCtx,
+                                                                                         *nodeInfo,
+                                                                                         node.request);
+    CO_RETURN_ON_ERROR(response);
+    if (response->results.size() != node.resultIndexes.size())
+      co_return makeError(CacheCode::kInvalidResponse, "replica retire result count mismatch");
+    for (size_t index = 0; index < node.resultIndexes.size(); ++index) {
+      merged.results[node.resultIndexes[index]] = std::move(response->results[index]);
+    }
+  }
+  co_return merged;
+}
+
+CoTryTask<CoordinateCacheRetiresRsp> StorageClientImpl::coordinateCacheRetires(const CoordinateCacheRetiresReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  if (req.items.empty()) co_return CoordinateCacheRetiresRsp{};
+  auto coordinatorTargetId = req.items.front().placement.coordinatorTargetId;
+  if (std::any_of(req.items.begin(), req.items.end(), [&](const auto &item) {
+        return item.placement.coordinatorTargetId != coordinatorTargetId;
+      })) {
+    co_return makeError(StatusCode::kInvalidArg, "coordinated retire batch spans coordinator targets");
+  }
+  ClientRequestContext requestCtx(MethodType::coordinateCacheRetires,
+                                  req.userInfo,
+                                  DebugOptions(),
+                                  config_,
+                                  1,
+                                  0,
+                                  config_.retry().max_wait_time());
+  auto routingInfo = getCurrentRoutingInfo();
+  if (!routingInfo || !routingInfo->raw())
+    co_return makeError(StorageClientCode::kRoutingError, "retire coordinator routing info is unavailable");
+  auto targetInfo = getTargetInfo(routingInfo, coordinatorTargetId);
+  CO_RETURN_ON_ERROR(targetInfo);
+  if (!targetInfo->nodeId)
+    co_return makeError(StorageClientCode::kRoutingError, "retire coordinator target has no node");
+  auto nodeInfo = getNodeInfo(routingInfo, *targetInfo->nodeId);
+  CO_RETURN_ON_ERROR(nodeInfo);
+  co_return co_await callMessengerMethod<CoordinateCacheRetiresReq,
+                                         CoordinateCacheRetiresRsp,
+                                         &StorageMessenger::coordinateCacheRetires>(messenger_,
+                                                                                    requestCtx,
+                                                                                    *nodeInfo,
                                                                                     req);
 }
 

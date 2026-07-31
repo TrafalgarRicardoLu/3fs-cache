@@ -366,6 +366,7 @@ class StorageClient : public folly::MoveOnly {
     queryCachePermits,
     queryCacheSpace,
     retireCacheReplicas,
+    coordinateCacheRetires,
   };
 
   class RetryConfig : public hf3fs::ConfigBase<RetryConfig> {

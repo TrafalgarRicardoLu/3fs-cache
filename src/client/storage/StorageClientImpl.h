@@ -83,6 +83,7 @@ class StorageClientImpl : public StorageClient {
   CoTryTask<ReleaseCachePermitsRsp> releaseCachePermits(const ReleaseCachePermitsReq &req) override;
   CoTryTask<QueryCachePermitsRsp> queryCachePermits(const QueryCachePermitsReq &req) override;
   CoTryTask<RetireCacheReplicasRsp> retireCacheReplicas(const RetireCacheReplicasReq &req) override;
+  CoTryTask<CoordinateCacheRetiresRsp> coordinateCacheRetires(const CoordinateCacheRetiresReq &req) override;
 
  private:
   template <typename Req, typename Rsp, auto MessengerMethod>
