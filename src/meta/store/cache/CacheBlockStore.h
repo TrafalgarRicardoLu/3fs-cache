@@ -36,7 +36,12 @@ class CacheBlockStore {
   static CoTryTask<CacheBlockRecord> enqueue(kv::IReadWriteTransaction &txn,
                                              const cache::CacheBlockKey &key,
                                              flat::ChainId chainId,
-                                             uint64_t blockLength);
+                                             uint64_t blockLength,
+                                             std::optional<storage::PermitIdentity> permit = std::nullopt,
+                                             std::optional<storage::PermitIdentity> expectedPermit = std::nullopt,
+                                             cache::CacheBlockState expectedState = cache::CacheBlockState::NONE,
+                                             Uuid expectedLoaderId = Uuid::zero(),
+                                             uint64_t expectedLoadEpoch = 0);
   static CoTryTask<cache::CacheGeneration> allocateGeneration(kv::IReadWriteTransaction &txn,
                                                               const cache::CacheBlockKey &key);
   static CoTryTask<CacheBlockRecord> commitCharge(kv::IReadWriteTransaction &txn,

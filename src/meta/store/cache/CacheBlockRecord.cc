@@ -48,6 +48,40 @@ Result<Void> CacheBlockRecord::valid() const {
     return makeError(StatusCode::kInvalidArg, "ready identity is not valid for this state");
   }
   if (ready.has_value()) RETURN_ON_ERROR(ready->valid());
+  if (permit.has_value()) RETURN_ON_ERROR(permit->valid());
+  if (placement.has_value()) RETURN_ON_ERROR(placement->valid());
+  if (committedPermit.has_value()) RETURN_ON_ERROR(committedPermit->valid());
+  if (permit.has_value() && placement.has_value()) {
+    return makeError(StatusCode::kInvalidArg, "cache record cannot retain permit and placement together");
+  }
+  if (permit.has_value() && committedPermit.has_value()) {
+    return makeError(StatusCode::kInvalidArg, "cache record cannot retain active and committed permits together");
+  }
+  if (committedPermit.has_value() && (!placement.has_value() || committedPermit->placement != *placement)) {
+    return makeError(StatusCode::kInvalidArg, "committed permit requires its immutable placement");
+  }
+  const bool hasPhase2Identity = permit.has_value() || placement.has_value() || committedPermit.has_value();
+  if (hasPhase2Identity) {
+    switch (state) {
+      case cache::CacheBlockState::QUEUED:
+      case cache::CacheBlockState::LOADING:
+        if (!permit.has_value() || committedPermit.has_value())
+          return makeError(StatusCode::kInvalidArg, "admitted record requires active permit");
+        break;
+      case cache::CacheBlockState::READY:
+      case cache::CacheBlockState::EVICTING:
+        if (!placement.has_value() || !committedPermit.has_value())
+          return makeError(StatusCode::kInvalidArg, "materialized record requires committed placement");
+        break;
+      case cache::CacheBlockState::CLEANING:
+        if (!placement.has_value()) return makeError(StatusCode::kInvalidArg, "cleanup record requires placement");
+        break;
+      case cache::CacheBlockState::FAILED:
+      case cache::CacheBlockState::INVALID:
+      case cache::CacheBlockState::NONE:
+        return makeError(StatusCode::kInvalidArg, "terminal record cannot retain phase two identity");
+    }
+  }
   return Void{};
 }
 

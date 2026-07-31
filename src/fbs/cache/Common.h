@@ -53,6 +53,14 @@ enum class CachePermitState : uint8_t {
   PINNED = 2,
 };
 
+enum class CacheEnqueueOutcome : uint8_t {
+  INVALID = 0,
+  CREATED = 1,
+  QUEUED = 2,
+  LOADING = 3,
+  READY = 4,
+};
+
 Result<EvictionEpoch> nextEvictionEpoch(EvictionEpoch current);
 
 enum class VersionSelectorType : uint8_t {

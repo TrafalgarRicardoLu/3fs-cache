@@ -8,6 +8,7 @@
 #include "common/utils/Uuid.h"
 #include "fbs/cache/Common.h"
 #include "fbs/mgmtd/MgmtdTypes.h"
+#include "fbs/storage/Common.h"
 
 namespace hf3fs::meta::server {
 
@@ -26,6 +27,9 @@ struct CacheBlockRecord {
   SERDE_STRUCT_FIELD(cleanupEpoch, cache::CleanupEpoch{});
   SERDE_STRUCT_FIELD(terminalState, cache::CleanupTerminalState::NONE);
   SERDE_STRUCT_FIELD(deleteGeneration, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(permit, std::optional<storage::PermitIdentity>{});
+  SERDE_STRUCT_FIELD(placement, std::optional<storage::PlacementIdentity>{});
+  SERDE_STRUCT_FIELD(committedPermit, std::optional<storage::PermitIdentity>{});
 
  public:
   Result<Void> valid() const;

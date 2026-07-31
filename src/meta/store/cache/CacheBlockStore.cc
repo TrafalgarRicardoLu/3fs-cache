@@ -152,14 +152,45 @@ CoTryTask<Void> CacheBlockStore::remove(kv::IReadWriteTransaction &txn, const ca
 CoTryTask<CacheBlockRecord> CacheBlockStore::enqueue(kv::IReadWriteTransaction &txn,
                                                      const cache::CacheBlockKey &key,
                                                      flat::ChainId chainId,
-                                                     uint64_t blockLength) {
+                                                     uint64_t blockLength,
+                                                     std::optional<storage::PermitIdentity> permit,
+                                                     std::optional<storage::PermitIdentity> expectedPermit,
+                                                     cache::CacheBlockState expectedState,
+                                                     Uuid expectedLoaderId,
+                                                     uint64_t expectedLoadEpoch) {
   if (blockLength == 0) co_return makeError(StatusCode::kInvalidArg, "block length is zero");
+  if (permit.has_value()) CO_RETURN_ON_ERROR(permit->valid());
+  if (expectedPermit.has_value()) CO_RETURN_ON_ERROR(expectedPermit->valid());
   auto existing = co_await load(txn, key);
   CO_RETURN_ON_ERROR(existing);
   if (existing->has_value() && (*existing)->state != cache::CacheBlockState::FAILED) {
     if ((*existing)->chainId != chainId || (*existing)->blockLength != blockLength) {
       co_return makeError(CacheCode::kStateConflict, "cache block layout changed");
     }
+    if (!permit.has_value() || (*existing)->state == cache::CacheBlockState::READY) co_return **existing;
+    if (!(*existing)->permit.has_value()) {
+      co_return makeError(CacheCode::kStateConflict, "existing cache admission has no permit identity");
+    }
+    const auto &current = *(*existing)->permit;
+    if (current.placement.admissionAttemptId == permit->placement.admissionAttemptId && current == *permit) {
+      co_return **existing;
+    }
+    if (!expectedPermit.has_value()) co_return **existing;
+    if (current != *expectedPermit || (*existing)->state != expectedState) {
+      co_return makeError(CacheCode::kStateConflict, "cache permit replacement fence changed");
+    }
+    if (current.placement != permit->placement || permit->permitGeneration <= current.permitGeneration) {
+      co_return makeError(CacheCode::kPermitConflict, "cache permit replacement is not a newer generation");
+    }
+    if ((*existing)->state == cache::CacheBlockState::LOADING) {
+      if ((*existing)->loaderId != expectedLoaderId || (*existing)->loadEpoch != expectedLoadEpoch) {
+        co_return makeError(CacheCode::kStateConflict, "cache loader fence changed");
+      }
+    } else if (expectedLoaderId != Uuid::zero() || expectedLoadEpoch != 0) {
+      co_return makeError(CacheCode::kStateConflict, "queued permit replacement cannot carry loader fence");
+    }
+    (*existing)->permit = std::move(permit);
+    CO_RETURN_ON_ERROR(co_await store(txn, **existing));
     co_return **existing;
   }
 
@@ -171,6 +202,7 @@ CoTryTask<CacheBlockRecord> CacheBlockStore::enqueue(kv::IReadWriteTransaction &
   record.blockLength = blockLength;
   record.chargeKind = cache::ChargeKind::RESERVED;
   record.chargedBytes = blockLength;
+  record.permit = std::move(permit);
   CO_RETURN_ON_ERROR(co_await store(txn, record));
   co_return record;
 }
@@ -246,6 +278,9 @@ CoTryTask<Void> CacheBlockStore::finishClean(kv::IReadWriteTransaction &txn,
   record.chargeKind = cache::ChargeKind::NONE;
   record.chargedBytes = 0;
   record.ready.reset();
+  record.permit.reset();
+  record.placement.reset();
+  record.committedPermit.reset();
   record.loaderId = Uuid::zero();
   record.terminalState = terminalState;
 

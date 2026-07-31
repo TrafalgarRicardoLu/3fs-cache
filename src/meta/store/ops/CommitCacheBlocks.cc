@@ -61,7 +61,13 @@ class CommitCacheBlocksOp : public Operation<CommitCacheBlocksRsp> {
                                item.blockLength};
     CO_RETURN_ON_ERROR(ready.valid());
     if (record.state == cache::CacheBlockState::READY && record.ready == ready) {
-      co_return CacheBlockMutationResult{record.key, record.state};
+      if (record.placement != item.placement || record.committedPermit != item.permit) {
+        co_return makeError(CacheCode::kPlacementMismatch, "repeated commit identity changed");
+      }
+      co_return CacheBlockMutationResult{record.key,
+                                         record.state,
+                                         cache::CacheEnqueueOutcome::INVALID,
+                                         record.placement};
     }
     if (record.state != cache::CacheBlockState::LOADING || record.loaderId != item.loaderId ||
         record.loadEpoch != item.loadEpoch || record.cacheGeneration != item.cacheGeneration) {
@@ -71,14 +77,28 @@ class CommitCacheBlocksOp : public Operation<CommitCacheBlocksRsp> {
           {.inode = item.key.inode, .block = item.key.block.toUnderType(), .reason = "stale_commit"});
       co_return makeError(CacheCode::kStateConflict, "stale cache block commit");
     }
+    if (record.permit.has_value()) {
+      if (!item.permit.has_value() || !item.placement.has_value() || record.permit != item.permit ||
+          record.permit->placement != *item.placement) {
+        co_return makeError(CacheCode::kPlacementMismatch, "commit permit or placement changed");
+      }
+    } else if (item.permit.has_value() || item.placement.has_value()) {
+      co_return makeError(CacheCode::kPlacementMismatch, "legacy admission cannot accept phase two placement");
+    }
 
     record.state = cache::CacheBlockState::READY;
     record.ready = ready;
+    record.placement = item.placement;
+    record.committedPermit = item.permit;
+    record.permit.reset();
     record.loaderId = Uuid::zero();
     record.leaseExpiresAt = UtcTime{};
     auto committed = co_await CacheBlockStore::commitCharge(txn, record);
     CO_RETURN_ON_ERROR(committed);
-    co_return CacheBlockMutationResult{committed->key, committed->state};
+    co_return CacheBlockMutationResult{committed->key,
+                                       committed->state,
+                                       cache::CacheEnqueueOutcome::INVALID,
+                                       committed->placement};
   }
 
   const CommitCacheBlocksReq &req_;

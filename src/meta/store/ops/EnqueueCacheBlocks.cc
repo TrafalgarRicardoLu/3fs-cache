@@ -33,12 +33,50 @@ class EnqueueCacheBlocksOp : public Operation<EnqueueCacheBlocksRsp> {
         response.results.emplace_back(makeError(layout.error()));
         continue;
       }
-      auto record = co_await CacheBlockStore::enqueue(txn, item.key, layout->chainId, layout->blockLength);
+      if (item.permit.has_value()) {
+        const auto &placement = item.permit->placement;
+        if (placement.versionedChain != storage::VersionedChainId{layout->chainId, layout->chainVersion} ||
+            placement.expectedReplicaTargets != layout->replicaTargets) {
+          response.results.emplace_back(makeError(CacheCode::kPlacementMismatch, "permit placement changed"));
+          continue;
+        }
+      }
+      auto before = co_await CacheBlockStore::load(txn, item.key);
+      if (before.hasError()) {
+        response.results.emplace_back(makeError(before.error()));
+        continue;
+      }
+      auto record = co_await CacheBlockStore::enqueue(txn,
+                                                      item.key,
+                                                      layout->chainId,
+                                                      layout->blockLength,
+                                                      item.permit,
+                                                      item.expectedPermit,
+                                                      item.expectedState,
+                                                      item.expectedLoaderId,
+                                                      item.expectedLoadEpoch);
       if (record.hasError()) {
         response.results.emplace_back(makeError(record.error()));
         continue;
       }
-      response.results.emplace_back(CacheBlockMutationResult{record->key, record->state});
+      auto outcome = cache::CacheEnqueueOutcome::CREATED;
+      if (before->has_value() && (*before)->state != cache::CacheBlockState::FAILED) {
+        switch ((*before)->state) {
+          case cache::CacheBlockState::QUEUED:
+            outcome = cache::CacheEnqueueOutcome::QUEUED;
+            break;
+          case cache::CacheBlockState::LOADING:
+            outcome = cache::CacheEnqueueOutcome::LOADING;
+            break;
+          case cache::CacheBlockState::READY:
+            outcome = cache::CacheEnqueueOutcome::READY;
+            break;
+          default:
+            outcome = cache::CacheEnqueueOutcome::INVALID;
+            break;
+        }
+      }
+      response.results.emplace_back(CacheBlockMutationResult{record->key, record->state, outcome, record->placement});
     }
     co_return response;
   }

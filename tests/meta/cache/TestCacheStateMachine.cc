@@ -107,7 +107,37 @@ CommitCacheBlocksReq commitReq(const Inode &inode, uint32_t index, const CacheBl
   req.service = service();
   auto item = block(inode, index);
   req.items.push_back({item.key, lease.loaderId, lease.loadEpoch, lease.cacheGeneration, item.blockLength, 1, 1234});
+  if (lease.permit.has_value()) {
+    req.items.back().permit = lease.permit;
+    req.items.back().placement = lease.permit->placement;
+  }
   return req;
+}
+
+Result<storage::PermitIdentity> permitFor(MockCluster &cluster,
+                                          const Inode &inode,
+                                          uint32_t index,
+                                          Uuid managerEpoch,
+                                          Uuid attempt,
+                                          uint64_t generation) {
+  auto routing = cluster.mgmtdClient()->getRoutingInfo();
+  if (!routing || !routing->raw()) return makeError(CacheCode::kUnavailable);
+  auto offset = uint64_t{index} * inode.fileLayout().chunkSize;
+  auto chainId = inode.getChainId(inode, offset, *routing->raw());
+  RETURN_ON_ERROR(chainId);
+  auto chain = routing->raw()->getChain(*chainId);
+  if (!chain) return makeError(CacheCode::kUnavailable);
+  std::vector<flat::TargetId> targets;
+  storage::FootprintByTarget footprints;
+  for (const auto &target : chain->targets) {
+    targets.push_back(target.targetId);
+    footprints.emplace(target.targetId, inode.fileLayout().chunkSize);
+  }
+  if (targets.empty()) return makeError(CacheCode::kUnavailable);
+  auto placement =
+      storage::PlacementIdentity::create({*chainId, chain->chainVersion}, targets, targets.front(), attempt);
+  RETURN_ON_ERROR(placement);
+  return storage::PermitIdentity{managerEpoch, *placement, generation, std::move(footprints)};
 }
 
 FailCacheBlocksReq failReq(const Inode &inode, uint32_t index, const CacheBlockLease &lease) {
@@ -254,6 +284,120 @@ TEST_F(TestCacheStateMachine, FailMovesToCleaningWithoutReleasingCharge) {
     auto capacity = co_await CacheCapacityStore::snapshotLoad(*read);
     CO_ASSERT_OK(capacity);
     CO_ASSERT_EQ(capacity->reservedBytes, uint64_t{4096});
+  }());
+}
+
+TEST_F(TestCacheStateMachine, PersistsPermitAndPlacementAcrossAdmissionLifecycle) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    auto inode = co_await prepare(cluster, "/phase2-identities");
+    CO_ASSERT_OK(inode);
+    auto initial = permitFor(cluster, *inode, 0, Uuid::from(7, 1), Uuid::from(8, 1), 1);
+    CO_ASSERT_OK(initial);
+    auto &meta = cluster.meta().getOperator();
+
+    auto enqueue = enqueueReq(*inode, {0});
+    enqueue.items[0].permit = *initial;
+    auto created = co_await meta.enqueueCacheBlocks(enqueue);
+    CO_ASSERT_OK(created);
+    CO_ASSERT_OK(created->results[0]);
+    CO_ASSERT_EQ(created->results[0]->enqueueOutcome, cache::CacheEnqueueOutcome::CREATED);
+
+    auto repeated = co_await meta.enqueueCacheBlocks(enqueue);
+    CO_ASSERT_OK(repeated);
+    CO_ASSERT_OK(repeated->results[0]);
+    CO_ASSERT_EQ(repeated->results[0]->enqueueOutcome, cache::CacheEnqueueOutcome::QUEUED);
+
+    auto acquired = co_await meta.acquireCacheBlocks(acquireReq(*inode, 0));
+    CO_ASSERT_OK(acquired);
+    CO_ASSERT_OK(acquired->results[0]);
+    auto lease = acquired->results[0]->lease;
+    CO_ASSERT_EQ(lease.permit, std::optional<storage::PermitIdentity>{*initial});
+
+    auto observingPermit = permitFor(cluster, *inode, 0, Uuid::from(7, 9), Uuid::from(8, 9), 1);
+    CO_ASSERT_OK(observingPermit);
+    auto observingEnqueue = enqueueReq(*inode, {0});
+    observingEnqueue.items[0].permit = *observingPermit;
+    auto observed = co_await meta.enqueueCacheBlocks(observingEnqueue);
+    CO_ASSERT_OK(observed);
+    CO_ASSERT_OK(observed->results[0]);
+    CO_ASSERT_EQ(observed->results[0]->enqueueOutcome, cache::CacheEnqueueOutcome::LOADING);
+
+    auto observedRead = cluster.kvEngine()->createReadonlyTransaction();
+    auto observedRecord = co_await CacheBlockStore::snapshotLoad(*observedRead, block(*inode, 0).key);
+    CO_ASSERT_OK(observedRecord);
+    CO_ASSERT_TRUE(observedRecord->has_value());
+    CO_ASSERT_EQ((*observedRecord)->permit, std::optional<storage::PermitIdentity>{*initial});
+
+    auto replacement = *initial;
+    replacement.permitGeneration = 2;
+    auto competingReplacement = replacement;
+    competingReplacement.permitGeneration = 3;
+    auto replacementReq = [&](const storage::PermitIdentity &candidate) {
+      auto request = enqueueReq(*inode, {0});
+      request.items[0].permit = candidate;
+      request.items[0].expectedPermit = *initial;
+      request.items[0].expectedState = cache::CacheBlockState::LOADING;
+      request.items[0].expectedLoaderId = lease.loaderId;
+      request.items[0].expectedLoadEpoch = lease.loadEpoch;
+      return request;
+    };
+    auto [firstReplace, secondReplace] =
+        co_await folly::coro::collectAll(meta.enqueueCacheBlocks(replacementReq(replacement)),
+                                         meta.enqueueCacheBlocks(replacementReq(competingReplacement)));
+    CO_ASSERT_OK(firstReplace);
+    CO_ASSERT_OK(secondReplace);
+    CO_ASSERT_NE(firstReplace->results[0].hasValue(), secondReplace->results[0].hasValue());
+    const auto &replaceLoser =
+        firstReplace->results[0].hasError() ? firstReplace->results[0] : secondReplace->results[0];
+    CO_ASSERT_ERROR(replaceLoser, CacheCode::kStateConflict);
+
+    auto afterReplaceRead = cluster.kvEngine()->createReadonlyTransaction();
+    auto afterReplace = co_await CacheBlockStore::snapshotLoad(*afterReplaceRead, block(*inode, 0).key);
+    CO_ASSERT_OK(afterReplace);
+    CO_ASSERT_TRUE(afterReplace->has_value());
+    CO_ASSERT_TRUE((*afterReplace)->permit.has_value());
+    replacement = *(*afterReplace)->permit;
+
+    auto wrongPermit = permitFor(cluster, *inode, 0, Uuid::from(7, 2), Uuid::from(8, 2), 2);
+    CO_ASSERT_OK(wrongPermit);
+    auto wrongLease = lease;
+    wrongLease.permit = *wrongPermit;
+    auto rejected = co_await meta.commitCacheBlocks(commitReq(*inode, 0, wrongLease));
+    CO_ASSERT_OK(rejected);
+    CO_ASSERT_ERROR(rejected->results[0], CacheCode::kPlacementMismatch);
+
+    lease.permit = replacement;
+    auto committed = co_await meta.commitCacheBlocks(commitReq(*inode, 0, lease));
+    CO_ASSERT_OK(committed);
+    CO_ASSERT_OK(committed->results[0]);
+    CO_ASSERT_EQ(committed->results[0]->placement, std::optional<storage::PlacementIdentity>{replacement.placement});
+
+    auto readyAttempt = permitFor(cluster, *inode, 0, Uuid::from(7, 3), Uuid::from(8, 3), 1);
+    CO_ASSERT_OK(readyAttempt);
+    auto readyEnqueue = enqueueReq(*inode, {0});
+    readyEnqueue.items[0].permit = *readyAttempt;
+    auto ready = co_await meta.enqueueCacheBlocks(readyEnqueue);
+    CO_ASSERT_OK(ready);
+    CO_ASSERT_OK(ready->results[0]);
+    CO_ASSERT_EQ(ready->results[0]->enqueueOutcome, cache::CacheEnqueueOutcome::READY);
+    CO_ASSERT_EQ(ready->results[0]->placement, std::optional<storage::PlacementIdentity>{replacement.placement});
+
+    BeginCleanCacheBlocksReq clean;
+    clean.service = service();
+    clean.items.push_back({block(*inode, 0).key});
+    auto cleaning = co_await meta.beginCleanCacheBlocks(clean);
+    CO_ASSERT_OK(cleaning);
+    CO_ASSERT_OK(cleaning->results[0]);
+    CO_ASSERT_EQ(cleaning->results[0]->placement, std::optional<storage::PlacementIdentity>{replacement.placement});
+
+    auto read = cluster.kvEngine()->createReadonlyTransaction();
+    auto record = co_await CacheBlockStore::snapshotLoad(*read, block(*inode, 0).key);
+    CO_ASSERT_OK(record);
+    CO_ASSERT_TRUE(record->has_value());
+    CO_ASSERT_EQ((*record)->state, cache::CacheBlockState::CLEANING);
+    CO_ASSERT_FALSE((*record)->permit.has_value());
+    CO_ASSERT_EQ((*record)->placement, std::optional<storage::PlacementIdentity>{replacement.placement});
   }());
 }
 

@@ -50,7 +50,7 @@ class BeginCleanCacheBlocksOp : public Operation<BeginCleanCacheBlocksRsp> {
         record.deleteGeneration = *item.observedGeneration;
         CO_RETURN_ON_ERROR(co_await CacheBlockStore::store(txn, record));
       }
-      co_return BeginCleanCacheBlockResult{record.key, record.cleanupEpoch, record.deleteGeneration};
+      co_return BeginCleanCacheBlockResult{record.key, record.cleanupEpoch, record.deleteGeneration, record.placement};
     }
     if (record.state != cache::CacheBlockState::QUEUED && record.state != cache::CacheBlockState::LOADING &&
         record.state != cache::CacheBlockState::READY && record.state != cache::CacheBlockState::FAILED) {
@@ -71,8 +71,12 @@ class BeginCleanCacheBlocksOp : public Operation<BeginCleanCacheBlocksRsp> {
     }
     record.loaderId = Uuid::zero();
     record.leaseExpiresAt = UtcTime{};
+    if (record.permit.has_value()) {
+      record.placement = record.permit->placement;
+      record.permit.reset();
+    }
     CO_RETURN_ON_ERROR(co_await CacheBlockStore::store(txn, record));
-    co_return BeginCleanCacheBlockResult{record.key, record.cleanupEpoch, record.deleteGeneration};
+    co_return BeginCleanCacheBlockResult{record.key, record.cleanupEpoch, record.deleteGeneration, record.placement};
   }
 
   const BeginCleanCacheBlocksReq &req_;

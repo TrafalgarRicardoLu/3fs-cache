@@ -78,6 +78,10 @@ class FailCacheBlocksOp : public Operation<FailCacheBlocksRsp> {
     record.deleteGeneration = record.cacheGeneration;
     record.leaseExpiresAt = UtcTime{};
     record.ready.reset();
+    if (record.permit.has_value()) {
+      record.placement = record.permit->placement;
+      record.permit.reset();
+    }
     CO_RETURN_ON_ERROR(co_await CacheBlockStore::store(txn, record));
     co_return CacheBlockMutationResult{record.key, record.state};
   }

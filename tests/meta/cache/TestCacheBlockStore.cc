@@ -20,6 +20,14 @@ cache::CacheBlockKey key(uint64_t inode, uint32_t block) {
   return cache::CacheBlockKey{inode, cache::CacheBlockIndex{block}};
 }
 
+storage::PermitIdentity permit() {
+  auto placement = storage::PlacementIdentity::create({flat::ChainId{1}, flat::ChainVersion{1}},
+                                                      {flat::TargetId{1}},
+                                                      flat::TargetId{1},
+                                                      Uuid::from(1, 2));
+  return storage::PermitIdentity{Uuid::from(3, 4), *placement, 1, {{flat::TargetId{1}, 4096}}};
+}
+
 TEST_F(TestCacheBlockStore, NoneIsNotPersistedAndFailedHasNoCharge) {
   folly::coro::blockingWait([&]() -> CoTask<void> {
     auto txn = engine_.createReadWriteTransaction();
@@ -62,6 +70,39 @@ TEST_F(TestCacheBlockStore, GenerationSurvivesRecordRemovalAndRejectsOverflow) {
     txn = engine_.createReadWriteTransaction();
     CO_ASSERT_ERROR(co_await CacheBlockStore::allocateGeneration(*txn, block), CacheCode::kStateConflict);
   }());
+}
+
+TEST_F(TestCacheBlockStore, ValidatesPhase2PermitAndPlacementStateMatrix) {
+  CacheBlockRecord record;
+  record.key = key(10, 1);
+  record.state = cache::CacheBlockState::QUEUED;
+  record.chainId = flat::ChainId{1};
+  record.blockLength = 4096;
+  record.chargeKind = cache::ChargeKind::RESERVED;
+  record.chargedBytes = 4096;
+  record.permit = permit();
+  ASSERT_OK(record.valid());
+
+  record.placement = record.permit->placement;
+  ASSERT_ERROR(record.valid(), StatusCode::kInvalidArg);
+  record.placement.reset();
+
+  record.state = cache::CacheBlockState::READY;
+  record.ready = cache::ReadyIdentity{1, cache::CacheGeneration{1}, 1, 1234, 4096};
+  record.chargeKind = cache::ChargeKind::COMMITTED;
+  record.placement = record.permit->placement;
+  record.committedPermit = record.permit;
+  record.permit.reset();
+  ASSERT_OK(record.valid());
+
+  record.placement.reset();
+  ASSERT_ERROR(record.valid(), StatusCode::kInvalidArg);
+  record.placement = record.committedPermit->placement;
+  record.state = cache::CacheBlockState::FAILED;
+  record.ready.reset();
+  record.chargeKind = cache::ChargeKind::NONE;
+  record.chargedBytes = 0;
+  ASSERT_ERROR(record.valid(), StatusCode::kInvalidArg);
 }
 
 }  // namespace

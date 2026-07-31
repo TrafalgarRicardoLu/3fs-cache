@@ -65,8 +65,9 @@ class AcquireCacheBlocksOp : public Operation<AcquireCacheBlocksRsp> {
 
     const auto loaderId = loaderIdFor(item.key);
     if (record.state == cache::CacheBlockState::LOADING && record.loaderId == loaderId) {
-      co_return AcquireCacheBlockResult{record.key,
-                                        CacheBlockLease{record.loaderId, record.loadEpoch, record.cacheGeneration}};
+      co_return AcquireCacheBlockResult{
+          record.key,
+          CacheBlockLease{record.loaderId, record.loadEpoch, record.cacheGeneration, record.permit}};
     }
     const auto now = UtcClock::now();
     if (record.state != cache::CacheBlockState::QUEUED &&
@@ -89,8 +90,9 @@ class AcquireCacheBlocksOp : public Operation<AcquireCacheBlocksRsp> {
     record.ready.reset();
     record.terminalState = cache::CleanupTerminalState::NONE;
     CO_RETURN_ON_ERROR(co_await CacheBlockStore::store(txn, record));
-    co_return AcquireCacheBlockResult{record.key,
-                                      CacheBlockLease{record.loaderId, record.loadEpoch, record.cacheGeneration}};
+    co_return AcquireCacheBlockResult{
+        record.key,
+        CacheBlockLease{record.loaderId, record.loadEpoch, record.cacheGeneration, record.permit}};
   }
 
   const AcquireCacheBlocksReq &req_;

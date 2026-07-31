@@ -37,7 +37,17 @@ CoTryTask<CacheBlockLayout> resolveCacheBlockLayout(kv::IReadWriteTransaction &t
   }
   auto chainId = inode->getChainId(*inode, blockOffset, *routing.raw());
   CO_RETURN_ON_ERROR(chainId);
-  co_return CacheBlockLayout{*chainId, blockLength, table->checksumType};
+  auto chain = routing.raw()->getChain(*chainId);
+  if (!chain) co_return makeError(CacheCode::kUnavailable, "cache block chain is unavailable");
+  std::vector<flat::TargetId> replicaTargets;
+  replicaTargets.reserve(chain->targets.size());
+  for (const auto &target : chain->targets) replicaTargets.push_back(target.targetId);
+  std::sort(replicaTargets.begin(), replicaTargets.end());
+  co_return CacheBlockLayout{*chainId,
+                             chain->chainVersion,
+                             std::move(replicaTargets),
+                             blockLength,
+                             table->checksumType};
 }
 
 }  // namespace hf3fs::meta::server

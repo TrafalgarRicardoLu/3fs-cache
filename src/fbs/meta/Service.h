@@ -834,11 +834,38 @@ struct CacheServiceIdentity {
 struct CacheBlockRequestBase {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(blockLength, uint64_t{0});
+  SERDE_STRUCT_FIELD(permit, std::optional<storage::PermitIdentity>{});
+  SERDE_STRUCT_FIELD(expectedPermit, std::optional<storage::PermitIdentity>{});
+  SERDE_STRUCT_FIELD(expectedState, cache::CacheBlockState::NONE);
+  SERDE_STRUCT_FIELD(expectedLoaderId, Uuid::zero());
+  SERDE_STRUCT_FIELD(expectedLoadEpoch, uint64_t{0});
 
  public:
   Result<Void> valid() const {
     RETURN_ON_ERROR(key.valid());
     if (blockLength == 0) return INVALID("blockLength not set");
+    if (permit.has_value()) RETURN_ON_ERROR(permit->valid());
+    if (expectedPermit.has_value()) {
+      RETURN_ON_ERROR(expectedPermit->valid());
+      if (!permit.has_value()) return INVALID("expectedPermit requires a replacement permit");
+    }
+    if (expectedState != cache::CacheBlockState::NONE && expectedState != cache::CacheBlockState::QUEUED &&
+        expectedState != cache::CacheBlockState::LOADING) {
+      return INVALID("invalid expected cache admission state");
+    }
+    if ((expectedLoaderId == Uuid::zero()) != (expectedLoadEpoch == 0)) return INVALID("incomplete loader fence");
+    const bool hasReplacementFence = expectedPermit.has_value() || expectedState != cache::CacheBlockState::NONE ||
+                                     expectedLoaderId != Uuid::zero() || expectedLoadEpoch != 0;
+    if (hasReplacementFence &&
+        (!permit.has_value() || !expectedPermit.has_value() || expectedState == cache::CacheBlockState::NONE)) {
+      return INVALID("incomplete permit replacement fence");
+    }
+    if (expectedState == cache::CacheBlockState::QUEUED && expectedLoaderId != Uuid::zero()) {
+      return INVALID("queued permit replacement cannot carry loader fence");
+    }
+    if (expectedState == cache::CacheBlockState::LOADING && expectedLoaderId == Uuid::zero()) {
+      return INVALID("loading permit replacement requires loader fence");
+    }
     return VALID;
   }
 };
@@ -847,11 +874,14 @@ struct CacheBlockLease {
   SERDE_STRUCT_FIELD(loaderId, Uuid::zero());
   SERDE_STRUCT_FIELD(loadEpoch, uint64_t{0});
   SERDE_STRUCT_FIELD(cacheGeneration, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(permit, std::optional<storage::PermitIdentity>{});
 };
 
 struct CacheBlockMutationResult {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(state, cache::CacheBlockState::NONE);
+  SERDE_STRUCT_FIELD(enqueueOutcome, cache::CacheEnqueueOutcome::INVALID);
+  SERDE_STRUCT_FIELD(placement, std::optional<storage::PlacementIdentity>{});
 };
 
 #define CACHE_BOUNDED_REQ(NAME, ITEM)                                                \
@@ -890,12 +920,20 @@ struct CommitCacheBlockItem {
   SERDE_STRUCT_FIELD(blockLength, uint64_t{0});
   SERDE_STRUCT_FIELD(checksumType, uint8_t{0});
   SERDE_STRUCT_FIELD(checksumValue, uint32_t{0});
+  SERDE_STRUCT_FIELD(permit, std::optional<storage::PermitIdentity>{});
+  SERDE_STRUCT_FIELD(placement, std::optional<storage::PlacementIdentity>{});
 
  public:
   Result<Void> valid() const {
     RETURN_ON_ERROR(key.valid());
     if (loaderId == Uuid::zero() || loadEpoch == 0 || cacheGeneration == cache::CacheGeneration{} || blockLength == 0) {
       return INVALID("invalid cache commit fence");
+    }
+    if (permit.has_value() != placement.has_value()) return INVALID("permit and placement must be committed together");
+    if (permit.has_value()) {
+      RETURN_ON_ERROR(permit->valid());
+      RETURN_ON_ERROR(placement->valid());
+      if (permit->placement != *placement) return INVALID("commit placement differs from permit placement");
     }
     return VALID;
   }
@@ -947,6 +985,7 @@ struct BeginCleanCacheBlockResult {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(cleanupEpoch, cache::CleanupEpoch{});
   SERDE_STRUCT_FIELD(deleteGeneration, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(placement, std::optional<storage::PlacementIdentity>{});
 };
 struct BeginCleanCacheBlocksRsp : RspBase {
   SERDE_STRUCT_FIELD(results, std::vector<Result<BeginCleanCacheBlockResult>>{});
