@@ -2564,6 +2564,10 @@ bool sameCacheGenerationInfo(const CacheChunkGenerationInfo &lhs, const CacheChu
          lhs.checksum == rhs.checksum;
 }
 
+bool sameCacheGenerationInfo(const RetireCacheReplicaResult &lhs, const RetireCacheReplicaResult &rhs) {
+  return lhs.operationId == rhs.operationId && lhs.durableRetired == rhs.durableRetired;
+}
+
 }  // namespace
 
 template <typename Req, typename Rsp, auto MessengerMethod>
@@ -2658,6 +2662,22 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageClientImpl::queryCacheChunkGener
       MethodType::queryCacheChunkGenerations,
       vChainId,
       req);
+}
+
+CoTryTask<RetireCacheReplicasRsp> StorageClientImpl::retireCacheReplicas(const RetireCacheReplicasReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  if (req.items.empty()) co_return RetireCacheReplicasRsp{};
+  auto vChainId = req.items.front().key.vChainId;
+  if (std::any_of(req.items.begin(), req.items.end(), [&](const auto &item) {
+        return item.key.vChainId != vChainId;
+      })) {
+    co_return makeError(StatusCode::kInvalidArg, "replica retire batch spans multiple chains");
+  }
+  co_return co_await cacheRequestAllTargets<RetireCacheReplicasReq,
+                                            RetireCacheReplicasRsp,
+                                            &StorageMessenger::retireCacheReplicas>(MethodType::retireCacheReplicas,
+                                                                                    vChainId,
+                                                                                    req);
 }
 
 CoTryTask<QueryCacheSpaceRsp> StorageClientImpl::queryCacheSpace(const QueryCacheSpaceReq &req) {

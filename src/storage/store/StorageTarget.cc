@@ -417,6 +417,21 @@ Result<CacheChunkGenerationInfo> StorageTarget::retireCacheChunk(const RetireCac
   return chunkStore_.retireCacheChunk(item);
 }
 
+Result<CacheChunkGenerationInfo> StorageTarget::retireCacheChunkDurable(const RetireCacheChunkItem &item) {
+  Result<CacheChunkGenerationInfo> retired = useChunkEngine()
+                                                 ? ChunkEngine::retireCacheChunkDurable(*engine_, item, chainId())
+                                                 : chunkStore_.retireCacheChunk(item);
+  RETURN_ON_ERROR(retired);
+  if (!useChunkEngine()) RETURN_ON_ERROR(chunkStore_.sync());
+  auto query = queryCacheChunk(item.key.chunkId);
+  RETURN_ON_ERROR(query);
+  if (query->cacheGeneration > item.expectedGeneration) return makeError(CacheCode::kGenerationAdvanced);
+  if (query->cacheGeneration != item.expectedGeneration || !query->retired) {
+    return makeError(CacheCode::kStateConflict, "cache generation is not durably retired");
+  }
+  return *query;
+}
+
 Result<CacheChunkGenerationInfo> StorageTarget::queryCacheChunk(const ChunkId &chunkId) {
   if (useChunkEngine()) return ChunkEngine::queryCacheChunk(*engine_, chunkId, chainId());
   return chunkStore_.queryCacheChunk(chunkId);

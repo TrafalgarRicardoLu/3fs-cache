@@ -241,6 +241,9 @@ struct RetireCacheReplicaItem {
   Result<Void> valid() const {
     RETURN_ON_ERROR(key.valid());
     RETURN_ON_ERROR(placement.valid());
+    if (key.vChainId != placement.versionedChain) {
+      return makeError(CacheCode::kPlacementMismatch, "replica retire chain differs from placement");
+    }
     if (expectedGeneration == cache::CacheGeneration{} || evictionEpoch == cache::EvictionEpoch{} ||
         operationId == Uuid::zero())
       return makeError(StatusCode::kInvalidArg, "invalid replica retire identity");

@@ -186,14 +186,22 @@ Result<CacheChunkGenerationInfo> ChunkStore::retireCacheChunk(const RetireCacheC
 }
 
 Result<CacheChunkGenerationInfo> ChunkStore::queryCacheChunk(const ChunkId &chunkId) {
-  CHECK_RESULT(current, get(chunkId));
-  if (current->second.meta.cacheState == CacheChunkState::NONE) return makeError(CacheCode::kNotFound);
-  return cacheGenerationInfo(current->second.meta);
+  auto current = get(chunkId);
+  if (current.hasError()) {
+    if (current.error().code() == StorageCode::kChunkMetadataNotFound) return makeError(CacheCode::kNotFound);
+    return makeError(std::move(current.error()));
+  }
+  if ((*current)->second.meta.cacheState == CacheChunkState::NONE) return makeError(CacheCode::kNotFound);
+  return cacheGenerationInfo((*current)->second.meta);
 }
 
 Result<std::optional<CacheChunkDescriptor>> ChunkStore::queryCacheChunkDescriptor(const ChunkId &chunkId) {
-  CHECK_RESULT(current, get(chunkId));
-  if (current->second.meta.cacheState == CacheChunkState::NONE) return makeError(CacheCode::kNotFound);
+  auto current = get(chunkId);
+  if (current.hasError()) {
+    if (current.error().code() == StorageCode::kChunkMetadataNotFound) return makeError(CacheCode::kNotFound);
+    return makeError(std::move(current.error()));
+  }
+  if ((*current)->second.meta.cacheState == CacheChunkState::NONE) return makeError(CacheCode::kNotFound);
   return metaStore_.getCacheDescriptor(chunkId);
 }
 

@@ -102,6 +102,9 @@ struct ChunkEngine {
                                                            const RetireCacheChunkItem &item,
                                                            ChainId chainId,
                                                            bool sync);
+  static Result<CacheChunkGenerationInfo> retireCacheChunkDurable(chunk_engine::Engine &engine,
+                                                                  const RetireCacheChunkItem &item,
+                                                                  ChainId chainId);
   static Result<CacheChunkGenerationInfo> queryCacheChunk(chunk_engine::Engine &engine,
                                                           const ChunkId &chunkId,
                                                           ChainId chainId);

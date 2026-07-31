@@ -114,6 +114,7 @@ class StorageTarget : public enable_shared_from_this<StorageTarget> {
   Result<CacheChunkGenerationInfo> replaceCacheChunk(const ReplaceCacheChunkItem &item,
                                                      folly::CPUThreadPoolExecutor &executor);
   Result<CacheChunkGenerationInfo> retireCacheChunk(const RetireCacheChunkItem &item);
+  Result<CacheChunkGenerationInfo> retireCacheChunkDurable(const RetireCacheChunkItem &item);
   Result<CacheChunkGenerationInfo> queryCacheChunk(const ChunkId &chunkId);
   Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(const ChunkId &chunkId);
   CoTryTask<bool> recordCacheAccess(const ChunkId &chunkId,

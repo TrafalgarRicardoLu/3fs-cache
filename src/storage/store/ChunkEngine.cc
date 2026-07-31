@@ -246,6 +246,19 @@ Result<CacheChunkGenerationInfo> ChunkEngine::retireCacheChunk(chunk_engine::Eng
   return CacheChunkGenerationInfo{item.expectedGeneration, true, 0, ChecksumInfo{}};
 }
 
+Result<CacheChunkGenerationInfo> ChunkEngine::retireCacheChunkDurable(chunk_engine::Engine &engine,
+                                                                      const RetireCacheChunkItem &item,
+                                                                      ChainId chainId) {
+  RETURN_ON_ERROR(retireCacheChunk(engine, item, chainId, true));
+  auto query = queryCacheChunk(engine, item.key.chunkId, chainId);
+  RETURN_ON_ERROR(query);
+  if (query->cacheGeneration > item.expectedGeneration) return makeError(CacheCode::kGenerationAdvanced);
+  if (query->cacheGeneration != item.expectedGeneration || !query->retired) {
+    return makeError(CacheCode::kStateConflict, "cache generation is not durably retired");
+  }
+  return *query;
+}
+
 Result<CacheChunkGenerationInfo> ChunkEngine::queryCacheChunk(chunk_engine::Engine &engine,
                                                               const ChunkId &chunkId,
                                                               ChainId chainId) {
