@@ -1238,6 +1238,53 @@ struct ListEvictingCacheBlocksRsp : RspBase {
   SERDE_STRUCT_FIELD(more, false);
 };
 
+struct ReadyCacheBlockStatus {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(ready, cache::ReadyIdentity{});
+  SERDE_STRUCT_FIELD(chainId, flat::ChainId{});
+  SERDE_STRUCT_FIELD(blockLength, uint64_t{0});
+  SERDE_STRUCT_FIELD(chargeKind, cache::ChargeKind::NONE);
+  SERDE_STRUCT_FIELD(chargedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(placement, storage::PlacementIdentity{});
+  SERDE_STRUCT_FIELD(committedPermit, storage::PermitIdentity{});
+  SERDE_STRUCT_FIELD(readyAt, UtcTime{});
+  SERDE_STRUCT_FIELD(lastAccessAt, UtcTime{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    RETURN_ON_ERROR(ready.valid());
+    RETURN_ON_ERROR(placement.valid());
+    RETURN_ON_ERROR(committedPermit.valid());
+    if (chainId == flat::ChainId{} || blockLength == 0 || ready.blockLength != blockLength ||
+        chargeKind != cache::ChargeKind::COMMITTED || chargedBytes != blockLength ||
+        committedPermit.placement != placement || placement.versionedChain.chainId != chainId || readyAt.isZero() ||
+        lastAccessAt < readyAt) {
+      return makeError(StatusCode::kInvalidArg, "invalid READY cache block status");
+    }
+    return Void{};
+  }
+};
+struct ListReadyCacheBlocksReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(after, std::optional<cache::CacheBlockKey>{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{1000});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (after.has_value()) RETURN_ON_ERROR(after->valid());
+    if (limit == 0) return makeError(StatusCode::kInvalidArg, "limit is zero");
+    if (limit > cache::kMaxPhase2BatchItems) return makeError(CacheCode::kRequestTooLarge, "limit too large");
+    return Void{};
+  }
+};
+struct ListReadyCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(items, std::vector<ReadyCacheBlockStatus>{});
+  SERDE_STRUCT_FIELD(more, false);
+};
+
 struct CacheStorageEvent {
   SERDE_STRUCT_FIELD(sourceId, storage::PhysicalDiskId{});
   SERDE_STRUCT_FIELD(sequence, uint64_t{0});
@@ -1364,6 +1411,7 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(listCacheEventDeadLetters, 38, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
   META_SERVICE_METHOD(listRecoverableCachePermits, 39, ListRecoverableCachePermitsReq, ListRecoverableCachePermitsRsp);
   META_SERVICE_METHOD(cancelQueuedAdmissions, 40, CancelQueuedAdmissionsReq, CancelQueuedAdmissionsRsp);
+  META_SERVICE_METHOD(listReadyCacheBlocks, 41, ListReadyCacheBlocksReq, ListReadyCacheBlocksRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

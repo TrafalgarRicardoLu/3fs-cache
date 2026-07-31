@@ -320,5 +320,48 @@ TEST_F(TestCacheEviction, ListsStablePages) {
   }());
 }
 
+TEST_F(TestCacheEviction, ListsReadyPhysicalIdentitiesForManager) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    auto inode = co_await prepare(cluster, "/ready-list", 3);
+    CO_ASSERT_OK(inode);
+    if (!inode) co_return;
+    auto firstReady = co_await seedReady(cluster, *inode, 0, 1);
+    auto secondReady = co_await seedReady(cluster, *inode, 1, 2);
+    auto evicting = co_await seedReady(cluster, *inode, 2, 3);
+    CO_ASSERT_OK(firstReady);
+    CO_ASSERT_OK(secondReady);
+    CO_ASSERT_OK(evicting);
+    if (!firstReady || !secondReady || !evicting) co_return;
+    auto &meta = cluster.meta().getOperator();
+    auto evicted = co_await meta.beginEvictCacheBlocks(evictReq(*evicting, cache::EvictionReason::CAPACITY_WATERMARK));
+    CO_ASSERT_OK(evicted);
+    if (!evicted) co_return;
+    CO_ASSERT_OK(evicted->results.front());
+    if (!evicted->results.front()) co_return;
+
+    ListReadyCacheBlocksReq request;
+    request.service = service();
+    request.limit = 1;
+    request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+    auto first = co_await meta.listReadyCacheBlocks(request);
+    CO_ASSERT_OK(first);
+    if (!first) co_return;
+    CO_ASSERT_EQ(first->items.size(), size_t{1});
+    CO_ASSERT_TRUE(first->more);
+    CO_ASSERT_EQ(first->items.front().key, firstReady->key);
+    CO_ASSERT_EQ(first->items.front().placement, *firstReady->placement);
+    CO_ASSERT_EQ(first->items.front().committedPermit, *firstReady->committedPermit);
+
+    request.after = first->items.front().key;
+    auto second = co_await meta.listReadyCacheBlocks(request);
+    CO_ASSERT_OK(second);
+    if (!second) co_return;
+    CO_ASSERT_EQ(second->items.size(), size_t{1});
+    CO_ASSERT_FALSE(second->more);
+    CO_ASSERT_EQ(second->items.front().key, secondReady->key);
+  }());
+}
+
 }  // namespace
 }  // namespace hf3fs::meta::server

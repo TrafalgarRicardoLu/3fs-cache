@@ -94,4 +94,14 @@ Result<ResolvedPhysicalChain> PhysicalTopology::resolve(flat::ChainId chainId,
   return resolved;
 }
 
+Result<storage::PhysicalDiskId> PhysicalTopology::persistedDisk(flat::TargetId targetId) const {
+  if (targetId == flat::TargetId{}) return makeError(StatusCode::kInvalidArg, "invalid cache target");
+  std::scoped_lock lock(mutex_);
+  auto target = targetToDisk_.find(targetId);
+  if (target == targetToDisk_.end() || !disks_.contains(target->second)) {
+    return makeError(CacheCode::kUnavailable, "persisted cache replica disk is unknown");
+  }
+  return target->second;
+}
+
 }  // namespace hf3fs::cache_manager

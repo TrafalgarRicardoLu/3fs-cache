@@ -42,6 +42,7 @@ class PhysicalTopology {
                                         SteadyTime now,
                                         Duration maxAge,
                                         double expectedHighWatermark) const;
+  Result<storage::PhysicalDiskId> persistedDisk(flat::TargetId targetId) const;
 
  private:
   mutable std::mutex mutex_;

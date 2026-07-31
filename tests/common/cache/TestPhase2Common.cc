@@ -13,6 +13,7 @@ namespace hf3fs::cache::test {
 namespace {
 
 static_assert(meta::MetaSerde<>::listCacheBlocksMethodId == 33);
+static_assert(meta::MetaSerde<>::listReadyCacheBlocksMethodId == 41);
 static_assert(meta::MetaSerde<>::updateCacheBlockAccessMethodId == 34);
 static_assert(meta::MetaSerde<>::listCacheEventDeadLettersMethodId == 38);
 static_assert(storage::StorageSerde<>::queryCacheChunkGenerationsMethodId == 20);

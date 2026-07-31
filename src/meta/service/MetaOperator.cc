@@ -762,6 +762,46 @@ CoTryTask<ListEvictingCacheBlocksRsp> MetaOperator::listEvictingCacheBlocks(List
       .run(kvEngine_->createReadonlyTransaction(), std::move(handler));
 }
 
+CoTryTask<ListReadyCacheBlocksRsp> MetaOperator::listReadyCacheBlocks(ListReadyCacheBlocksReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));
+  auto handler = [req](kv::IReadOnlyTransaction &transaction) -> CoTryTask<ListReadyCacheBlocksRsp> {
+    auto records = co_await CacheBlockStore::snapshotListAll(transaction);
+    CO_RETURN_ON_ERROR(records);
+    auto less = [](const cache::CacheBlockKey &lhs, const cache::CacheBlockKey &rhs) {
+      return lhs.inode < rhs.inode || (lhs.inode == rhs.inode && lhs.block < rhs.block);
+    };
+    ListReadyCacheBlocksRsp response;
+    for (const auto &record : *records) {
+      if (record.state != cache::CacheBlockState::READY || record.chargeKind != cache::ChargeKind::COMMITTED) continue;
+      if (req.after.has_value() && !less(*req.after, record.key)) continue;
+      if (!record.ready.has_value() || !record.placement.has_value() || !record.committedPermit.has_value()) {
+        co_return makeError(CacheCode::kPlacementMismatch, "READY cache block has no immutable placement");
+      }
+      if (response.items.size() == req.limit) {
+        response.more = true;
+        break;
+      }
+      ReadyCacheBlockStatus item{record.key,
+                                 *record.ready,
+                                 record.chainId,
+                                 record.blockLength,
+                                 record.chargeKind,
+                                 record.chargedBytes,
+                                 *record.placement,
+                                 *record.committedPermit,
+                                 record.readyAt,
+                                 record.lastAccessAt};
+      CO_RETURN_ON_ERROR(item.valid());
+      response.items.push_back(std::move(item));
+    }
+    co_return response;
+  };
+  co_return co_await kv::WithTransaction(kv::FDBRetryStrategy(createRetryConfig()))
+      .run(kvEngine_->createReadonlyTransaction(), std::move(handler));
+}
+
 CoTryTask<UpdateCacheBlockAccessRsp> MetaOperator::updateCacheBlockAccess(UpdateCacheBlockAccessReq req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkCacheService(req.service));

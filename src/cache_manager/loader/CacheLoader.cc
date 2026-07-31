@@ -167,6 +167,17 @@ CoTryTask<meta::UpdateCacheBlockAccessRsp> RealCacheManagerBackend::updateAccess
   co_return co_await metaClient_->updateCacheBlockAccess(std::move(request));
 }
 
+CoTryTask<meta::ListReadyCacheBlocksRsp> RealCacheManagerBackend::listReadyCacheBlocks(
+    std::optional<cache::CacheBlockKey> after,
+    uint32_t limit) {
+  meta::ListReadyCacheBlocksReq request;
+  request.service = service();
+  request.after = after;
+  request.limit = limit;
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  co_return co_await metaClient_->listReadyCacheBlocks(std::move(request));
+}
+
 CoTryTask<meta::EnqueueCacheBlocksRsp> RealCacheManagerBackend::enqueue(
     std::vector<meta::CacheBlockRequestBase> items) {
   meta::EnqueueCacheBlocksReq req;
