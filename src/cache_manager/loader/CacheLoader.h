@@ -50,6 +50,10 @@ class CacheManagerBackend {
   virtual CoTryTask<void> finishClean(const meta::FinishCleanCacheBlockItem &) {
     co_return makeError(StatusCode::kNotImplemented);
   }
+  virtual std::shared_ptr<client::RoutingInfo> routingInfo() { return nullptr; }
+  virtual CoTryTask<storage::QueryCacheSpaceRsp> queryCacheSpace(const storage::QueryCacheSpaceReq &) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
 };
 
 class RealCacheManagerBackend final : public CacheManagerBackend {
@@ -82,6 +86,8 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
                                                       cache::CacheGeneration generation) final;
   CoTryTask<storage::CacheChunkGenerationInfo> query(const meta::Inode &inode, cache::CacheBlockIndex block) final;
   CoTryTask<void> finishClean(const meta::FinishCleanCacheBlockItem &item) final;
+  std::shared_ptr<client::RoutingInfo> routingInfo() final;
+  CoTryTask<storage::QueryCacheSpaceRsp> queryCacheSpace(const storage::QueryCacheSpaceReq &req) final;
 
  private:
   meta::CacheServiceIdentity service() const;

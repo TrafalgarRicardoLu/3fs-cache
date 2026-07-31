@@ -4,6 +4,8 @@
 #include <memory>
 #include <mutex>
 
+#include "cache_manager/capacity/PhysicalPreflight.h"
+#include "cache_manager/capacity/SpacePoller.h"
 #include "cache_manager/cleanup/CacheCleanupWorker.h"
 #include "cache_manager/config/Config.h"
 #include "cache_manager/loader/CacheLoader.h"
@@ -57,6 +59,9 @@ class CacheManagerOperator {
   std::unique_ptr<CacheCleanupWorker> cleanupWorker_;
   std::unique_ptr<ReportCacheBlockInvalid> reportInvalid_;
   std::unique_ptr<AdminCleanupCacheBlocks> adminCleanup_;
+  std::unique_ptr<PhysicalTopology> physicalTopology_;
+  std::unique_ptr<SpacePoller> spacePoller_;
+  std::unique_ptr<PhysicalPreflight> physicalPreflight_;
   std::unique_ptr<BackgroundRunner> scheduler_;
   SchedulerStopHook schedulerStopHook_;
   mutable std::mutex mutex_;

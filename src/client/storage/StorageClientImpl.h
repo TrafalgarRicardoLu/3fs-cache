@@ -77,6 +77,7 @@ class StorageClientImpl : public StorageClient {
       const RetireCacheChunkGenerationsReq &req) override;
   CoTryTask<QueryCacheChunkGenerationsRsp> queryCacheChunkGenerations(
       const QueryCacheChunkGenerationsReq &req) override;
+  CoTryTask<QueryCacheSpaceRsp> queryCacheSpace(const QueryCacheSpaceReq &req) override;
   CoTryTask<PrepareCachePermitsRsp> prepareCachePermits(const PrepareCachePermitsReq &req) override;
   CoTryTask<RenewCachePermitsRsp> renewCachePermits(const RenewCachePermitsReq &req) override;
   CoTryTask<ReleaseCachePermitsRsp> releaseCachePermits(const ReleaseCachePermitsReq &req) override;

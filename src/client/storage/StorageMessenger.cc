@@ -272,6 +272,7 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageMessenger::queryCacheChunkGenera
                                                                                                 options,    \
                                                                                                 timestamp); \
   }
+PHASE2_STORAGE_MESSENGER_METHOD(queryCacheSpace, QueryCacheSpaceReq, QueryCacheSpaceRsp);
 PHASE2_STORAGE_MESSENGER_METHOD(prepareCachePermits, PrepareCachePermitsReq, PrepareCachePermitsRsp);
 PHASE2_STORAGE_MESSENGER_METHOD(renewCachePermits, RenewCachePermitsReq, RenewCachePermitsRsp);
 PHASE2_STORAGE_MESSENGER_METHOD(releaseCachePermits, ReleaseCachePermitsReq, ReleaseCachePermitsRsp);

@@ -2660,6 +2660,71 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageClientImpl::queryCacheChunkGener
       req);
 }
 
+CoTryTask<QueryCacheSpaceRsp> StorageClientImpl::queryCacheSpace(const QueryCacheSpaceReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  if (req.targetIds.empty() && req.footprints.empty()) co_return QueryCacheSpaceRsp{};
+  ClientRequestContext requestCtx(MethodType::queryCacheSpace,
+                                  flat::UserInfo{},
+                                  DebugOptions(),
+                                  config_,
+                                  1,
+                                  0,
+                                  config_.retry().max_wait_time());
+  auto routingInfo = getCurrentRoutingInfo();
+  if (!routingInfo || !routingInfo->raw())
+    co_return makeError(StorageClientCode::kRoutingError, "cache space routing info is unavailable");
+
+  struct NodeQuery {
+    QueryCacheSpaceReq request;
+    std::vector<size_t> footprintIndexes;
+  };
+  std::map<flat::NodeId, NodeQuery> queries;
+  auto nodeForTarget = [&](flat::TargetId targetId) -> Result<flat::NodeId> {
+    auto target = getTargetInfo(routingInfo, targetId);
+    RETURN_ON_ERROR(target);
+    if (!target->nodeId) return makeError(StorageClientCode::kRoutingError, "cache target has no node");
+    return *target->nodeId;
+  };
+  for (auto targetId : req.targetIds) {
+    auto nodeId = nodeForTarget(targetId);
+    CO_RETURN_ON_ERROR(nodeId);
+    queries[*nodeId].request.targetIds.push_back(targetId);
+  }
+  for (size_t index = 0; index < req.footprints.size(); ++index) {
+    auto nodeId = nodeForTarget(req.footprints[index].targetId);
+    CO_RETURN_ON_ERROR(nodeId);
+    auto &query = queries[*nodeId];
+    query.request.footprints.push_back(req.footprints[index]);
+    query.footprintIndexes.push_back(index);
+  }
+
+  QueryCacheSpaceRsp merged;
+  merged.footprintResults.resize(req.footprints.size(),
+                                 makeError(CacheCode::kInvalidResponse, "missing cache footprint response"));
+  for (auto &[nodeId, query] : queries) {
+    query.request.cacheProtocolVersion = req.cacheProtocolVersion;
+    auto nodeInfo = getNodeInfo(routingInfo, nodeId);
+    CO_RETURN_ON_ERROR(nodeInfo);
+    auto response =
+        co_await callMessengerMethod<QueryCacheSpaceReq, QueryCacheSpaceRsp, &StorageMessenger::queryCacheSpace>(
+            messenger_,
+            requestCtx,
+            *nodeInfo,
+            query.request);
+    CO_RETURN_ON_ERROR(response);
+    if (response->footprintResults.size() != query.footprintIndexes.size()) {
+      co_return makeError(CacheCode::kInvalidResponse, "cache footprint result count mismatch");
+    }
+    merged.results.insert(merged.results.end(),
+                          std::make_move_iterator(response->results.begin()),
+                          std::make_move_iterator(response->results.end()));
+    for (size_t index = 0; index < query.footprintIndexes.size(); ++index) {
+      merged.footprintResults[query.footprintIndexes[index]] = std::move(response->footprintResults[index]);
+    }
+  }
+  co_return merged;
+}
+
 template <typename Req, typename Rsp, auto MessengerMethod>
 CoTryTask<Rsp> StorageClientImpl::cachePermitCoordinatorRequest(MethodType methodType,
                                                                 const PermitIdentity &permit,

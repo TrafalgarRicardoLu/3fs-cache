@@ -81,6 +81,9 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(admission_policy, std::string{"second_miss"});
   CONFIG_ITEM(second_miss_window, 30_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(second_miss_max_entries, uint32_t{65536}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(capacity_high_watermark, 0.9, [](double value) { return value > 0.0 && value < 1.0; });
+  CONFIG_ITEM(space_poll_interval, 5_s, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(space_snapshot_max_age, 15_s, [](Duration value) { return value > 0_ns; });
   CONFIG_OBJ_ARRAY(origins, OriginConfig, 64, [](auto &) { return 0; });
 };
 

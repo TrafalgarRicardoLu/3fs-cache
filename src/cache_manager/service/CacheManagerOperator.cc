@@ -41,12 +41,44 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
   ensureCached_ = std::make_unique<EnsureCached>(backend_, hints_, cleanupWorker_.get());
   reportInvalid_ = std::make_unique<ReportCacheBlockInvalid>(backend_, *cleanupWorker_);
   adminCleanup_ = std::make_unique<AdminCleanupCacheBlocks>(backend_, *cleanupWorker_);
+  if (config_.enable_phase2()) {
+    physicalTopology_ = std::make_unique<PhysicalTopology>();
+    spacePoller_ = std::make_unique<SpacePoller>(
+        *physicalTopology_,
+        [backend = backend_](const storage::QueryCacheSpaceReq &req) { return backend->queryCacheSpace(req); });
+    physicalPreflight_ = std::make_unique<PhysicalPreflight>(*physicalTopology_,
+                                                             config_.space_snapshot_max_age(),
+                                                             config_.capacity_high_watermark());
+  }
   auto scheduler = std::make_unique<BackgroundRunner>(executor);
   if (!scheduler->start(
           "CacheManagerScheduler",
           [this]() -> CoTask<void> { co_await loaderScheduler_->runOne(); },
           [this] { return config_.scheduler_interval(); })) {
     return makeError(StatusCode::kQueueConflict, "failed to start cache manager scheduler");
+  }
+  if (spacePoller_ && !scheduler->start(
+                          "CacheManagerSpacePoller",
+                          [this]() -> CoTask<void> {
+                            auto routing = backend_->routingInfo();
+                            if (!routing || !routing->raw()) co_return;
+                            physicalTopology_->updateRouting(routing);
+                            std::map<flat::NodeId, std::vector<flat::TargetId>> targetsByNode;
+                            for (const auto &[targetId, target] : routing->raw()->targets) {
+                              if (target.storageRole == storage::StorageRole::CACHE_ONLY && target.nodeId) {
+                                targetsByNode[*target.nodeId].push_back(targetId);
+                              }
+                            }
+                            for (auto &[nodeId, targetIds] : targetsByNode) {
+                              auto result = co_await spacePoller_->poll(nodeId, std::move(targetIds));
+                              if (result.hasError()) {
+                                XLOGF(WARN, "Cache space poll for node {} failed: {}", nodeId, result.error());
+                              }
+                            }
+                          },
+                          [this] { return config_.space_poll_interval(); })) {
+    folly::coro::blockingWait(scheduler->stopAll());
+    return makeError(StatusCode::kQueueConflict, "failed to start cache manager space poller");
   }
   auto lock = std::unique_lock(mutex_);
   if (running_) {

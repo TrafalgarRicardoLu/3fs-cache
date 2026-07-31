@@ -24,6 +24,13 @@ CoTryTask<meta::Inode> RealCacheManagerBackend::stat(meta::InodeId inode) {
   co_return co_await metaClient_->stat(flat::UserInfo{}, inode, std::nullopt, false);
 }
 
+std::shared_ptr<client::RoutingInfo> RealCacheManagerBackend::routingInfo() { return mgmtdClient_->getRoutingInfo(); }
+
+CoTryTask<storage::QueryCacheSpaceRsp> RealCacheManagerBackend::queryCacheSpace(
+    const storage::QueryCacheSpaceReq &req) {
+  co_return co_await storageClient_->queryCacheSpace(req);
+}
+
 CoTryTask<meta::EnqueueCacheBlocksRsp> RealCacheManagerBackend::enqueue(
     std::vector<meta::CacheBlockRequestBase> items) {
   meta::EnqueueCacheBlocksReq req;
