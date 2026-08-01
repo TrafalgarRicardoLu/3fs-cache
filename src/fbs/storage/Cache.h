@@ -145,6 +145,9 @@ struct CacheSpaceInfo {
   SERDE_STRUCT_FIELD(eventPrepared, uint64_t{0});
   SERDE_STRUCT_FIELD(eventDeliverable, uint64_t{0});
   SERDE_STRUCT_FIELD(eventAcknowledgedSequence, uint64_t{0});
+  SERDE_STRUCT_FIELD(activeGenerations, uint64_t{0});
+  SERDE_STRUCT_FIELD(permitStoreHealthy, false);
+  SERDE_STRUCT_FIELD(eventJournalWritable, false);
 };
 
 struct CacheFootprintQuery {

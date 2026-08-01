@@ -5,6 +5,7 @@
 #include "CacheCleanup.h"
 #include "CacheImport.h"
 #include "CacheListBlocks.h"
+#include "CachePhase2Rollout.h"
 #include "CacheRefreshOrigin.h"
 #include "CacheStatus.h"
 #include "Chdir.h"
@@ -127,6 +128,7 @@ CoTryTask<void> registerAdminCommands(Dispatcher &dispatcher) {
   CO_RETURN_ON_ERROR(co_await registerCacheStatusHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerCacheListBlocksHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerCacheCleanupHandler(dispatcher));
+  CO_RETURN_ON_ERROR(co_await registerCachePhase2RolloutHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerRotateLastSrvHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerRotateAsPreferredOrderHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerDumpSessionHandler(dispatcher));

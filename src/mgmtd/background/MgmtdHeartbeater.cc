@@ -3,6 +3,7 @@
 #include "common/app/ApplicationBase.h"
 #include "core/utils/ServiceOperation.h"
 #include "core/utils/runOp.h"
+#include "fbs/cache/Common.h"
 #include "mgmtd/service/MgmtdState.h"
 #include "mgmtd/service/helpers.h"
 
@@ -85,7 +86,10 @@ CoTask<void> MgmtdHeartbeater::send() {
     sendHeartbeatCtx_->lease = *lease;
     // TODO: consider reuse some facilities of MgmtdClient for auto switching addresses
     sendHeartbeatCtx_->stub = state_.env_->mgmtdStubFactory()->create(addrs[0]);
-    sendHeartbeatCtx_->info = flat::HeartbeatInfo(state_.env_->appInfo(), flat::MgmtdHeartbeatInfo{});
+    flat::MgmtdHeartbeatInfo heartbeat;
+    heartbeat.cacheSchemaVersion = cache::kCacheSchemaVersion;
+    heartbeat.cacheProtocolVersion = cache::kCacheProtocolVersion;
+    sendHeartbeatCtx_->info = flat::HeartbeatInfo(state_.env_->appInfo(), std::move(heartbeat));
   }
 
   co_await [&]() -> CoTryTask<void> { CO_INVOKE_OP_INFO(op, "background", state_, *sendHeartbeatCtx_); }();

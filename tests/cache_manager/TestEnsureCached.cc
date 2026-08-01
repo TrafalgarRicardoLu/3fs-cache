@@ -44,6 +44,7 @@ class EnsureBackend : public CacheManagerBackend {
   CoTryTask<void> fail(const cache::CacheBlockKey &, const meta::CacheBlockLease &) final {
     co_return makeError(StatusCode::kNotImplemented);
   }
+  std::shared_ptr<client::RoutingInfo> routingInfo() override { return rolloutRouting; }
 
   meta::Inode inode = [] {
     auto object = cache::ImmutableObjectIdentity{cache::OriginId{1},
@@ -58,6 +59,7 @@ class EnsureBackend : public CacheManagerBackend {
   cache::CacheBlockState state{cache::CacheBlockState::QUEUED};
   bool capacityReject{false};
   std::vector<meta::CacheBlockRequestBase> seen;
+  std::shared_ptr<client::RoutingInfo> rolloutRouting;
 };
 
 EnsureCachedReq request() {
@@ -300,6 +302,20 @@ TEST(TestEnsureCached, AttachesExistingStatesAndBypassesCapacity) {
   ASSERT_EQ(bypassed->bypassReason, BypassReason::CAPACITY);
 }
 
+TEST(TestEnsureCached, DrainingStopsLegacyAdmission) {
+  auto backend = std::make_shared<EnsureBackend>();
+  backend->rolloutRouting = phase2Routing();
+  backend->rolloutRouting->raw()->cachePhase2State = flat::CachePhase2RolloutState::DRAINING;
+  HintCoalescer hints;
+  EnsureCached ensure(backend, hints);
+
+  auto result = folly::coro::blockingWait(ensure.run(request()));
+  ASSERT_OK(result);
+  EXPECT_EQ(result->status, EnsureCachedStatus::BYPASSED);
+  EXPECT_EQ(result->bypassReason, BypassReason::ADMISSION_DISABLED);
+  EXPECT_TRUE(backend->seen.empty());
+}
+
 TEST_F(Phase2EnsureCachedTest, FirstMissDoesNotReachMetadataAndSecondMissCreatesQueuedWork) {
   auto ensure = create();
   auto first = folly::coro::blockingWait(ensure.run(oneBlockRequest()));
@@ -318,6 +334,24 @@ TEST_F(Phase2EnsureCachedTest, FirstMissDoesNotReachMetadataAndSecondMissCreates
             backend->made.front().placement.admissionAttemptId);
   EXPECT_EQ(hints.size(), 1);
   EXPECT_TRUE(backend->released.empty());
+}
+
+TEST_F(Phase2EnsureCachedTest, ClusterRolloutStateStopsPhase2Admission) {
+  backend->rolloutRouting = phase2Routing();
+  auto ensure = create();
+
+  backend->rolloutRouting->raw()->cachePhase2State = flat::CachePhase2RolloutState::DISABLED;
+  auto disabled = folly::coro::blockingWait(ensure.run(oneBlockRequest()));
+  ASSERT_OK(disabled);
+  EXPECT_EQ(disabled->status, EnsureCachedStatus::BYPASSED);
+  EXPECT_EQ(disabled->bypassReason, BypassReason::ADMISSION_DISABLED);
+
+  backend->rolloutRouting->raw()->cachePhase2State = flat::CachePhase2RolloutState::DRAINING;
+  auto draining = folly::coro::blockingWait(ensure.run(oneBlockRequest()));
+  ASSERT_OK(draining);
+  EXPECT_EQ(draining->status, EnsureCachedStatus::BYPASSED);
+  EXPECT_TRUE(backend->made.empty());
+  EXPECT_TRUE(backend->enqueueCalls.empty());
 }
 
 TEST_F(Phase2EnsureCachedTest, ReadyAndLoadingReleaseFreshPermit) {

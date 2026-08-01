@@ -22,6 +22,47 @@ static_assert(storage::StorageSerde<>::coordinateCacheRetiresMethodId == 27);
 static_assert(cache_manager::CacheManagerSerde<>::reportCacheAccessMethodId == 5);
 static_assert(cache_manager::CacheManagerSerde<>::getPhase2CacheStatusMethodId == 6);
 
+struct LegacyPhase2DiskStatus {
+  SERDE_STRUCT_FIELD(physicalDiskId, storage::PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(role, storage::StorageRole::INVALID);
+  SERDE_STRUCT_FIELD(capacityBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(physicalUsedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(allocatableBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(reservedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(snapshotAgeNs, uint64_t{0});
+  SERDE_STRUCT_FIELD(admissionPaused, false);
+  SERDE_STRUCT_FIELD(pauseReason, String{});
+  SERDE_STRUCT_FIELD(eventPrepared, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventDeliverable, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventAcknowledgedSequence, uint64_t{0});
+};
+
+struct LegacyPhase2CacheStatus {
+  SERDE_STRUCT_FIELD(enabled, false);
+  SERDE_STRUCT_FIELD(managerEpoch, Uuid::zero());
+  SERDE_STRUCT_FIELD(admissionPolicy, String{});
+  SERDE_STRUCT_FIELD(evictionPolicy, String{});
+  SERDE_STRUCT_FIELD(disks, std::vector<LegacyPhase2DiskStatus>{});
+  SERDE_STRUCT_FIELD(evicting, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventBacklog, uint64_t{0});
+  SERDE_STRUCT_FIELD(deadLetters, uint64_t{0});
+};
+
+struct LegacyCacheSpaceInfo {
+  SERDE_STRUCT_FIELD(physicalDiskId, storage::PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(role, storage::StorageRole::INVALID);
+  SERDE_STRUCT_FIELD(targets, std::vector<flat::TargetId>{});
+  SERDE_STRUCT_FIELD(capacityBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(physicalUsedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(allocatableBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(reservedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(enforcedHighWatermark, double{0});
+  SERDE_STRUCT_FIELD(sampledAtNs, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventPrepared, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventDeliverable, uint64_t{0});
+  SERDE_STRUCT_FIELD(eventAcknowledgedSequence, uint64_t{0});
+};
+
 TEST(ServiceContracts, RejectsOversizedMetadataBatch) {
   meta::BatchImportOriginFilesReq request;
   request.entries.resize(meta::kMaxCacheBatchItems + 1);
@@ -63,6 +104,81 @@ TEST(ServiceContracts, Phase2ContractsRoundTrip) {
   ASSERT_EQ(decoded.items.size(), 1);
   EXPECT_EQ(decoded.items.front().key, original.items.front().key);
   EXPECT_EQ(decoded.items.front().generation, CacheGeneration{7});
+}
+
+TEST(ServiceContracts, Phase2StatusRoundTripIncludesOperationalGates) {
+  cache_manager::GetPhase2CacheStatusRsp original;
+  original.enabled = true;
+  original.managerEpoch = Uuid::random();
+  original.admissionPolicy = "second_miss";
+  original.evictionPolicy = "lru";
+  original.capacityHighWatermark = 0.9;
+  original.capacityLowWatermark = 0.8;
+  original.snapshotMaxAgeNs = 15'000'000'000;
+  original.permitTtlNs = 60'000'000'000;
+  cache_manager::Phase2DiskStatus disk;
+  disk.physicalDiskId.uuid = Uuid::random();
+  disk.role = storage::StorageRole::CACHE_ONLY;
+  disk.activeGenerations = 3;
+  disk.enforcedHighWatermark = 0.9;
+  disk.permitStoreHealthy = true;
+  disk.eventJournalWritable = true;
+  disk.admissionPaused = true;
+  disk.pauseReason = "capacity_watermark";
+  original.disks.push_back(disk);
+
+  cache_manager::GetPhase2CacheStatusRsp decoded;
+  ASSERT_OK(serde::deserialize(decoded, serde::serialize(original)));
+  EXPECT_EQ(decoded.managerEpoch, original.managerEpoch);
+  EXPECT_EQ(decoded.capacityHighWatermark, 0.9);
+  ASSERT_EQ(decoded.disks.size(), size_t{1});
+  EXPECT_EQ(decoded.disks.front().activeGenerations, uint64_t{3});
+  EXPECT_TRUE(decoded.disks.front().permitStoreHealthy);
+  EXPECT_TRUE(decoded.disks.front().eventJournalWritable);
+  EXPECT_EQ(decoded.disks.front().pauseReason, "capacity_watermark");
+}
+
+TEST(ServiceContracts, Phase2StatusExtensionsAreBackwardCompatible) {
+  LegacyPhase2CacheStatus legacy;
+  legacy.enabled = true;
+  legacy.managerEpoch = Uuid::random();
+  legacy.disks.push_back({});
+  legacy.disks.front().capacityBytes = 1024;
+
+  cache_manager::GetPhase2CacheStatusRsp current;
+  ASSERT_OK(serde::deserialize(current, serde::serialize(legacy)));
+  EXPECT_EQ(current.managerEpoch, legacy.managerEpoch);
+  ASSERT_EQ(current.disks.size(), size_t{1});
+  EXPECT_EQ(current.disks.front().capacityBytes, uint64_t{1024});
+  EXPECT_EQ(current.disks.front().activeGenerations, uint64_t{0});
+  EXPECT_EQ(current.capacityHighWatermark, 0.0);
+
+  current.capacityHighWatermark = 0.9;
+  current.disks.front().activeGenerations = 2;
+  LegacyPhase2CacheStatus oldReader;
+  ASSERT_OK(serde::deserialize(oldReader, serde::serialize(current)));
+  EXPECT_EQ(oldReader.managerEpoch, current.managerEpoch);
+  ASSERT_EQ(oldReader.disks.size(), size_t{1});
+  EXPECT_EQ(oldReader.disks.front().capacityBytes, uint64_t{1024});
+}
+
+TEST(ServiceContracts, CacheSpaceExtensionsAreBackwardCompatible) {
+  LegacyCacheSpaceInfo legacy;
+  legacy.physicalDiskId.uuid = Uuid::random();
+  legacy.role = storage::StorageRole::CACHE_ONLY;
+  legacy.capacityBytes = 4096;
+
+  storage::CacheSpaceInfo current;
+  ASSERT_OK(serde::deserialize(current, serde::serialize(legacy)));
+  EXPECT_EQ(current.physicalDiskId, legacy.physicalDiskId);
+  EXPECT_EQ(current.capacityBytes, uint64_t{4096});
+  EXPECT_EQ(current.activeGenerations, uint64_t{0});
+
+  current.activeGenerations = 3;
+  LegacyCacheSpaceInfo oldReader;
+  ASSERT_OK(serde::deserialize(oldReader, serde::serialize(current)));
+  EXPECT_EQ(oldReader.physicalDiskId, current.physicalDiskId);
+  EXPECT_EQ(oldReader.capacityBytes, uint64_t{4096});
 }
 
 TEST(ServiceContracts, RejectsOversizedPhase2Batches) {

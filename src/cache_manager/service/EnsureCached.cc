@@ -65,6 +65,13 @@ CoTryTask<EnsureCachedRsp> EnsureCached::run(const EnsureCachedReq &req) {
   auto inode = co_await backend_->stat(req.inode);
   CO_RETURN_ON_ERROR(inode);
   if (!inode->isOriginFile()) co_return makeError(MetaCode::kNotFile, "cache hint inode is not an OriginFile");
+  if (auto routing = backend_->routingInfo(); routing && routing->raw()) {
+    auto state = routing->raw()->cachePhase2State;
+    if (state == flat::CachePhase2RolloutState::DRAINING ||
+        (admissionPolicy_ && state != flat::CachePhase2RolloutState::ENABLED)) {
+      co_return respond(*inode, req, EnsureCachedStatus::BYPASSED, BypassReason::ADMISSION_DISABLED);
+    }
+  }
   const auto &origin = inode->asOriginFile();
   if (origin.superseded || origin.cacheAdmissionDisabled) {
     co_return respond(*inode, req, EnsureCachedStatus::BYPASSED, BypassReason::ADMISSION_DISABLED);

@@ -3,6 +3,8 @@
 #include <fmt/format.h>
 #include <limits>
 
+#include "cache/metrics/CacheMetrics.h"
+
 namespace hf3fs::storage {
 namespace {
 
@@ -94,6 +96,9 @@ Result<Void> CacheEventJournal::commitLocked(kv::KVStore::BatchOperations &batch
   auto result = batch.commit();
   if (result.hasError()) {
     journalFull_ = true;
+    cache::metrics::recordCount(cache::metrics::Event::STORAGE_EVENT_JOURNAL_FAILURE,
+                                1,
+                                {.sourceId = header_.sourceId.uuid.toHexString(), .reason = "commit"});
     return makeError(journalError(result.error(), "cache event journal commit failed"));
   }
   return Void{};
@@ -229,6 +234,15 @@ Result<CacheEventJournalRecord> CacheEventJournal::prepare(const CacheEventInten
   accountedBytes_ += accounted;
   journalFull_ = operations_.size() + externalRecords_ >= maxRecords_ ||
                  saturatingAdd(accountedBytes_, externalBytes_) >= maxBytes_;
+  cache::metrics::recordCount(cache::metrics::Event::STORAGE_EVENT_PREPARED,
+                              1,
+                              {.diskId = intent.diskId.uuid.toHexString(),
+                               .generation = std::to_string(intent.generation.toUnderType()),
+                               .operationId = intent.storageOperationId.toHexString(),
+                               .sourceId = header_.sourceId.uuid.toHexString()});
+  cache::metrics::setGauge(cache::metrics::Event::STORAGE_EVENT_BACKLOG,
+                           operations_.size(),
+                           {.sourceId = header_.sourceId.uuid.toHexString()});
   return record;
 }
 
@@ -266,6 +280,13 @@ Result<CacheEventEnvelope> CacheEventJournal::markDeliverable(Uuid storageOperat
   existing->second = updated;
   deliveries_.emplace(envelope.sequence, envelope);
   header_ = nextHeader;
+  cache::metrics::recordCount(cache::metrics::Event::STORAGE_EVENT_DELIVERABLE,
+                              1,
+                              {.diskId = envelope.intent.diskId.uuid.toHexString(),
+                               .generation = std::to_string(envelope.intent.generation.toUnderType()),
+                               .operationId = envelope.intent.storageOperationId.toHexString(),
+                               .sourceId = envelope.sourceId.uuid.toHexString(),
+                               .sequence = envelope.sequence});
   return envelope;
 }
 
@@ -332,6 +353,12 @@ Result<Void> CacheEventJournal::acknowledge(uint64_t sequence) {
   header_ = nextHeader;
   journalFull_ = operations_.size() + externalRecords_ >= maxRecords_ ||
                  saturatingAdd(accountedBytes_, externalBytes_) >= maxBytes_;
+  cache::metrics::recordCount(cache::metrics::Event::STORAGE_EVENT_ACKNOWLEDGED,
+                              operations.size(),
+                              {.sourceId = header_.sourceId.uuid.toHexString(), .sequence = sequence});
+  cache::metrics::setGauge(cache::metrics::Event::STORAGE_EVENT_BACKLOG,
+                           operations_.size(),
+                           {.sourceId = header_.sourceId.uuid.toHexString()});
   return Void{};
 }
 

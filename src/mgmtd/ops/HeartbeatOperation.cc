@@ -97,6 +97,12 @@ flat::NodeInfo onNewNode(const flat::HeartbeatInfo &hb, UtcTime now) {
   if (hb.type() == flat::NodeType::META) {
     sn.cacheSchemaVersion = hb.asMeta().cacheSchemaVersion;
     sn.cacheProtocolVersion = hb.asMeta().cacheProtocolVersion;
+  } else if (hb.type() == flat::NodeType::STORAGE) {
+    sn.cacheSchemaVersion = hb.asStorage().cacheSchemaVersion;
+    sn.cacheProtocolVersion = hb.asStorage().cacheProtocolVersion;
+  } else if (hb.type() == flat::NodeType::MGMTD) {
+    sn.cacheSchemaVersion = hb.asMgmtd().cacheSchemaVersion;
+    sn.cacheProtocolVersion = hb.asMgmtd().cacheProtocolVersion;
   }
   return sn;
 }
@@ -110,6 +116,12 @@ flat::NodeInfo onNodeChanged(const flat::NodeInfo &oldNodeInfo, const flat::Hear
   if (hb.type() == flat::NodeType::META) {
     sn.cacheSchemaVersion = hb.asMeta().cacheSchemaVersion;
     sn.cacheProtocolVersion = hb.asMeta().cacheProtocolVersion;
+  } else if (hb.type() == flat::NodeType::STORAGE) {
+    sn.cacheSchemaVersion = hb.asStorage().cacheSchemaVersion;
+    sn.cacheProtocolVersion = hb.asStorage().cacheProtocolVersion;
+  } else if (hb.type() == flat::NodeType::MGMTD) {
+    sn.cacheSchemaVersion = hb.asMgmtd().cacheSchemaVersion;
+    sn.cacheProtocolVersion = hb.asMgmtd().cacheProtocolVersion;
   }
   return sn;
 }

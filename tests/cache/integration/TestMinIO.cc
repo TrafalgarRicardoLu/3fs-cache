@@ -23,7 +23,10 @@
 #include <vector>
 
 #include "cache/origin/s3/S3ObjectStore.h"
+#include "cache_manager/access/AccessAggregator.h"
 #include "cache_manager/admission/CapacityGate.h"
+#include "cache_manager/admission/SecondMissAdmissionPolicy.h"
+#include "cache_manager/eviction/LRUEvictionPolicy.h"
 #include "client/cache/CacheReadPipeline.h"
 #include "tests/GtestHelpers.h"
 
@@ -297,6 +300,11 @@ TEST_F(MinIOIntegration, ColdFillWarmMixedRefreshCapacityAndCleanup) {
   ASSERT_EQ(output, initial);
   ASSERT_GT(countingStore_->rangeRequests.load(), size_t{0});
 
+  cache_manager::SecondMissAdmissionPolicy admission(1'000'000, 1024);
+  cache::CacheBlockKey firstKey{inode.id.u64(), CacheBlockIndex{0}};
+  EXPECT_EQ(admission.evaluate({firstKey, 100}).action, cache_manager::AdmissionAction::BYPASS);
+  EXPECT_EQ(admission.evaluate({firstKey, 101}).action, cache_manager::AdmissionAction::ADMIT);
+
   for (uint32_t index = 0; uint64_t{index} * kBlockSize < initial.size(); ++index) {
     auto offset = uint64_t{index} * kBlockSize;
     auto length = std::min<uint64_t>(kBlockSize, initial.size() - offset);
@@ -311,6 +319,10 @@ TEST_F(MinIOIntegration, ColdFillWarmMixedRefreshCapacityAndCleanup) {
   ASSERT_OK(warm);
   ASSERT_EQ(output, initial);
   ASSERT_EQ(countingStore_->rangeRequests.load(), size_t{0});
+
+  cache_manager::AccessAggregator access(16);
+  ASSERT_TRUE(access.record({firstKey, CacheGeneration{1}, 1000}, 1100));
+  ASSERT_EQ(access.take(16).size(), size_t{1});
 
   blocks.erase(CacheBlockIndex{1});
   countingStore_->resetRangeRequests();
@@ -355,6 +367,19 @@ TEST_F(MinIOIntegration, ColdFillWarmMixedRefreshCapacityAndCleanup) {
       folly::coro::blockingWait(refreshedPipeline.read(flat::UserInfo{}, refreshedInode, session, 0, refreshedOutput)));
   ASSERT_EQ(countingStore_->rangeRequests.load(), size_t{0});
 
+  storage::PhysicalDiskId disk{Uuid::random()};
+  cache_manager::EvictionCandidate candidate{firstKey,
+                                             ReadyIdentity{1, CacheGeneration{1}, 1, 1, kBlockSize},
+                                             flat::ChainId{1},
+                                             kBlockSize,
+                                             UtcTime::fromMicroseconds(1),
+                                             UtcTime::fromMicroseconds(2),
+                                             {{disk, kBlockSize}}};
+  cache_manager::LRUEvictionPolicy eviction;
+  auto selected = eviction.select(std::span<const cache_manager::EvictionCandidate>{&candidate, 1},
+                                  {{{disk, kBlockSize}}, UtcTime::fromMicroseconds(3), 0_ns});
+  ASSERT_OK(selected);
+  ASSERT_EQ(*selected, std::vector<size_t>{0});
   refreshedBlocks.clear();
   countingStore_->resetRangeRequests();
   ASSERT_OK(

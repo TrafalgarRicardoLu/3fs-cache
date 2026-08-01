@@ -151,6 +151,10 @@ struct Phase2DiskStatus {
   SERDE_STRUCT_FIELD(eventPrepared, uint64_t{0});
   SERDE_STRUCT_FIELD(eventDeliverable, uint64_t{0});
   SERDE_STRUCT_FIELD(eventAcknowledgedSequence, uint64_t{0});
+  SERDE_STRUCT_FIELD(activeGenerations, uint64_t{0});
+  SERDE_STRUCT_FIELD(enforcedHighWatermark, double{0});
+  SERDE_STRUCT_FIELD(permitStoreHealthy, false);
+  SERDE_STRUCT_FIELD(eventJournalWritable, false);
 };
 struct GetPhase2CacheStatusRsp {
   SERDE_STRUCT_FIELD(enabled, false);
@@ -161,6 +165,10 @@ struct GetPhase2CacheStatusRsp {
   SERDE_STRUCT_FIELD(evicting, uint64_t{0});
   SERDE_STRUCT_FIELD(eventBacklog, uint64_t{0});
   SERDE_STRUCT_FIELD(deadLetters, uint64_t{0});
+  SERDE_STRUCT_FIELD(capacityHighWatermark, double{0});
+  SERDE_STRUCT_FIELD(capacityLowWatermark, double{0});
+  SERDE_STRUCT_FIELD(snapshotMaxAgeNs, uint64_t{0});
+  SERDE_STRUCT_FIELD(permitTtlNs, uint64_t{0});
 };
 
 SERDE_SERVICE(CacheManagerSerde, 1) {

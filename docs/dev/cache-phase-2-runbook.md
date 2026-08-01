@@ -26,7 +26,10 @@ condition.
 
 ## Upgrade
 
-1. Stop Phase 1 admission while reads continue to fall back to origin.
+1. Run `cache-phase2-rollout drain`. This atomically persists the cluster
+   `DRAINING` state before cleanup, so upgraded Phase 1 and Phase 2 Managers
+   stop admission while reads continue to fall back to origin. Rerun with
+   `--max-blocks` until the reported Metadata record count reaches zero.
 2. Fenced-clean all Phase 1 READY records and wait for Metadata READY,
    LOADING, CLEANING, and EVICTING counts to reach zero.
 3. Query every cache target and verify there is no ACTIVE cache generation.
@@ -34,9 +37,13 @@ condition.
    recovery of arbitrary cross-version LOADING work.
 4. Upgrade Metadata and Storage, then Cache Manager and clients. Keep Phase 2
    disabled.
-5. Run the inventory checks above. Enable the cluster capability first, then
-   enable Storage and Cache Manager. Enabling is retryable once the complete
-   inventory is healthy.
+5. Run `cache-phase2-rollout status` and the inventory checks above. The
+   command reports Metadata records, per-disk ACTIVE generation counts,
+   event backlog/dead letters, and disk health. Then run
+   `cache-phase2-rollout enable`. Mgmtd commits `ENABLED` only if the current
+   state is `DRAINING`, inventory is empty, and every active Metadata,
+   Storage, and Mgmtd node plus the Manager and Client capabilities meet the
+   Phase 2 schema/protocol version. The transition is retryable and atomic.
 6. Confirm fresh disk snapshots, a non-zero Manager epoch, zero event backlog,
    and successful permit prepare/consume before restoring admission.
 
@@ -48,7 +55,10 @@ condition.
    to be ACKed. A recorded replica that is still ACTIVE blocks rollback.
 3. Fenced-clean remaining READY records and verify Metadata nonterminal counts
    and Storage ACTIVE generations are both zero.
-4. Disable Phase 2 in Cache Manager, Storage, and cluster capability order.
+4. Keep the cluster in `DRAINING`; after `cache-phase2-rollout status` reports
+   a healthy empty inventory, run `cache-phase2-rollout disable`. Mgmtd rejects
+   a direct `ENABLED` to `DISABLED` transition or a disable with non-empty
+   inventory. Then disable Phase 2 in Cache Manager and Storage configuration.
 5. Only then deploy Phase 1 binaries. Phase 1 binaries must never see Phase 2
    descriptor/event data.
 

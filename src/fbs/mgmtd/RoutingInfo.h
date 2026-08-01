@@ -8,6 +8,14 @@
 #include "common/utils/RobinHoodUtils.h"
 
 namespace hf3fs::flat {
+enum class CachePhase2RolloutState : uint8_t {
+  DISABLED = 0,
+  DRAINING = 1,
+  ENABLED = 2,
+};
+
+inline constexpr std::string_view kCachePhase2RolloutTagId = "cache.phase2.rollout";
+
 struct RoutingInfo : public serde::SerdeHelper<RoutingInfo> {
   // return nullptr if not found
   const ChainTable *getChainTable(ChainTableId tableId, ChainTableVersion tableVersion = ChainTableVersion(0)) const;
@@ -47,5 +55,6 @@ struct RoutingInfo : public serde::SerdeHelper<RoutingInfo> {
   SERDE_STRUCT_FIELD(chainTables, ChainTableMap{});
   SERDE_STRUCT_FIELD(chains, ChainMap{});
   SERDE_STRUCT_FIELD(targets, TargetMap{});
+  SERDE_STRUCT_FIELD(cachePhase2State, CachePhase2RolloutState::DISABLED);
 };
 }  // namespace hf3fs::flat

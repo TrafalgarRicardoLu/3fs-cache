@@ -1,5 +1,6 @@
 #include "cache_manager/service/CacheManagerOperator.h"
 
+#include <cmath>
 #include <folly/experimental/coro/BlockingWait.h>
 #include <limits>
 
@@ -305,7 +306,12 @@ CoTryTask<GetPhase2CacheStatusRsp> CacheManagerOperator::getPhase2CacheStatus(co
   response.managerEpoch = managerEpoch_;
   response.admissionPolicy = config_.admission_policy();
   response.evictionPolicy = config_.eviction_policy();
+  response.capacityHighWatermark = config_.capacity_high_watermark();
+  response.capacityLowWatermark = config_.capacity_low_watermark();
+  response.snapshotMaxAgeNs = config_.space_snapshot_max_age().asUs().count() * 1000;
+  response.permitTtlNs = config_.storage_permit_ttl().asUs().count() * 1000;
   auto now = SteadyClock::now();
+  auto pressured = evictionPressure_ ? evictionPressure_->snapshot() : std::set<storage::PhysicalDiskId>{};
   if (physicalTopology_) {
     for (const auto &[diskId, snapshot] : physicalTopology_->snapshots()) {
       Phase2DiskStatus disk;
@@ -315,6 +321,10 @@ CoTryTask<GetPhase2CacheStatusRsp> CacheManagerOperator::getPhase2CacheStatus(co
       disk.physicalUsedBytes = snapshot.space.physicalUsedBytes;
       disk.allocatableBytes = snapshot.space.allocatableBytes;
       disk.reservedBytes = snapshot.space.reservedBytes;
+      disk.activeGenerations = snapshot.space.activeGenerations;
+      disk.enforcedHighWatermark = snapshot.space.enforcedHighWatermark;
+      disk.permitStoreHealthy = snapshot.space.permitStoreHealthy;
+      disk.eventJournalWritable = snapshot.space.eventJournalWritable;
       disk.eventPrepared = snapshot.space.eventPrepared;
       disk.eventDeliverable = snapshot.space.eventDeliverable;
       disk.eventAcknowledgedSequence = snapshot.space.eventAcknowledgedSequence;
@@ -325,6 +335,23 @@ CoTryTask<GetPhase2CacheStatusRsp> CacheManagerOperator::getPhase2CacheStatus(co
       disk.admissionPaused =
           disk.snapshotAgeNs > static_cast<uint64_t>(config_.space_snapshot_max_age().asUs().count()) * 1000;
       if (disk.admissionPaused) disk.pauseReason = "stale_space_snapshot";
+      if (pressured.contains(diskId)) {
+        disk.admissionPaused = true;
+        disk.pauseReason = "capacity_watermark";
+      }
+      if (std::abs(disk.enforcedHighWatermark - config_.capacity_high_watermark()) >
+          std::numeric_limits<double>::epsilon()) {
+        disk.admissionPaused = true;
+        disk.pauseReason = "watermark_mismatch";
+      }
+      if (!disk.permitStoreHealthy) {
+        disk.admissionPaused = true;
+        disk.pauseReason = "permit_store_unavailable";
+      }
+      if (!disk.eventJournalWritable) {
+        disk.admissionPaused = true;
+        disk.pauseReason = "event_journal_unwritable";
+      }
       response.disks.push_back(std::move(disk));
     }
   }

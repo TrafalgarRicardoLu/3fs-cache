@@ -1569,6 +1569,10 @@ Result<CachePermitResult> StorageOperator::prepareLocalPermit(const CachePermitR
       XLOGF_IF(ERR, rollback.hasError(), "rollback local cache permit failed: {}", rollback.error());
     }
   }
+  cache::metrics::recordCount(cache::metrics::Event::STORAGE_PERMIT_RESULT,
+                              1,
+                              {.epoch = item.permit.managerEpoch.toHexString(),
+                               .reason = result.hasValue() ? "prepare_success" : "prepare_failed"});
   return result;
 }
 
@@ -1579,6 +1583,10 @@ Result<CachePermitResult> StorageOperator::renewLocalPermit(const CachePermitReq
     result = disk.gate->renew(item, nowNs);
     if (!result) break;
   }
+  cache::metrics::recordCount(cache::metrics::Event::STORAGE_PERMIT_RESULT,
+                              1,
+                              {.epoch = item.permit.managerEpoch.toHexString(),
+                               .reason = result.hasValue() ? "renew_success" : "renew_failed"});
   return result;
 }
 
@@ -1589,6 +1597,10 @@ Result<Void> StorageOperator::releaseLocalPermit(const PermitIdentity &permit, u
     result = gate->release(permit, nowNs);
     if (!result) break;
   }
+  cache::metrics::recordCount(
+      cache::metrics::Event::STORAGE_PERMIT_RESULT,
+      1,
+      {.epoch = permit.managerEpoch.toHexString(), .reason = result.hasValue() ? "release_success" : "release_failed"});
   return result;
 }
 
@@ -1617,6 +1629,10 @@ Result<CachePermitResult> StorageOperator::pinLocalPermit(const PermitIdentity &
       XLOGF_IF(ERR, rollback.hasError(), "rollback pinned cache permit failed: {}", rollback.error());
     }
   }
+  cache::metrics::recordCount(
+      cache::metrics::Event::STORAGE_PERMIT_RESULT,
+      1,
+      {.epoch = permit.managerEpoch.toHexString(), .reason = result.hasValue() ? "pin_success" : "pin_failed"});
   return result;
 }
 
@@ -1627,6 +1643,10 @@ Result<Void> StorageOperator::consumeLocalPermit(const PermitIdentity &permit) {
     auto consumed = gate->consume(permit);
     if (consumed.hasError() && result.hasValue()) result = makeError(std::move(consumed.error()));
   }
+  cache::metrics::recordCount(
+      cache::metrics::Event::STORAGE_PERMIT_RESULT,
+      1,
+      {.epoch = permit.managerEpoch.toHexString(), .reason = result.hasValue() ? "consume_success" : "consume_failed"});
   return result;
 }
 
@@ -1699,11 +1719,14 @@ CoTryTask<QueryCacheSpaceRsp> StorageOperator::queryCacheSpace(const QueryCacheS
                           info.cacheReservedBytes,
                           info.enforcedAdmissionHighWatermark,
                           info.sampledAtNs};
+    result.activeGenerations = info.activeCacheGenerations;
+    result.permitStoreHealthy = components_.storageTargets.cacheSpaceGate(info.physicalDiskId) != nullptr;
     if (auto journal = components_.storageTargets.cacheEventJournal(info.physicalDiskId)) {
       auto stats = journal->stats();
       result.eventPrepared = stats.prepared;
       result.eventDeliverable = stats.deliverable;
       result.eventAcknowledgedSequence = stats.acknowledgedSequence;
+      result.eventJournalWritable = stats.writable;
     }
     return result;
   };

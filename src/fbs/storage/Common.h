@@ -656,6 +656,7 @@ struct SpaceInfo {
   SERDE_STRUCT_FIELD(cacheReservedBytes, uint64_t{0});
   SERDE_STRUCT_FIELD(enforcedAdmissionHighWatermark, double{0});
   SERDE_STRUCT_FIELD(sampledAtNs, uint64_t{0});
+  SERDE_STRUCT_FIELD(activeCacheGenerations, uint64_t{0});
 };
 static_assert(serde::Serializable<SpaceInfo>);
 

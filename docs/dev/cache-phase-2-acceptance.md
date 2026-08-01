@@ -48,3 +48,56 @@ mgmtd tests, then the complete CTest suite and Rust workspace tests. Run the
 MinIO qualification scenario with injected component restarts. Archive test
 commands, versions, routing inventory, phase-two status before/after, event
 backlog/dead-letter counts, and the result of each invariant above.
+
+## Automated evidence map
+
+The acceptance cases are implemented by the following focused suites; these
+names are stable evidence labels rather than a replacement for the full CTest
+run:
+
+- admission, permit crash/recovery, foreground fallback, and Manager restart:
+  `Phase2EnsureCachedTest`, `TestPermitRecovery`, `TestCacheLoader`, and
+  `TestEvictingWorker`;
+- physical accounting, chain isolation, watermarks, policies, malicious
+  selections, and route changes: `TestPhysicalCapacity`,
+  `TestEvictionController`, `TestEvictionPolicy`, `TestEvictionCandidates`,
+  `TestLocalEvictionPolicy`, and `TestLocalSafetyEvictor`;
+- durable replica retirement and crash replay: `TestReplicaRetireOperation`
+  and `TestRetireCoordinator`;
+- PREPARED through ACK/reclaim crash windows and non-blocking event ordering:
+  `TestCacheEventJournal`;
+- duplicate/reordered event state matrix and exactly-once logical release:
+  `TestCacheStorageEvents` and `TestCacheStateMachine`;
+- rollout, half-upgrade, retry, and rollback gates: `CachePhase2Rollout` and
+  `CacheChainTable`;
+- MinIO miss, second-miss admission, warm hit, access aggregation, LRU
+  eviction, and origin fallback:
+  `MinIOIntegration.ColdFillWarmMixedRefreshCapacityAndCleanup`.
+
+`cache-phase2-rollout enable` additionally requires live inventory evidence:
+zero Metadata records, zero Storage ACTIVE generations, zero EVICTING/event
+backlog/dead letters, fresh CACHE_ONLY disk snapshots, and matching component
+capabilities. This prevents a unit-test-only qualification from enabling a
+real cluster.
+
+## Local qualification evidence
+
+The 2026-08-01 clean `RelWithDebInfo` qualification used Clang 14, AWS SDK C++
+1.10.55, and MinIO `RELEASE.2025-09-07T16-13-09Z`. The following final runs
+passed:
+
+- registered CTest targets `test_cache`, `test_cache_minio`,
+  `test_cache_manager`, and `test_admin_cli`: 4/4;
+- cache protocol, metrics, and serde contracts: 29/29;
+- Manager admission, permits, physical capacity, and eviction: 68/68;
+- mgmtd capability and rollout transitions: 7/7;
+- Metadata cache capacity, state, event, and read-plan cases: 31/31;
+- Storage event journal, local access/LRU, local safety, and retirement cases:
+  23/23;
+- real MinIO boundary and cold-fill/warm-hit/eviction/fallback scenarios: 2/2;
+- `cargo build --release` and Clang 14 format validation.
+
+The complete repository CTest registration also contains services that need
+additional executables, FoundationDB/RDMA/io_uring setup, or external AWS S3
+credentials. Those environment-specific suites are not replaced by this local
+qualification and remain required in the deployment CI environment.

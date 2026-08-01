@@ -22,10 +22,10 @@ CacheChunkDescriptor descriptor(uint64_t generation, uint64_t accessAtNs) {
           accessAtNs};
 }
 
-ReplaceCacheChunkItem replaceItem(ChunkId chunkId, uint64_t generation) {
+ReplaceCacheChunkItem replaceItem(ChunkId chunkId, ChainId chainId, uint64_t generation) {
   ReplaceCacheChunkItem item;
   item.key.chunkId = chunkId;
-  item.key.vChainId = VersionedChainId{ChainId{1}, ChainVer{1}};
+  item.key.vChainId = VersionedChainId{chainId, ChainVer{1}};
   item.cacheGeneration = cache::CacheGeneration{generation};
   item.operationId = Uuid::from(8, generation);
   item.data = {'c', 'a', 'c', 'h', 'e'};
@@ -116,7 +116,6 @@ TEST(TestLocalCacheAccess, PersistsAcrossRestartAndFencesOldGeneration) {
     }
 
     const ChunkId chunkId{0xAC, static_cast<uint8_t>(chunkEngine)};
-    auto first = replaceItem(chunkId, 1);
     {
       AtomicallyTargetMap targetMap;
       StorageTargets targets(config, targetMap);
@@ -124,6 +123,7 @@ TEST(TestLocalCacheAccess, PersistsAcrossRestartAndFencesOldGeneration) {
       auto targetResult = targetMap.snapshot()->getTarget(TargetId{1});
       ASSERT_OK(targetResult);
       auto target = (*targetResult)->storageTarget;
+      auto first = replaceItem(chunkId, target->chainId(), 1);
       folly::CPUThreadPoolExecutor background(2);
       ASSERT_OK(target->replaceCacheChunk(first, background));
       auto persisted =
@@ -148,7 +148,7 @@ TEST(TestLocalCacheAccess, PersistsAcrossRestartAndFencesOldGeneration) {
       ASSERT_EQ((*restored)->lastAccessAtNs, 2000);
 
       folly::CPUThreadPoolExecutor background(2);
-      auto second = replaceItem(chunkId, 2);
+      auto second = replaceItem(chunkId, target->chainId(), 2);
       ASSERT_OK(target->replaceCacheChunk(second, background));
       auto stale = folly::coro::blockingWait(target->recordCacheAccess(chunkId, cache::CacheGeneration{1}, 3000, 1_ns));
       ASSERT_OK(stale);

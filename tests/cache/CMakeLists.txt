@@ -1,7 +1,7 @@
 file(GLOB_RECURSE CACHE_UNIT_TEST_FILES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.cc")
 list(FILTER CACHE_UNIT_TEST_FILES EXCLUDE REGEX "^integration/")
 add_executable(test_cache ${CACHE_UNIT_TEST_FILES})
-target_link_libraries(test_cache gmock test_main cache-origin cache-metrics cache-fbs common)
+target_link_libraries(test_cache gmock test_main cache-origin cache-metrics cache-fbs storage-fbs common)
 target_include_directories(test_cache PUBLIC ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}
                                             ${PROJECT_BINARY_DIR}/src ${PROJECT_BINARY_DIR})
 add_test(NAME test_cache COMMAND test_cache)

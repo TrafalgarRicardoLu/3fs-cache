@@ -4,6 +4,8 @@
 #include <folly/logging/xlog.h>
 #include <limits>
 
+#include "cache/metrics/CacheMetrics.h"
+
 namespace hf3fs::cache_manager {
 namespace {
 
@@ -107,6 +109,7 @@ CoTryTask<EvictionRunResult> EvictionController::runOnce(SteadyTime steadyNow, U
   result.deficits = *deficits;
   if (result.deficits.empty()) {
     result.targetMet = true;
+    cache::metrics::recordCount(cache::metrics::Event::MANAGER_EVICTION_RESULT, 1, {.reason = "not_pressured"});
     co_return result;
   }
 
@@ -127,6 +130,7 @@ CoTryTask<EvictionRunResult> EvictionController::runOnce(SteadyTime steadyNow, U
   }
   if (items.empty()) {
     XLOGF(WARN, "Cache eviction candidates cannot satisfy {} pressured disks", result.deficits.size());
+    cache::metrics::recordCount(cache::metrics::Event::MANAGER_EVICTION_RESULT, 1, {.reason = "no_candidates"});
     co_return result;
   }
 
@@ -157,6 +161,9 @@ CoTryTask<EvictionRunResult> EvictionController::runOnce(SteadyTime steadyNow, U
           result.selected,
           result.deficits.size());
   }
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_EVICTION_RESULT,
+                              result.begun,
+                              {.reason = result.targetMet ? "target_met" : "target_not_met"});
   co_return result;
 }
 

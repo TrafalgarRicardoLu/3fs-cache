@@ -15,15 +15,29 @@ TEST_F(TestCacheMetrics, RecordsCountsAndIdentitySafeTags) {
   tags.inode = 101;
   tags.block = 7;
   tags.originId = 3;
+  tags.diskId = "disk-identity";
+  tags.generation = "generation-identity";
+  tags.epoch = "epoch-identity";
+  tags.operationId = "operation-identity";
+  tags.sourceId = "source-identity";
+  tags.sequence = 9;
   tags.reason = "capacity";
 
   recordCount(Event::MANAGER_ADMISSION_RESULT, 5, tags);
+  recordCount(Event::STORAGE_PERMIT_RESULT, 2, tags);
 
   ASSERT_EQ(countForTest(Event::MANAGER_ADMISSION_RESULT), uint64_t{5});
+  ASSERT_EQ(countForTest(Event::STORAGE_PERMIT_RESULT), uint64_t{2});
   auto recorded = lastTagsForTest(Event::MANAGER_ADMISSION_RESULT);
   ASSERT_EQ(recorded.inode, tags.inode);
   ASSERT_EQ(recorded.block, tags.block);
   ASSERT_EQ(recorded.originId, tags.originId);
+  ASSERT_EQ(recorded.diskId, tags.diskId);
+  ASSERT_EQ(recorded.generation, tags.generation);
+  ASSERT_EQ(recorded.epoch, tags.epoch);
+  ASSERT_EQ(recorded.operationId, tags.operationId);
+  ASSERT_EQ(recorded.sourceId, tags.sourceId);
+  ASSERT_EQ(recorded.sequence, tags.sequence);
   ASSERT_EQ(recorded.reason, tags.reason);
 }
 

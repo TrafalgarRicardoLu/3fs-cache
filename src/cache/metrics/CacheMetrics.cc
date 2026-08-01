@@ -22,6 +22,12 @@ monitor::TagSet toTagSet(const Tags &tags) {
   if (tags.inode) result.addTag("inode", std::to_string(*tags.inode));
   if (tags.block) result.addTag("block", std::to_string(*tags.block));
   if (tags.originId) result.addTag("origin_id", std::to_string(*tags.originId));
+  if (!tags.diskId.empty()) result.addTag("disk_id", tags.diskId);
+  if (!tags.generation.empty()) result.addTag("generation", tags.generation);
+  if (!tags.epoch.empty()) result.addTag("epoch", tags.epoch);
+  if (!tags.operationId.empty()) result.addTag("operation_id", tags.operationId);
+  if (!tags.sourceId.empty()) result.addTag("source_id", tags.sourceId);
+  if (tags.sequence) result.addTag("sequence", std::to_string(*tags.sequence));
   if (!tags.reason.empty()) result.addTag("reason", tags.reason);
   return result;
 }
@@ -50,6 +56,14 @@ monitor::CountRecorder &countRecorder(Event event) {
     CACHE_COUNT_RECORDER(MANAGER_ADMISSION_RESULT, "cache.manager.admission_result");
     CACHE_COUNT_RECORDER(MANAGER_LOADER_RESULT, "cache.manager.loader_result");
     CACHE_COUNT_RECORDER(MANAGER_CLEANUP_RESULT, "cache.manager.cleanup_result");
+    CACHE_COUNT_RECORDER(MANAGER_SPACE_QUERY, "cache.manager.space_query");
+    CACHE_COUNT_RECORDER(MANAGER_PREFLIGHT_RESULT, "cache.manager.preflight_result");
+    CACHE_COUNT_RECORDER(MANAGER_EVICTION_RESULT, "cache.manager.eviction_result");
+    CACHE_COUNT_RECORDER(STORAGE_PERMIT_RESULT, "cache.storage.permit_result");
+    CACHE_COUNT_RECORDER(STORAGE_EVENT_PREPARED, "cache.storage.event_prepared");
+    CACHE_COUNT_RECORDER(STORAGE_EVENT_DELIVERABLE, "cache.storage.event_deliverable");
+    CACHE_COUNT_RECORDER(STORAGE_EVENT_ACKNOWLEDGED, "cache.storage.event_acknowledged");
+    CACHE_COUNT_RECORDER(STORAGE_EVENT_JOURNAL_FAILURE, "cache.storage.event_journal_failure");
     CACHE_COUNT_RECORDER(STORAGE_GENERATION_REPLACE, "cache.storage.generation_replace");
     CACHE_COUNT_RECORDER(STORAGE_GENERATION_STALE, "cache.storage.generation_stale");
     CACHE_COUNT_RECORDER(STORAGE_TOMBSTONE, "cache.storage.tombstone");
@@ -86,6 +100,11 @@ monitor::ValueRecorder &gaugeRecorder(Event event) {
   switch (event) {
     CACHE_GAUGE_RECORDER(MANAGER_QUEUE, "cache.manager.queue");
     CACHE_GAUGE_RECORDER(MANAGER_INFLIGHT_BYTES, "cache.manager.inflight_bytes");
+    CACHE_GAUGE_RECORDER(MANAGER_PHYSICAL_USED_BYTES, "cache.manager.physical_used_bytes");
+    CACHE_GAUGE_RECORDER(MANAGER_ALLOCATABLE_BYTES, "cache.manager.allocatable_bytes");
+    CACHE_GAUGE_RECORDER(MANAGER_RESERVED_BYTES, "cache.manager.reserved_bytes");
+    CACHE_GAUGE_RECORDER(MANAGER_SNAPSHOT_AGE_NS, "cache.manager.snapshot_age_ns");
+    CACHE_GAUGE_RECORDER(STORAGE_EVENT_BACKLOG, "cache.storage.event_backlog");
     default:
       static monitor::ValueRecorder invalid{"cache.invalid_gauge_event", std::nullopt, false};
       return invalid;

@@ -5,6 +5,7 @@
 #include "common/app/ApplicationBase.h"
 #include "common/monitor/Recorder.h"
 #include "common/utils/LogCommands.h"
+#include "fbs/cache/Common.h"
 #include "stubs/common/RealStubFactory.h"
 #include "stubs/mgmtd/MgmtdServiceStub.h"
 
@@ -241,6 +242,8 @@ void Components::triggerHeartbeatIfNeed() {
 
 void Components::updateHeartbeatPayload(const TargetMap &targetMap, bool offline /* = false */) {
   flat::StorageHeartbeatInfo heartbeat;
+  heartbeat.cacheSchemaVersion = cache::kCacheSchemaVersion;
+  heartbeat.cacheProtocolVersion = cache::kCacheProtocolVersion;
   for (auto &[targetId, target] : targetMap.getTargets()) {
     flat::LocalTargetInfo targetInfo;
     targetInfo.targetId = targetId;

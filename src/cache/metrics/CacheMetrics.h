@@ -26,6 +26,19 @@ enum class Event : uint8_t {
   MANAGER_ADMISSION_RESULT,
   MANAGER_LOADER_RESULT,
   MANAGER_CLEANUP_RESULT,
+  MANAGER_SPACE_QUERY,
+  MANAGER_PHYSICAL_USED_BYTES,
+  MANAGER_ALLOCATABLE_BYTES,
+  MANAGER_RESERVED_BYTES,
+  MANAGER_SNAPSHOT_AGE_NS,
+  MANAGER_PREFLIGHT_RESULT,
+  MANAGER_EVICTION_RESULT,
+  STORAGE_PERMIT_RESULT,
+  STORAGE_EVENT_PREPARED,
+  STORAGE_EVENT_DELIVERABLE,
+  STORAGE_EVENT_ACKNOWLEDGED,
+  STORAGE_EVENT_BACKLOG,
+  STORAGE_EVENT_JOURNAL_FAILURE,
   STORAGE_GENERATION_REPLACE,
   STORAGE_GENERATION_STALE,
   STORAGE_TOMBSTONE,
@@ -36,6 +49,12 @@ struct Tags {
   std::optional<uint64_t> inode;
   std::optional<uint32_t> block;
   std::optional<uint32_t> originId;
+  std::string diskId;
+  std::string generation;
+  std::string epoch;
+  std::string operationId;
+  std::string sourceId;
+  std::optional<uint64_t> sequence;
   std::string reason;
 };
 

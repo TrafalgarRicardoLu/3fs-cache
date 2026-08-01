@@ -22,6 +22,8 @@ class StorageHeartbeatInfo : public serde::SerdeHelper<StorageHeartbeatInfo> {
   static constexpr auto kTypeCode = NodeType::STORAGE;
 
   SERDE_STRUCT_FIELD(targets, std::vector<LocalTargetInfo>{});
+  SERDE_STRUCT_FIELD(cacheSchemaVersion, uint32_t{0});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
 };
 
 class MgmtdHeartbeatInfo : public serde::SerdeHelper<MgmtdHeartbeatInfo> {
@@ -29,6 +31,8 @@ class MgmtdHeartbeatInfo : public serde::SerdeHelper<MgmtdHeartbeatInfo> {
   static constexpr auto kTypeCode = NodeType::MGMTD;
 
   SERDE_STRUCT_FIELD(dummy, Void{});
+  SERDE_STRUCT_FIELD(cacheSchemaVersion, uint32_t{0});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
 };
 
 class HeartbeatInfo : public serde::SerdeHelper<HeartbeatInfo> {

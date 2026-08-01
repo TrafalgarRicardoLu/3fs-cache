@@ -626,6 +626,7 @@ Result<std::vector<SpaceInfo>> StorageTargets::spaceInfos(bool force) {
 
   std::unordered_map<std::string, CacheTargetPhysicalUsage> cacheUsage;
   std::unordered_map<std::string, uint64_t> diskUnusedSize;
+  std::unordered_map<std::string, uint64_t> activeCacheGenerations;
   std::unordered_map<std::string, std::vector<hf3fs::flat::TargetId>> pathToTargetIds;
   auto snapshot = targetMap_.snapshot();
   for (auto &[targetId, target] : snapshot->getTargets()) {
@@ -638,6 +639,11 @@ Result<std::vector<SpaceInfo>> StorageTargets::spaceInfos(bool force) {
         diskUsage.activeBytes = saturatingAdd(diskUsage.activeBytes, usage.activeBytes);
         diskUsage.reservedBytes = saturatingAdd(diskUsage.reservedBytes, usage.reservedBytes);
         diskUsage.unrecycledBytes = saturatingAdd(diskUsage.unrecycledBytes, usage.unrecycledBytes);
+      }
+      if (target.storageRole == StorageRole::CACHE_ONLY) {
+        CHECK_RESULT(active, target.storageTarget->listActiveCacheChunks());
+        activeCacheGenerations[target.path.parent_path().string()] =
+            saturatingAdd(activeCacheGenerations[target.path.parent_path().string()], active.size());
       }
     }
   }
@@ -673,6 +679,7 @@ Result<std::vector<SpaceInfo>> StorageTargets::spaceInfos(bool force) {
       info.cacheReservedBytes = capacity.reservedBytes;
       info.cacheAllocatableBytes = capacity.allocatableBytes;
       info.cacheCapacityBytes = capacity.capacityBytes;
+      info.activeCacheGenerations = activeCacheGenerations[info.path];
       auto gate = cacheSpaceGate(info.physicalDiskId);
       if (gate != nullptr) {
         CHECK_RESULT(permitReserved,

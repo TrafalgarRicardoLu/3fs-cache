@@ -3,6 +3,8 @@
 #include <limits>
 #include <set>
 
+#include "cache/metrics/CacheMetrics.h"
+
 namespace hf3fs::cache_manager {
 namespace {
 
@@ -57,7 +59,10 @@ Result<PhysicalPreflight::Reservation> PhysicalPreflight::tryReserve(flat::Chain
                                                                      const storage::FootprintByTarget &footprints,
                                                                      SteadyTime now) {
   auto resolved = topology_.resolve(chainId, now, maxAge_, highWatermark_);
-  RETURN_ON_ERROR(resolved);
+  if (resolved.hasError()) {
+    cache::metrics::recordCount(cache::metrics::Event::MANAGER_PREFLIGHT_RESULT, 1, {.reason = "topology_rejected"});
+    return makeError(resolved.error());
+  }
   if (footprints.size() != resolved->replicas.size()) {
     return makeError(CacheCode::kPlacementMismatch, "cache footprint replica set is incomplete");
   }
@@ -79,6 +84,9 @@ Result<PhysicalPreflight::Reservation> PhysicalPreflight::tryReserve(flat::Chain
   std::scoped_lock lock(state_->mutex);
   for (const auto &[diskId, requested] : byDisk) {
     if (pressure_ && pressure_->contains(diskId)) {
+      cache::metrics::recordCount(cache::metrics::Event::MANAGER_PREFLIGHT_RESULT,
+                                  1,
+                                  {.diskId = diskId.uuid.toHexString(), .reason = "pressured"});
       return makeError(CacheCode::kCapacityExceeded, "cache admission paused for pressured disk");
     }
     const auto &space = resolved->disks.at(diskId).space;
@@ -93,10 +101,14 @@ Result<PhysicalPreflight::Reservation> PhysicalPreflight::tryReserve(flat::Chain
     auto projectedRatio = static_cast<double>(projected) / static_cast<double>(space.capacityBytes);
     if (projectedRatio >= highWatermark_ || addOverflows(local, requested) ||
         local + requested > space.allocatableBytes) {
+      cache::metrics::recordCount(cache::metrics::Event::MANAGER_PREFLIGHT_RESULT,
+                                  1,
+                                  {.diskId = diskId.uuid.toHexString(), .reason = "capacity"});
       return makeError(CacheCode::kCapacityExceeded, "cache physical preflight rejected");
     }
   }
   for (const auto &[diskId, bytes] : byDisk) state_->reserved[diskId] += bytes;
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_PREFLIGHT_RESULT, 1, {.reason = "reserved"});
   return Reservation(state_, std::move(byDisk));
 }
 
