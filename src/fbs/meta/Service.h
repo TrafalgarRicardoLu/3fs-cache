@@ -1456,6 +1456,7 @@ struct AppendPrefetchPlanReq : ReqBase {
   SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
   SERDE_STRUCT_FIELD(jobId, cache::PrefetchJobId{});
   SERDE_STRUCT_FIELD(entries, std::vector<cache::PrefetchPlanEntry>{});
+  SERDE_STRUCT_FIELD(plannerSourceIndex, uint32_t{});
   SERDE_STRUCT_FIELD(plannerCursor, String{});
   SERDE_STRUCT_FIELD(planningComplete, false);
   SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
@@ -1464,10 +1465,11 @@ struct AppendPrefetchPlanReq : ReqBase {
   Result<Void> valid() const {
     RETURN_ON_ERROR(service.valid());
     if (jobId == cache::PrefetchJobId{}) return INVALID("prefetch job id not set");
-    if (entries.empty() || entries.size() > kMaxCacheBatchItems)
+    if ((!planningComplete && entries.empty()) || entries.size() > kMaxCacheBatchItems)
       return makeError(CacheCode::kRequestTooLarge, "invalid prefetch plan page size");
     if (plannerCursor.size() > cache::kMaxDatasetPathLength)
       return makeError(CacheCode::kRequestTooLarge, "planner cursor too large");
+    if (plannerSourceIndex > cache::kMaxDatasetSources) return INVALID("planner source index is out of range");
     for (const auto &entry : entries) {
       RETURN_ON_ERROR(entry.valid());
       if (entry.jobId != jobId) return INVALID("prefetch plan entry belongs to another job");

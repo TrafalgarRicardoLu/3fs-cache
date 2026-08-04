@@ -199,6 +199,9 @@ struct PrefetchJobRecord {
   SERDE_STRUCT_FIELD(failedBlocks, uint64_t{});
   SERDE_STRUCT_FIELD(cancelEpoch, uint64_t{});
   SERDE_STRUCT_FIELD(error, std::string{});
+  SERDE_STRUCT_FIELD(plannerSourceIndex, uint32_t{});
+  SERDE_STRUCT_FIELD(plannerCursor, std::string{});
+  SERDE_STRUCT_FIELD(planningComplete, false);
 
  public:
   Result<Void> valid() const;

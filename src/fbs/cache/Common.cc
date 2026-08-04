@@ -262,6 +262,11 @@ Result<Void> PrefetchJobRecord::valid() const {
   if (state == PrefetchJobState::CANCELLED && cancelEpoch == 0) {
     return makeError(StatusCode::kInvalidArg, "cancelled prefetch job has no cancel epoch");
   }
+  if (plannerSourceIndex > spec.sources.size() || plannerCursor.size() > kMaxDatasetPathLength ||
+      (planningComplete && plannerSourceIndex != spec.sources.size()) ||
+      (!planningComplete && plannerSourceIndex == spec.sources.size())) {
+    return makeError(StatusCode::kInvalidArg, "invalid prefetch planner cursor");
+  }
   return Void{};
 }
 

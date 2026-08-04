@@ -20,7 +20,8 @@ Result<Void> validInitialJob(const cache::PrefetchJobRecord &job) {
   RETURN_ON_ERROR(job.valid());
   if (job.state != cache::PrefetchJobState::PENDING || job.stateVersion != 1 || job.plannedBytes != 0 ||
       job.readyBytes != 0 || job.failedBytes != 0 || job.plannedBlocks != 0 || job.readyBlocks != 0 ||
-      job.failedBlocks != 0 || job.cancelEpoch != 0 || !job.error.empty()) {
+      job.failedBlocks != 0 || job.cancelEpoch != 0 || !job.error.empty() || job.plannerSourceIndex != 0 ||
+      !job.plannerCursor.empty() || job.planningComplete) {
     return makeError(StatusCode::kInvalidArg, "prefetch job is not in its initial state");
   }
   return Void{};
