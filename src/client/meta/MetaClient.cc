@@ -999,6 +999,16 @@ META_CACHE_CLIENT_METHOD(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, Li
 META_CACHE_CLIENT_METHOD(listReadyCacheBlocks, ListReadyCacheBlocksReq, ListReadyCacheBlocksRsp);
 META_CACHE_CLIENT_METHOD(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
 META_CACHE_CLIENT_METHOD(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
+META_CACHE_CLIENT_METHOD(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+META_CACHE_CLIENT_METHOD(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
+META_CACHE_CLIENT_METHOD(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+META_CACHE_CLIENT_METHOD(updatePrefetchJob, UpdatePrefetchJobReq, UpdatePrefetchJobRsp);
+META_CACHE_CLIENT_METHOD(appendPrefetchPlan, AppendPrefetchPlanReq, AppendPrefetchPlanRsp);
+META_CACHE_CLIENT_METHOD(listPrefetchPlan, ListPrefetchPlanReq, ListPrefetchPlanRsp);
+META_CACHE_CLIENT_METHOD(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp);
+META_CACHE_CLIENT_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
+META_CACHE_CLIENT_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
+META_CACHE_CLIENT_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
 #undef META_CACHE_CLIENT_METHOD
 
 }  // namespace hf3fs::meta::client

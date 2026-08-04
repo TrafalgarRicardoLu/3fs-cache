@@ -58,6 +58,16 @@ class MetaServiceStub : public IMetaServiceStub {
   META_STUB_METHOD(listReadyCacheBlocks, ListReadyCacheBlocksReq, ListReadyCacheBlocksRsp);
   META_STUB_METHOD(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
   META_STUB_METHOD(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
+  META_STUB_METHOD(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+  META_STUB_METHOD(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
+  META_STUB_METHOD(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+  META_STUB_METHOD(updatePrefetchJob, UpdatePrefetchJobReq, UpdatePrefetchJobRsp);
+  META_STUB_METHOD(appendPrefetchPlan, AppendPrefetchPlanReq, AppendPrefetchPlanRsp);
+  META_STUB_METHOD(listPrefetchPlan, ListPrefetchPlanReq, ListPrefetchPlanRsp);
+  META_STUB_METHOD(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp);
+  META_STUB_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
+  META_STUB_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
+  META_STUB_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
 
 #undef META_STUB_METHOD
 

@@ -725,6 +725,25 @@ CoTryTask<ListCacheEventDeadLettersRsp> MetaOperator::listCacheEventDeadLetters(
   co_return co_await runOp(&MetaStore::listCacheEventDeadLetters, req);
 }
 
+#define PHASE3_DISABLED_META_METHOD(NAME, REQ, RSP)                                    \
+  CoTryTask<RSP> MetaOperator::NAME(REQ req) {                                         \
+    CO_RETURN_ON_ERROR(req.valid());                                                   \
+    CO_RETURN_ON_ERROR(checkCacheService(req.service));                                \
+    CO_RETURN_ON_ERROR(cache::checkPhase3Capability(req.cacheProtocolVersion, false)); \
+    co_return makeError(CacheCode::kFeatureDisabled, "cache phase three is disabled"); \
+  }
+PHASE3_DISABLED_META_METHOD(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+PHASE3_DISABLED_META_METHOD(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
+PHASE3_DISABLED_META_METHOD(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+PHASE3_DISABLED_META_METHOD(updatePrefetchJob, UpdatePrefetchJobReq, UpdatePrefetchJobRsp);
+PHASE3_DISABLED_META_METHOD(appendPrefetchPlan, AppendPrefetchPlanReq, AppendPrefetchPlanRsp);
+PHASE3_DISABLED_META_METHOD(listPrefetchPlan, ListPrefetchPlanReq, ListPrefetchPlanRsp);
+PHASE3_DISABLED_META_METHOD(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp);
+PHASE3_DISABLED_META_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
+PHASE3_DISABLED_META_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
+PHASE3_DISABLED_META_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
+#undef PHASE3_DISABLED_META_METHOD
+
 CoTryTask<BeginEvictCacheBlocksRsp> MetaOperator::beginEvictCacheBlocks(BeginEvictCacheBlocksReq req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkCacheService(req.service));

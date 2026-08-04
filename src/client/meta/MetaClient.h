@@ -241,6 +241,16 @@ class MetaClient {
   CoTryTask<ListReadyCacheBlocksRsp> listReadyCacheBlocks(ListReadyCacheBlocksReq req);
   CoTryTask<ReportCacheStorageEventsRsp> reportCacheStorageEvents(ReportCacheStorageEventsReq req);
   CoTryTask<ListCacheEventDeadLettersRsp> listCacheEventDeadLetters(ListCacheEventDeadLettersReq req);
+  CoTryTask<CreatePrefetchJobRsp> createPrefetchJob(CreatePrefetchJobReq req);
+  CoTryTask<GetPrefetchJobRsp> getPrefetchJob(GetPrefetchJobReq req);
+  CoTryTask<ListPrefetchJobsRsp> listPrefetchJobs(ListPrefetchJobsReq req);
+  CoTryTask<UpdatePrefetchJobRsp> updatePrefetchJob(UpdatePrefetchJobReq req);
+  CoTryTask<AppendPrefetchPlanRsp> appendPrefetchPlan(AppendPrefetchPlanReq req);
+  CoTryTask<ListPrefetchPlanRsp> listPrefetchPlan(ListPrefetchPlanReq req);
+  CoTryTask<UpsertCachePinsRsp> upsertCachePins(UpsertCachePinsReq req);
+  CoTryTask<RemoveCachePinsRsp> removeCachePins(RemoveCachePinsReq req);
+  CoTryTask<ListCachePinsByOwnerRsp> listCachePinsByOwner(ListCachePinsByOwnerReq req);
+  CoTryTask<QueryCachePinsRsp> queryCachePins(QueryCachePinsReq req);
 
   CoTryTask<Inode> extendStripe(const UserInfo &userInfo, InodeId inodeId, uint32_t stripe);
 

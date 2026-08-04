@@ -121,5 +121,20 @@ TEST(TestCacheManagerService, RedactsServiceToken) {
   ASSERT_EQ(readable.find("sensitive"), std::string::npos);
 }
 
+TEST(TestCacheManagerService, Phase3ContractsDefaultToDisabled) {
+  auto config = makeConfig();
+  CacheManagerOperator operator_(config, nullptr, nullptr);
+  CreatePrefetchJobReq request;
+  request.user.uid = flat::Uid{1000};
+  request.spec.jobId = cache::PrefetchJobId{Uuid::from(1, 2)};
+  request.spec.ownerUid = request.user.uid;
+  request.spec.sources.push_back(cache::DatasetSource{cache::NamespacePathSource{"/dataset", true}});
+  request.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+
+  ASSERT_ERROR(folly::coro::blockingWait(operator_.createPrefetchJob(request)), CacheCode::kFeatureDisabled);
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  ASSERT_ERROR(folly::coro::blockingWait(operator_.createPrefetchJob(request)), CacheCode::kUpgradeRequired);
+}
+
 }  // namespace
 }  // namespace hf3fs::cache_manager::test

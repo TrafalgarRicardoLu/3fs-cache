@@ -216,6 +216,10 @@ Result<Void> CacheManagerOperator::checkPhase2Protocol(uint32_t version) const {
   return cache::checkPhase2Capability(version, config_.enable_phase2());
 }
 
+Result<Void> CacheManagerOperator::checkPhase3Protocol(uint32_t version) const {
+  return cache::checkPhase3Capability(version, false);
+}
+
 Result<Void> CacheManagerOperator::checkService(const ServiceIdentity &service) const {
   RETURN_ON_ERROR(service.valid());
   if (service.name != config_.service_name() || service.token != config_.service_token()) {
@@ -374,5 +378,21 @@ CoTryTask<GetPhase2CacheStatusRsp> CacheManagerOperator::getPhase2CacheStatus(co
   }
   co_return response;
 }
+
+#define PHASE3_DISABLED_METHOD(NAME, REQ, RSP)                                         \
+  CoTryTask<RSP> CacheManagerOperator::NAME(const REQ &req) {                          \
+    CO_RETURN_ON_ERROR(req.valid());                                                   \
+    CO_RETURN_ON_ERROR(checkPhase3Protocol(req.cacheProtocolVersion));                 \
+    co_return makeError(CacheCode::kFeatureDisabled, "cache phase three is disabled"); \
+  }
+
+PHASE3_DISABLED_METHOD(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+PHASE3_DISABLED_METHOD(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
+PHASE3_DISABLED_METHOD(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+PHASE3_DISABLED_METHOD(cancelPrefetchJob, CancelPrefetchJobReq, CancelPrefetchJobRsp);
+PHASE3_DISABLED_METHOD(pinDataset, PinDatasetReq, PinDatasetRsp);
+PHASE3_DISABLED_METHOD(unpinDataset, UnpinDatasetReq, UnpinDatasetRsp);
+PHASE3_DISABLED_METHOD(getPinStatus, GetPinStatusReq, GetPinStatusRsp);
+#undef PHASE3_DISABLED_METHOD
 
 }  // namespace hf3fs::cache_manager

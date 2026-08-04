@@ -171,6 +171,122 @@ struct GetPhase2CacheStatusRsp {
   SERDE_STRUCT_FIELD(permitTtlNs, uint64_t{0});
 };
 
+struct CreatePrefetchJobReq {
+  SERDE_STRUCT_FIELD(user, flat::UserInfo{});
+  SERDE_STRUCT_FIELD(spec, cache::PrefetchJobSpec{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(spec.valid());
+    if (spec.ownerUid != user.uid) return makeError(StatusCode::kInvalidArg, "prefetch owner does not match caller");
+    return Void{};
+  }
+};
+struct CreatePrefetchJobRsp {
+  SERDE_STRUCT_FIELD(job, cache::PrefetchJobRecord{});
+};
+
+struct GetPrefetchJobReq {
+  SERDE_STRUCT_FIELD(user, flat::UserInfo{});
+  SERDE_STRUCT_FIELD(jobId, cache::PrefetchJobId{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (jobId == cache::PrefetchJobId{}) return makeError(StatusCode::kInvalidArg, "prefetch job id not set");
+    return Void{};
+  }
+};
+struct GetPrefetchJobRsp {
+  SERDE_STRUCT_FIELD(job, cache::PrefetchJobRecord{});
+};
+
+struct ListPrefetchJobsReq {
+  SERDE_STRUCT_FIELD(user, flat::UserInfo{});
+  SERDE_STRUCT_FIELD(after, std::optional<cache::PrefetchJobId>{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{100});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (after && *after == cache::PrefetchJobId{}) return makeError(StatusCode::kInvalidArg, "invalid job cursor");
+    if (limit == 0 || limit > cache::kMaxPhase2BatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "invalid prefetch job page limit");
+    return Void{};
+  }
+};
+struct ListPrefetchJobsRsp {
+  SERDE_STRUCT_FIELD(jobs, std::vector<cache::PrefetchJobRecord>{});
+  SERDE_STRUCT_FIELD(more, false);
+};
+
+struct CancelPrefetchJobReq {
+  SERDE_STRUCT_FIELD(user, flat::UserInfo{});
+  SERDE_STRUCT_FIELD(jobId, cache::PrefetchJobId{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (jobId == cache::PrefetchJobId{}) return makeError(StatusCode::kInvalidArg, "prefetch job id not set");
+    return Void{};
+  }
+};
+struct CancelPrefetchJobRsp {
+  SERDE_STRUCT_FIELD(job, cache::PrefetchJobRecord{});
+};
+
+struct PinDatasetReq {
+  SERDE_STRUCT_FIELD(user, flat::UserInfo{});
+  SERDE_STRUCT_FIELD(pinId, cache::PinOwnerId{});
+  SERDE_STRUCT_FIELD(sources, std::vector<cache::DatasetSource>{});
+  SERDE_STRUCT_FIELD(prefetchMissing, false);
+  SERDE_STRUCT_FIELD(priority, uint32_t{});
+  SERDE_STRUCT_FIELD(ttlMs, uint64_t{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const;
+};
+struct PinDatasetRsp {
+  SERDE_STRUCT_FIELD(pinId, cache::PinOwnerId{});
+  SERDE_STRUCT_FIELD(plannedBytes, uint64_t{});
+};
+
+struct UnpinDatasetReq {
+  SERDE_STRUCT_FIELD(user, flat::UserInfo{});
+  SERDE_STRUCT_FIELD(pinId, cache::PinOwnerId{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (pinId == cache::PinOwnerId{}) return makeError(StatusCode::kInvalidArg, "pin id not set");
+    return Void{};
+  }
+};
+struct UnpinDatasetRsp {
+  SERDE_STRUCT_FIELD(removedBlocks, uint64_t{});
+};
+
+struct GetPinStatusReq {
+  SERDE_STRUCT_FIELD(user, flat::UserInfo{});
+  SERDE_STRUCT_FIELD(pinId, cache::PinOwnerId{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (pinId == cache::PinOwnerId{}) return makeError(StatusCode::kInvalidArg, "pin id not set");
+    return Void{};
+  }
+};
+struct GetPinStatusRsp {
+  SERDE_STRUCT_FIELD(pinId, cache::PinOwnerId{});
+  SERDE_STRUCT_FIELD(plannedBytes, uint64_t{});
+  SERDE_STRUCT_FIELD(pinnedBytes, uint64_t{});
+  SERDE_STRUCT_FIELD(readyBytes, uint64_t{});
+  SERDE_STRUCT_FIELD(expiresAtMs, uint64_t{});
+};
+
 SERDE_SERVICE(CacheManagerSerde, 1) {
   SERDE_SERVICE_METHOD(ensureCached, 1, EnsureCachedReq, EnsureCachedRsp);
   SERDE_SERVICE_METHOD(reportCacheBlockInvalid, 2, ReportCacheBlockInvalidReq, ReportCacheBlockInvalidRsp);
@@ -178,6 +294,13 @@ SERDE_SERVICE(CacheManagerSerde, 1) {
   SERDE_SERVICE_METHOD(getCacheStatus, 4, GetCacheStatusReq, GetCacheStatusRsp);
   SERDE_SERVICE_METHOD(reportCacheAccess, 5, ReportCacheAccessReq, ReportCacheAccessRsp);
   SERDE_SERVICE_METHOD(getPhase2CacheStatus, 6, GetPhase2CacheStatusReq, GetPhase2CacheStatusRsp);
+  SERDE_SERVICE_METHOD(createPrefetchJob, 7, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+  SERDE_SERVICE_METHOD(getPrefetchJob, 8, GetPrefetchJobReq, GetPrefetchJobRsp);
+  SERDE_SERVICE_METHOD(listPrefetchJobs, 9, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+  SERDE_SERVICE_METHOD(cancelPrefetchJob, 10, CancelPrefetchJobReq, CancelPrefetchJobRsp);
+  SERDE_SERVICE_METHOD(pinDataset, 11, PinDatasetReq, PinDatasetRsp);
+  SERDE_SERVICE_METHOD(unpinDataset, 12, UnpinDatasetReq, UnpinDatasetRsp);
+  SERDE_SERVICE_METHOD(getPinStatus, 13, GetPinStatusReq, GetPinStatusRsp);
 };
 
 }  // namespace hf3fs::cache_manager

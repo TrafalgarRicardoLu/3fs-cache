@@ -58,6 +58,16 @@ IMPL_META_STUB_METHOD(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListE
 IMPL_META_STUB_METHOD(listReadyCacheBlocks, ListReadyCacheBlocksReq, ListReadyCacheBlocksRsp);
 IMPL_META_STUB_METHOD(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
 IMPL_META_STUB_METHOD(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
+IMPL_META_STUB_METHOD(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+IMPL_META_STUB_METHOD(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
+IMPL_META_STUB_METHOD(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+IMPL_META_STUB_METHOD(updatePrefetchJob, UpdatePrefetchJobReq, UpdatePrefetchJobRsp);
+IMPL_META_STUB_METHOD(appendPrefetchPlan, AppendPrefetchPlanReq, AppendPrefetchPlanRsp);
+IMPL_META_STUB_METHOD(listPrefetchPlan, ListPrefetchPlanReq, ListPrefetchPlanRsp);
+IMPL_META_STUB_METHOD(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp);
+IMPL_META_STUB_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
+IMPL_META_STUB_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
+IMPL_META_STUB_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
 
 template class MetaServiceStub<serde::ClientContext>;
 template class MetaServiceStub<serde::ClientMockContext>;

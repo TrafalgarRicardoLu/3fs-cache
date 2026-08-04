@@ -70,6 +70,16 @@ class DummyMetaServiceStub : public IMetaServiceStub {
   NOT_IMPLEMENTED_FUNC(listReadyCacheBlocks, ListReadyCacheBlocksReq, ListReadyCacheBlocksRsp);
   NOT_IMPLEMENTED_FUNC(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
   NOT_IMPLEMENTED_FUNC(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
+  NOT_IMPLEMENTED_FUNC(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+  NOT_IMPLEMENTED_FUNC(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
+  NOT_IMPLEMENTED_FUNC(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+  NOT_IMPLEMENTED_FUNC(updatePrefetchJob, UpdatePrefetchJobReq, UpdatePrefetchJobRsp);
+  NOT_IMPLEMENTED_FUNC(appendPrefetchPlan, AppendPrefetchPlanReq, AppendPrefetchPlanRsp);
+  NOT_IMPLEMENTED_FUNC(listPrefetchPlan, ListPrefetchPlanReq, ListPrefetchPlanRsp);
+  NOT_IMPLEMENTED_FUNC(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp);
+  NOT_IMPLEMENTED_FUNC(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
+  NOT_IMPLEMENTED_FUNC(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
+  NOT_IMPLEMENTED_FUNC(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
 
   virtual CoTryTask<AuthRsp> authenticate(const AuthReq &req) { co_return AuthRsp{req.user}; }
   CoTryTask<AuthRsp> authenticate(const AuthReq &req, const net::UserRequestOptions &, serde::Timestamp *) override {
@@ -178,6 +188,16 @@ class MetaServiceStub<hf3fs::stubs::StubMockContext<IMetaServiceStub>> : public 
   FORWARD_RPC_FUNC(listReadyCacheBlocks, ListReadyCacheBlocksReq, ListReadyCacheBlocksRsp);
   FORWARD_RPC_FUNC(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
   FORWARD_RPC_FUNC(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
+  FORWARD_RPC_FUNC(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+  FORWARD_RPC_FUNC(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
+  FORWARD_RPC_FUNC(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+  FORWARD_RPC_FUNC(updatePrefetchJob, UpdatePrefetchJobReq, UpdatePrefetchJobRsp);
+  FORWARD_RPC_FUNC(appendPrefetchPlan, AppendPrefetchPlanReq, AppendPrefetchPlanRsp);
+  FORWARD_RPC_FUNC(listPrefetchPlan, ListPrefetchPlanReq, ListPrefetchPlanRsp);
+  FORWARD_RPC_FUNC(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp);
+  FORWARD_RPC_FUNC(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
+  FORWARD_RPC_FUNC(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
+  FORWARD_RPC_FUNC(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
 
 #undef FORWARD_RPC_FUNC
 

@@ -33,4 +33,17 @@ CoTryTask<GetPhase2CacheStatusRsp> CacheManagerSerdeService::getPhase2CacheStatu
   co_return co_await operator_.getPhase2CacheStatus(req);
 }
 
+#define FORWARD_PHASE3_METHOD(NAME, REQ, RSP)                                           \
+  CoTryTask<RSP> CacheManagerSerdeService::NAME(serde::CallContext &, const REQ &req) { \
+    co_return co_await operator_.NAME(req);                                             \
+  }
+FORWARD_PHASE3_METHOD(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+FORWARD_PHASE3_METHOD(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
+FORWARD_PHASE3_METHOD(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+FORWARD_PHASE3_METHOD(cancelPrefetchJob, CancelPrefetchJobReq, CancelPrefetchJobRsp);
+FORWARD_PHASE3_METHOD(pinDataset, PinDatasetReq, PinDatasetRsp);
+FORWARD_PHASE3_METHOD(unpinDataset, UnpinDatasetReq, UnpinDatasetRsp);
+FORWARD_PHASE3_METHOD(getPinStatus, GetPinStatusReq, GetPinStatusRsp);
+#undef FORWARD_PHASE3_METHOD
+
 }  // namespace hf3fs::cache_manager

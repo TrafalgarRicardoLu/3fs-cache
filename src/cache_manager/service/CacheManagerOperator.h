@@ -48,10 +48,18 @@ class CacheManagerOperator {
   CoTryTask<GetCacheStatusRsp> getCacheStatus(const GetCacheStatusReq &req);
   CoTryTask<ReportCacheAccessRsp> reportCacheAccess(const ReportCacheAccessReq &req);
   CoTryTask<GetPhase2CacheStatusRsp> getPhase2CacheStatus(const GetPhase2CacheStatusReq &req);
+  CoTryTask<CreatePrefetchJobRsp> createPrefetchJob(const CreatePrefetchJobReq &req);
+  CoTryTask<GetPrefetchJobRsp> getPrefetchJob(const GetPrefetchJobReq &req);
+  CoTryTask<ListPrefetchJobsRsp> listPrefetchJobs(const ListPrefetchJobsReq &req);
+  CoTryTask<CancelPrefetchJobRsp> cancelPrefetchJob(const CancelPrefetchJobReq &req);
+  CoTryTask<PinDatasetRsp> pinDataset(const PinDatasetReq &req);
+  CoTryTask<UnpinDatasetRsp> unpinDataset(const UnpinDatasetReq &req);
+  CoTryTask<GetPinStatusRsp> getPinStatus(const GetPinStatusReq &req);
 
  private:
   Result<Void> checkProtocol(uint32_t version) const;
   Result<Void> checkPhase2Protocol(uint32_t version) const;
+  Result<Void> checkPhase3Protocol(uint32_t version) const;
   Result<Void> checkService(const ServiceIdentity &service) const;
 
   const Config &config_;

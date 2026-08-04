@@ -21,6 +21,12 @@ static_assert(storage::StorageSerde<>::queryCacheSpaceMethodId == 21);
 static_assert(storage::StorageSerde<>::coordinateCacheRetiresMethodId == 27);
 static_assert(cache_manager::CacheManagerSerde<>::reportCacheAccessMethodId == 5);
 static_assert(cache_manager::CacheManagerSerde<>::getPhase2CacheStatusMethodId == 6);
+static_assert(cache_manager::CacheManagerSerde<>::createPrefetchJobMethodId == 7);
+static_assert(cache_manager::CacheManagerSerde<>::getPinStatusMethodId == 13);
+static_assert(meta::MetaSerde<>::createPrefetchJobMethodId == 42);
+static_assert(meta::MetaSerde<>::removeCachePinsMethodId == 49);
+static_assert(meta::MetaSerde<>::listCachePinsByOwnerMethodId == 51);
+static_assert(meta::MetaSerde<>::queryCachePinsMethodId == 52);
 
 struct LegacyPhase2DiskStatus {
   SERDE_STRUCT_FIELD(physicalDiskId, storage::PhysicalDiskId{});
@@ -104,6 +110,31 @@ TEST(ServiceContracts, Phase2ContractsRoundTrip) {
   ASSERT_EQ(decoded.items.size(), 1);
   EXPECT_EQ(decoded.items.front().key, original.items.front().key);
   EXPECT_EQ(decoded.items.front().generation, CacheGeneration{7});
+}
+
+TEST(ServiceContracts, Phase3ContractsRoundTripAndBoundPages) {
+  cache_manager::CreatePrefetchJobReq create;
+  create.user.uid = flat::Uid{1000};
+  create.spec.jobId = PrefetchJobId{Uuid::from(1, 2)};
+  create.spec.ownerUid = create.user.uid;
+  DatasetSource source;
+  source.source = NamespacePathSource{"/dataset", true};
+  create.spec.sources.push_back(source);
+  create.cacheProtocolVersion = kCachePhase3ProtocolVersion;
+  ASSERT_OK(create.valid());
+
+  cache_manager::CreatePrefetchJobReq decoded;
+  ASSERT_OK(serde::deserialize(decoded, serde::serialize(create)));
+  EXPECT_EQ(decoded.spec, create.spec);
+
+  meta::ListPrefetchPlanReq page;
+  page.service = {"cache-manager", "token"};
+  page.jobId = create.spec.jobId;
+  page.limit = meta::kMaxCacheBatchItems + 1;
+  ASSERT_ERROR(page.valid(), CacheCode::kRequestTooLarge);
+
+  ASSERT_ERROR(checkPhase3Capability(kCacheProtocolVersion, true), CacheCode::kUpgradeRequired);
+  ASSERT_ERROR(checkPhase3Capability(kCachePhase3ProtocolVersion, false), CacheCode::kFeatureDisabled);
 }
 
 TEST(ServiceContracts, Phase2StatusRoundTripIncludesOperationalGates) {

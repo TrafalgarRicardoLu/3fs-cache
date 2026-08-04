@@ -53,5 +53,15 @@ class MockMetaService : public serde::ServiceWrapper<MockMetaService, MetaSerde>
   META_MOCK_SERVICE_METHOD(listRecoverableCachePermits, ListRecoverableCachePermitsReq, ListRecoverableCachePermitsRsp);
   META_MOCK_SERVICE_METHOD(cancelQueuedAdmissions, CancelQueuedAdmissionsReq, CancelQueuedAdmissionsRsp);
   META_MOCK_SERVICE_METHOD(listReadyCacheBlocks, ListReadyCacheBlocksReq, ListReadyCacheBlocksRsp);
+  META_MOCK_SERVICE_METHOD(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+  META_MOCK_SERVICE_METHOD(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
+  META_MOCK_SERVICE_METHOD(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+  META_MOCK_SERVICE_METHOD(updatePrefetchJob, UpdatePrefetchJobReq, UpdatePrefetchJobRsp);
+  META_MOCK_SERVICE_METHOD(appendPrefetchPlan, AppendPrefetchPlanReq, AppendPrefetchPlanRsp);
+  META_MOCK_SERVICE_METHOD(listPrefetchPlan, ListPrefetchPlanReq, ListPrefetchPlanRsp);
+  META_MOCK_SERVICE_METHOD(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp);
+  META_MOCK_SERVICE_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
+  META_MOCK_SERVICE_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
+  META_MOCK_SERVICE_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
 };
 }  // namespace hf3fs::meta

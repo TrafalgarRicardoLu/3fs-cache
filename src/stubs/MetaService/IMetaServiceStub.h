@@ -61,6 +61,16 @@ class IMetaServiceStub {
   IMETA_STUB_METHOD(listReadyCacheBlocks, ListReadyCacheBlocksReq, ListReadyCacheBlocksRsp);
   IMETA_STUB_METHOD(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
   IMETA_STUB_METHOD(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
+  IMETA_STUB_METHOD(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+  IMETA_STUB_METHOD(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
+  IMETA_STUB_METHOD(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+  IMETA_STUB_METHOD(updatePrefetchJob, UpdatePrefetchJobReq, UpdatePrefetchJobRsp);
+  IMETA_STUB_METHOD(appendPrefetchPlan, AppendPrefetchPlanReq, AppendPrefetchPlanRsp);
+  IMETA_STUB_METHOD(listPrefetchPlan, ListPrefetchPlanReq, ListPrefetchPlanRsp);
+  IMETA_STUB_METHOD(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp);
+  IMETA_STUB_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
+  IMETA_STUB_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
+  IMETA_STUB_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
 
 #undef IMETA_STUB_METHOD
 };

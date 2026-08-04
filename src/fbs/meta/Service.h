@@ -1380,6 +1380,211 @@ struct ListCacheEventDeadLettersRsp : RspBase {
   SERDE_STRUCT_FIELD(more, false);
 };
 
+struct CreatePrefetchJobReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(job, cache::PrefetchJobRecord{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    return job.valid();
+  }
+};
+struct CreatePrefetchJobRsp : RspBase {
+  SERDE_STRUCT_FIELD(job, cache::PrefetchJobRecord{});
+  SERDE_STRUCT_FIELD(created, false);
+};
+
+struct GetPrefetchJobReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(jobId, cache::PrefetchJobId{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (jobId == cache::PrefetchJobId{}) return INVALID("prefetch job id not set");
+    return VALID;
+  }
+};
+struct GetPrefetchJobRsp : RspBase {
+  SERDE_STRUCT_FIELD(job, cache::PrefetchJobRecord{});
+};
+
+struct ListPrefetchJobsReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(ownerUid, std::optional<flat::Uid>{});
+  SERDE_STRUCT_FIELD(after, std::optional<cache::PrefetchJobId>{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{100});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (after && *after == cache::PrefetchJobId{}) return INVALID("invalid job cursor");
+    if (limit == 0 || limit > kMaxCacheBatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "invalid prefetch job page limit");
+    return VALID;
+  }
+};
+struct ListPrefetchJobsRsp : RspBase {
+  SERDE_STRUCT_FIELD(jobs, std::vector<cache::PrefetchJobRecord>{});
+  SERDE_STRUCT_FIELD(more, false);
+};
+
+struct UpdatePrefetchJobReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(expectedStateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(job, cache::PrefetchJobRecord{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    RETURN_ON_ERROR(job.valid());
+    if (expectedStateVersion == 0 || job.stateVersion != expectedStateVersion + 1 || job.stateVersion == 0)
+      return INVALID("invalid prefetch job state version transition");
+    return VALID;
+  }
+};
+struct UpdatePrefetchJobRsp : RspBase {
+  SERDE_STRUCT_FIELD(job, cache::PrefetchJobRecord{});
+};
+
+struct AppendPrefetchPlanReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(jobId, cache::PrefetchJobId{});
+  SERDE_STRUCT_FIELD(entries, std::vector<cache::PrefetchPlanEntry>{});
+  SERDE_STRUCT_FIELD(plannerCursor, String{});
+  SERDE_STRUCT_FIELD(planningComplete, false);
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (jobId == cache::PrefetchJobId{}) return INVALID("prefetch job id not set");
+    if (entries.empty() || entries.size() > kMaxCacheBatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "invalid prefetch plan page size");
+    if (plannerCursor.size() > cache::kMaxDatasetPathLength)
+      return makeError(CacheCode::kRequestTooLarge, "planner cursor too large");
+    for (const auto &entry : entries) {
+      RETURN_ON_ERROR(entry.valid());
+      if (entry.jobId != jobId) return INVALID("prefetch plan entry belongs to another job");
+    }
+    return VALID;
+  }
+};
+struct AppendPrefetchPlanRsp : RspBase {
+  SERDE_STRUCT_FIELD(insertedBlocks, uint64_t{});
+  SERDE_STRUCT_FIELD(insertedBytes, uint64_t{});
+};
+
+struct ListPrefetchPlanReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(jobId, cache::PrefetchJobId{});
+  SERDE_STRUCT_FIELD(after, std::optional<cache::CacheBlockKey>{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{1000});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (jobId == cache::PrefetchJobId{}) return INVALID("prefetch job id not set");
+    if (after) RETURN_ON_ERROR(after->valid());
+    if (limit == 0 || limit > kMaxCacheBatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "invalid prefetch plan page limit");
+    return VALID;
+  }
+};
+struct ListPrefetchPlanRsp : RspBase {
+  SERDE_STRUCT_FIELD(entries, std::vector<cache::PrefetchPlanEntry>{});
+  SERDE_STRUCT_FIELD(more, false);
+};
+
+struct UpsertCachePinsReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(pins, std::vector<cache::PinRecord>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (pins.empty() || pins.size() > kMaxCacheBatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "invalid cache pin batch size");
+    for (const auto &pin : pins) RETURN_ON_ERROR(pin.valid());
+    return VALID;
+  }
+};
+struct UpsertCachePinsRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<cache::PinRecord>>{});
+};
+
+struct RemoveCachePinsReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(owner, cache::PinOwner{});
+  SERDE_STRUCT_FIELD(keys, std::vector<cache::CacheBlockKey>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    RETURN_ON_ERROR(owner.valid());
+    if (keys.size() > kMaxCacheBatchItems) return makeError(CacheCode::kRequestTooLarge, "too many cache pin keys");
+    for (const auto &key : keys) RETURN_ON_ERROR(key.valid());
+    return VALID;
+  }
+};
+struct RemoveCachePinsRsp : RspBase {
+  SERDE_STRUCT_FIELD(removed, uint64_t{});
+};
+
+struct ListCachePinsByOwnerReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(owner, cache::PinOwner{});
+  SERDE_STRUCT_FIELD(after, std::optional<cache::CacheBlockKey>{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{1000});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    RETURN_ON_ERROR(owner.valid());
+    if (after) RETURN_ON_ERROR(after->valid());
+    if (limit == 0 || limit > kMaxCacheBatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "invalid cache pin page limit");
+    return VALID;
+  }
+};
+struct ListCachePinsByOwnerRsp : RspBase {
+  SERDE_STRUCT_FIELD(pins, std::vector<cache::PinRecord>{});
+  SERDE_STRUCT_FIELD(more, false);
+};
+
+struct QueryCachePinsReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(keys, std::vector<cache::CacheBlockKey>{});
+  SERDE_STRUCT_FIELD(nowMs, uint64_t{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (keys.empty() || keys.size() > kMaxCacheBatchItems || nowMs == 0)
+      return makeError(CacheCode::kRequestTooLarge, "invalid cache pin query");
+    for (const auto &key : keys) RETURN_ON_ERROR(key.valid());
+    return VALID;
+  }
+};
+struct CachePinQueryResult {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(pinned, false);
+  SERDE_STRUCT_FIELD(activeOwners, uint32_t{});
+};
+struct QueryCachePinsRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CachePinQueryResult>>{});
+};
+
 // testRpc
 struct TestRpcReq : ReqBase {
   SERDE_STRUCT_FIELD(path, PathAt());
@@ -1444,6 +1649,16 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(listRecoverableCachePermits, 39, ListRecoverableCachePermitsReq, ListRecoverableCachePermitsRsp);
   META_SERVICE_METHOD(cancelQueuedAdmissions, 40, CancelQueuedAdmissionsReq, CancelQueuedAdmissionsRsp);
   META_SERVICE_METHOD(listReadyCacheBlocks, 41, ListReadyCacheBlocksReq, ListReadyCacheBlocksRsp);
+  META_SERVICE_METHOD(createPrefetchJob, 42, CreatePrefetchJobReq, CreatePrefetchJobRsp);
+  META_SERVICE_METHOD(getPrefetchJob, 43, GetPrefetchJobReq, GetPrefetchJobRsp);
+  META_SERVICE_METHOD(listPrefetchJobs, 44, ListPrefetchJobsReq, ListPrefetchJobsRsp);
+  META_SERVICE_METHOD(updatePrefetchJob, 45, UpdatePrefetchJobReq, UpdatePrefetchJobRsp);
+  META_SERVICE_METHOD(appendPrefetchPlan, 46, AppendPrefetchPlanReq, AppendPrefetchPlanRsp);
+  META_SERVICE_METHOD(listPrefetchPlan, 47, ListPrefetchPlanReq, ListPrefetchPlanRsp);
+  META_SERVICE_METHOD(upsertCachePins, 48, UpsertCachePinsReq, UpsertCachePinsRsp);
+  META_SERVICE_METHOD(removeCachePins, 49, RemoveCachePinsReq, RemoveCachePinsRsp);
+  META_SERVICE_METHOD(listCachePinsByOwner, 51, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
+  META_SERVICE_METHOD(queryCachePins, 52, QueryCachePinsReq, QueryCachePinsRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 
