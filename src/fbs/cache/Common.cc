@@ -62,6 +62,46 @@ Result<Void> ReadyIdentity::valid() const {
   return Void{};
 }
 
+Result<Void> PrefetchPlanEntry::valid() const {
+  if (jobId == PrefetchJobId{}) {
+    return makeError(StatusCode::kInvalidArg, "empty prefetch job id");
+  }
+  RETURN_ON_ERROR(key.valid());
+  if (blockLength == 0) {
+    return makeError(StatusCode::kInvalidArg, "empty prefetch plan block");
+  }
+  if (!magic_enum::enum_contains(state) || state == PrefetchPlanEntryState::INVALID) {
+    return makeError(StatusCode::kInvalidArg, "invalid prefetch plan entry state");
+  }
+  if (state == PrefetchPlanEntryState::PLANNED && admissionAttemptId != Uuid::zero()) {
+    return makeError(StatusCode::kInvalidArg, "planned entry has admission identity");
+  }
+  if ((state == PrefetchPlanEntryState::ADMITTED || state == PrefetchPlanEntryState::ATTACHED) &&
+      admissionAttemptId == Uuid::zero()) {
+    return makeError(StatusCode::kInvalidArg, "admitted entry is missing admission identity");
+  }
+  return Void{};
+}
+
+Result<Void> PinOwner::valid() const {
+  if (!magic_enum::enum_contains(kind) || kind == PinOwnerKind::INVALID) {
+    return makeError(StatusCode::kInvalidArg, "invalid cache pin owner kind");
+  }
+  if (id == PinOwnerId{}) {
+    return makeError(StatusCode::kInvalidArg, "empty cache pin owner id");
+  }
+  return Void{};
+}
+
+Result<Void> PinRecord::valid() const {
+  RETURN_ON_ERROR(key.valid());
+  RETURN_ON_ERROR(owner.valid());
+  if (createdAtMs == 0 || expiresAtMs <= createdAtMs) {
+    return makeError(StatusCode::kInvalidArg, "invalid cache pin lifetime");
+  }
+  return Void{};
+}
+
 Result<uint64_t> ByteRange::end() const {
   if (length > std::numeric_limits<uint64_t>::max() - offset) {
     return makeError(StatusCode::kInvalidArg, "object byte range overflow");

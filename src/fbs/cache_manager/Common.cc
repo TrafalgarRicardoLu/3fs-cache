@@ -1,0 +1,167 @@
+#include "fbs/cache_manager/Common.h"
+
+#include <limits>
+#include <type_traits>
+
+#include "common/utils/MagicEnum.hpp"
+#include "common/utils/Path.h"
+#include "fmt/format.h"
+
+namespace hf3fs::cache_manager {
+namespace {
+
+Result<Void> validAbsoluteNamespacePath(std::string_view value) {
+  if (value.empty() || value.size() > kMaxDatasetPathLength) {
+    return makeError(StatusCode::kInvalidArg, "invalid dataset path length");
+  }
+  if (value.find('\0') != std::string_view::npos) {
+    return makeError(StatusCode::kInvalidArg, "dataset path contains NUL");
+  }
+  Path path{std::string{value}};
+  if (!path.is_absolute()) {
+    return makeError(StatusCode::kInvalidArg, "dataset path is not absolute");
+  }
+  for (const auto &component : path) {
+    if (component == "..") {
+      return makeError(StatusCode::kInvalidArg, "dataset path escapes its root");
+    }
+  }
+  return Void{};
+}
+
+Result<Void> validOriginComponent(std::string_view value, std::string_view name) {
+  if (value.empty() || value.size() > kMaxOriginNameLength) {
+    return makeError(StatusCode::kInvalidArg, fmt::format("invalid {} length", name));
+  }
+  if (value.find('\0') != std::string_view::npos) {
+    return makeError(StatusCode::kInvalidArg, fmt::format("{} contains NUL", name));
+  }
+  return Void{};
+}
+
+Result<size_t> sourcePayloadBytes(const DatasetSource &source) {
+  return std::visit(
+      [](const auto &value) -> Result<size_t> {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, NamespacePathSource> || std::is_same_v<T, ManifestPathSource>) {
+          return value.path.size();
+        } else if constexpr (std::is_same_v<T, PathListSource>) {
+          size_t total = 0;
+          for (const auto &path : value.paths) {
+            if (path.size() > std::numeric_limits<size_t>::max() - total) {
+              return makeError(CacheCode::kRequestTooLarge, "dataset path bytes overflow");
+            }
+            total += path.size();
+          }
+          return total;
+        } else {
+          size_t total = value.bucket.size();
+          if (value.prefix.size() > std::numeric_limits<size_t>::max() - total) {
+            return makeError(CacheCode::kRequestTooLarge, "origin source bytes overflow");
+          }
+          total += value.prefix.size();
+          if (value.destinationRoot.size() > std::numeric_limits<size_t>::max() - total) {
+            return makeError(CacheCode::kRequestTooLarge, "origin source bytes overflow");
+          }
+          return total + value.destinationRoot.size();
+        }
+      },
+      source.source);
+}
+
+}  // namespace
+
+Result<Void> NamespacePathSource::valid() const { return validAbsoluteNamespacePath(path); }
+
+Result<Void> PathListSource::valid() const {
+  if (paths.empty() || paths.size() > kMaxDatasetPaths) {
+    return makeError(CacheCode::kRequestTooLarge, "invalid dataset path count");
+  }
+  size_t totalBytes = 0;
+  for (const auto &path : paths) {
+    RETURN_ON_ERROR(validAbsoluteNamespacePath(path));
+    if (path.size() > kMaxPathListBytes - totalBytes) {
+      return makeError(CacheCode::kRequestTooLarge, "dataset path list bytes too large");
+    }
+    totalBytes += path.size();
+  }
+  return Void{};
+}
+
+Result<Void> ManifestPathSource::valid() const { return validAbsoluteNamespacePath(path); }
+
+Result<Void> S3PrefixSource::valid() const {
+  if (originId == cache::OriginId{}) {
+    return makeError(StatusCode::kInvalidArg, "empty origin id");
+  }
+  RETURN_ON_ERROR(validOriginComponent(bucket, "bucket"));
+  RETURN_ON_ERROR(validOriginComponent(prefix, "prefix"));
+  return validAbsoluteNamespacePath(destinationRoot);
+}
+
+DatasetSourceType DatasetSource::type() const { return static_cast<DatasetSourceType>(source.index()); }
+
+Result<Void> DatasetSource::valid() const {
+  if (source.valueless_by_exception()) {
+    return makeError(StatusCode::kInvalidArg, "dataset source has no value");
+  }
+  return std::visit([](const auto &value) { return value.valid(); }, source);
+}
+
+Result<Void> PrefetchJobSpec::valid() const {
+  if (jobId == cache::PrefetchJobId{}) {
+    return makeError(StatusCode::kInvalidArg, "empty prefetch job id");
+  }
+  if (sources.empty() || sources.size() > kMaxDatasetSources) {
+    return makeError(CacheCode::kRequestTooLarge, "invalid dataset source count");
+  }
+  size_t sourceBytes = 0;
+  for (const auto &source : sources) {
+    RETURN_ON_ERROR(source.valid());
+    auto bytes = sourcePayloadBytes(source);
+    RETURN_ON_ERROR(bytes);
+    if (*bytes > kMaxJobSourceBytes - sourceBytes) {
+      return makeError(CacheCode::kRequestTooLarge, "prefetch job source bytes too large");
+    }
+    sourceBytes += *bytes;
+  }
+  if (priority > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {
+    return makeError(StatusCode::kInvalidArg, "prefetch priority is out of range");
+  }
+  if (maxParallelLoads == 0 || maxParallelLoads > kMaxJobParallelLoads) {
+    return makeError(StatusCode::kInvalidArg, "invalid prefetch parallel load limit");
+  }
+  if (requiredReadyBps == 0 || requiredReadyBps > kReadyRatioScaleBps) {
+    return makeError(StatusCode::kInvalidArg, "invalid prefetch ready ratio");
+  }
+  if (pinAfterReady != (pinTtlMs != 0)) {
+    return makeError(StatusCode::kInvalidArg, "pin TTL and pin-after-ready disagree");
+  }
+  if (pinTtlMs > kMaxPinTtlMs) {
+    return makeError(StatusCode::kInvalidArg, "prefetch pin TTL is too large");
+  }
+  return Void{};
+}
+
+Result<Void> PrefetchJobRecord::valid() const {
+  RETURN_ON_ERROR(spec.valid());
+  if (!magic_enum::enum_contains(state) || state == PrefetchJobState::INVALID) {
+    return makeError(StatusCode::kInvalidArg, "invalid prefetch job state");
+  }
+  if (stateVersion == 0 || createdAtMs == 0 || updatedAtMs < createdAtMs) {
+    return makeError(StatusCode::kInvalidArg, "invalid prefetch job version or timestamp");
+  }
+  if (readyBytes > plannedBytes || failedBytes > plannedBytes || readyBlocks > plannedBlocks ||
+      failedBlocks > plannedBlocks) {
+    return makeError(StatusCode::kInvalidArg, "prefetch job counters exceed plan");
+  }
+  if (readyBytes > plannedBytes - failedBytes || readyBlocks > plannedBlocks - failedBlocks) {
+    return makeError(StatusCode::kInvalidArg, "prefetch job counters overlap");
+  }
+  if (state == PrefetchJobState::CANCELLED && cancelEpoch == 0) {
+    return makeError(StatusCode::kInvalidArg, "cancelled prefetch job has no cancel epoch");
+  }
+  return Void{};
+}
+
+}  // namespace hf3fs::cache_manager

@@ -4,6 +4,7 @@
 
 #include "common/serde/Serde.h"
 #include "fbs/cache/Common.h"
+#include "tests/GtestHelpers.h"
 
 namespace hf3fs::cache::test {
 namespace {
@@ -50,6 +51,47 @@ TEST(CacheCommonTypes, RejectsInvalidVersionSelectors) {
 TEST(CacheCommonTypes, ChecksRangeOverflow) {
   EXPECT_EQ(*(ByteRange{1, 2}.end()), uint64_t{3});
   EXPECT_TRUE((ByteRange{std::numeric_limits<uint64_t>::max(), 1}.end().hasError()));
+}
+
+TEST(CacheCommonTypes, OrchestrationRecordsRoundTrip) {
+  PrefetchJobId jobId{Uuid::from(1, 2)};
+  PrefetchPlanEntry plan{jobId,
+                         CacheBlockKey{42, CacheBlockIndex{7}},
+                         4096,
+                         10,
+                         PrefetchPlanEntryState::ADMITTED,
+                         Uuid::from(3, 4)};
+  PinRecord pin{CacheBlockKey{42, CacheBlockIndex{7}},
+                PinOwner{PinOwnerKind::ACTIVE_JOB, PinOwnerId{Uuid::from(1, 2)}},
+                100,
+                200,
+                CacheGeneration{9}};
+
+  ASSERT_OK(plan.valid());
+  ASSERT_OK(pin.valid());
+  PrefetchPlanEntry decodedPlan;
+  PinRecord decodedPin;
+  ASSERT_OK(serde::deserialize(decodedPlan, serde::serialize(plan)));
+  ASSERT_OK(serde::deserialize(decodedPin, serde::serialize(pin)));
+  EXPECT_EQ(decodedPlan, plan);
+  EXPECT_EQ(decodedPin, pin);
+}
+
+TEST(CacheCommonTypes, RejectsInvalidOrchestrationRecords) {
+  PrefetchPlanEntry plan{PrefetchJobId{Uuid::from(1, 2)},
+                         CacheBlockKey{42, CacheBlockIndex{7}},
+                         4096,
+                         0,
+                         PrefetchPlanEntryState::PLANNED,
+                         Uuid::from(3, 4)};
+  EXPECT_TRUE(plan.valid().hasError());
+
+  PinRecord pin{CacheBlockKey{42, CacheBlockIndex{7}},
+                PinOwner{PinOwnerKind::EXPLICIT_PIN, PinOwnerId{Uuid::from(5, 6)}},
+                200,
+                100,
+                CacheGeneration{}};
+  EXPECT_TRUE(pin.valid().hasError());
 }
 
 TEST(CacheCommonTypes, CacheErrorsHaveStableNames) {

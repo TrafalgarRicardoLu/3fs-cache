@@ -7,6 +7,7 @@
 #include "common/serde/Serde.h"
 #include "common/utils/Result.h"
 #include "common/utils/StrongType.h"
+#include "common/utils/Uuid.h"
 
 namespace hf3fs::cache {
 
@@ -27,6 +28,8 @@ STRONG_TYPEDEF(uint32_t, CacheBlockIndex);
 STRONG_TYPEDEF(uint64_t, CacheGeneration);
 STRONG_TYPEDEF(uint64_t, CleanupEpoch);
 STRONG_TYPEDEF(uint64_t, EvictionEpoch);
+STRONG_TYPEDEF(Uuid, PrefetchJobId);
+STRONG_TYPEDEF(Uuid, PinOwnerId);
 
 enum class EvictionReason : uint8_t {
   INVALID = 0,
@@ -59,6 +62,23 @@ enum class CacheEnqueueOutcome : uint8_t {
   QUEUED = 2,
   LOADING = 3,
   READY = 4,
+};
+
+enum class PrefetchPlanEntryState : uint8_t {
+  INVALID = 0,
+  PLANNED = 1,
+  ADMITTED = 2,
+  ATTACHED = 3,
+  READY = 4,
+  FAILED = 5,
+  CANCELLED = 6,
+};
+
+enum class PinOwnerKind : uint8_t {
+  INVALID = 0,
+  ACTIVE_JOB = 1,
+  EXPLICIT_PIN = 2,
+  POST_READY = 3,
 };
 
 Result<EvictionEpoch> nextEvictionEpoch(EvictionEpoch current);
@@ -118,6 +138,40 @@ struct ReadyIdentity {
  public:
   Result<Void> valid() const;
   bool operator==(const ReadyIdentity &) const = default;
+};
+
+struct PrefetchPlanEntry {
+  SERDE_STRUCT_FIELD(jobId, PrefetchJobId{});
+  SERDE_STRUCT_FIELD(key, CacheBlockKey{});
+  SERDE_STRUCT_FIELD(blockLength, uint64_t{});
+  SERDE_STRUCT_FIELD(priority, uint32_t{});
+  SERDE_STRUCT_FIELD(state, PrefetchPlanEntryState::INVALID);
+  SERDE_STRUCT_FIELD(admissionAttemptId, Uuid::zero());
+
+ public:
+  Result<Void> valid() const;
+  bool operator==(const PrefetchPlanEntry &) const = default;
+};
+
+struct PinOwner {
+  SERDE_STRUCT_FIELD(kind, PinOwnerKind::INVALID);
+  SERDE_STRUCT_FIELD(id, PinOwnerId{});
+
+ public:
+  Result<Void> valid() const;
+  bool operator==(const PinOwner &) const = default;
+};
+
+struct PinRecord {
+  SERDE_STRUCT_FIELD(key, CacheBlockKey{});
+  SERDE_STRUCT_FIELD(owner, PinOwner{});
+  SERDE_STRUCT_FIELD(createdAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(expiresAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(cacheGeneration, CacheGeneration{});
+
+ public:
+  Result<Void> valid() const;
+  bool operator==(const PinRecord &) const = default;
 };
 
 struct ByteRange {
