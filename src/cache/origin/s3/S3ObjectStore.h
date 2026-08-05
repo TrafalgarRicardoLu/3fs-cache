@@ -44,12 +44,14 @@ class S3ObjectStore : public ObjectStore {
 
   CoTryTask<ObjectMetadata> head(const ObjectRef &object) override;
   CoTryTask<std::vector<uint8_t>> getRange(const ImmutableObjectIdentity &object, ByteRange range) override;
+  CoTryTask<ListObjectsPage> listObjects(const ListObjectsRequest &request) override;
 
  private:
   class Permit;
 
   Result<ObjectMetadata> headSync(const ObjectRef &object);
   Result<std::vector<uint8_t>> getRangeSync(const ImmutableObjectIdentity &object, ByteRange range);
+  Result<ListObjectsPage> listObjectsSync(const ListObjectsRequest &request);
   Result<Permit> acquire(uint64_t bytes);
   void release(uint64_t bytes);
 

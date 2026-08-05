@@ -184,6 +184,48 @@ Result<std::vector<uint8_t>> S3ObjectStore::getRangeSync(const ImmutableObjectId
   }
 }
 
+Result<ListObjectsPage> S3ObjectStore::listObjectsSync(const ListObjectsRequest &request) {
+  RETURN_ON_ERROR(request.valid());
+  auto permit = acquire(0);
+  RETURN_ON_ERROR(permit);
+  auto start = std::chrono::steady_clock::now();
+  for (uint32_t attempt = 0;; ++attempt) {
+    auto outcome = executor_->listObjects({request.bucket, request.prefix, request.continuation, request.maxKeys});
+    if (auto response = std::get_if<ListResponse>(&outcome)) {
+      if (response->objects.size() > request.maxKeys ||
+          (response->truncated &&
+           (response->nextContinuation.empty() || response->nextContinuation == request.continuation)) ||
+          (!response->truncated && !response->nextContinuation.empty())) {
+        return makeError(CacheCode::kInvalidResponse, "invalid S3 object list pagination");
+      }
+      ListObjectsPage page;
+      page.done = !response->truncated;
+      page.nextContinuation = std::move(response->nextContinuation);
+      page.objects.reserve(response->objects.size());
+      std::string previous;
+      for (auto &listed : response->objects) {
+        if (listed.key.empty() || !listed.key.starts_with(request.prefix) ||
+            (!previous.empty() && listed.key <= previous)) {
+          return makeError(CacheCode::kInvalidResponse, "S3 object list is not strictly sorted within the prefix");
+        }
+        auto version = selectVersion({listed.size, std::move(listed.versionId), std::move(listed.etag)});
+        RETURN_ON_ERROR(version);
+        previous = listed.key;
+        page.objects.push_back(
+            {{request.originId, request.bucket, std::move(listed.key), std::move(*version)}, listed.size});
+      }
+      return page;
+    }
+    auto &failure = std::get<S3Failure>(outcome);
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    auto retryDelay = config_.retryDelay * (attempt + 1);
+    if (!retryable(failure) || attempt >= config_.maxRetries || elapsed + retryDelay >= config_.totalTimeout) {
+      return mapFailure(failure);
+    }
+    std::this_thread::sleep_for(retryDelay);
+  }
+}
+
 CoTryTask<ObjectMetadata> S3ObjectStore::head(const ObjectRef &object) {
   auto task = folly::coro::co_invoke([this, object]() -> CoTryTask<ObjectMetadata> { co_return headSync(object); });
   co_return co_await std::move(task).scheduleOn(&ioExecutor_);
@@ -192,6 +234,12 @@ CoTryTask<ObjectMetadata> S3ObjectStore::head(const ObjectRef &object) {
 CoTryTask<std::vector<uint8_t>> S3ObjectStore::getRange(const ImmutableObjectIdentity &object, ByteRange range) {
   auto task = folly::coro::co_invoke(
       [this, object, range]() -> CoTryTask<std::vector<uint8_t>> { co_return getRangeSync(object, range); });
+  co_return co_await std::move(task).scheduleOn(&ioExecutor_);
+}
+
+CoTryTask<ListObjectsPage> S3ObjectStore::listObjects(const ListObjectsRequest &request) {
+  auto task =
+      folly::coro::co_invoke([this, request]() -> CoTryTask<ListObjectsPage> { co_return listObjectsSync(request); });
   co_return co_await std::move(task).scheduleOn(&ioExecutor_);
 }
 

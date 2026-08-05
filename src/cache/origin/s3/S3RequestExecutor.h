@@ -50,6 +50,26 @@ struct GetRangeResponse {
   std::vector<uint8_t> body;
 };
 
+struct ListRequest {
+  std::string bucket;
+  std::string prefix;
+  std::string continuation;
+  uint32_t maxKeys{0};
+};
+
+struct ListedObject {
+  std::string key;
+  uint64_t size{0};
+  std::optional<std::string> versionId;
+  std::optional<std::string> etag;
+};
+
+struct ListResponse {
+  std::vector<ListedObject> objects;
+  std::string nextContinuation;
+  bool truncated{false};
+};
+
 template <typename T>
 using S3Outcome = std::variant<T, S3Failure>;
 
@@ -59,6 +79,7 @@ class S3RequestExecutor {
 
   virtual S3Outcome<HeadResponse> head(const HeadRequest &request) = 0;
   virtual S3Outcome<GetRangeResponse> getRange(const GetRangeRequest &request) = 0;
+  virtual S3Outcome<ListResponse> listObjects(const ListRequest &request) = 0;
 };
 
 }  // namespace hf3fs::cache::origin::s3

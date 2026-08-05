@@ -16,6 +16,7 @@
 #include <aws/s3/S3Errors.h>
 #include <aws/s3/model/GetObjectRequest.h>
 #include <aws/s3/model/HeadObjectRequest.h>
+#include <aws/s3/model/ListObjectsV2Request.h>
 #include <iterator>
 
 namespace hf3fs::cache::origin::s3 {
@@ -123,6 +124,32 @@ class AwsS3RequestExecutor final : public S3RequestExecutor {
     if (!result.GetETag().empty()) response.etag = result.GetETag().c_str();
     auto &stream = result.GetBody();
     response.body.assign(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+    return response;
+  }
+
+  S3Outcome<ListResponse> listObjects(const ListRequest &request) override {
+    Aws::S3::Model::ListObjectsV2Request awsRequest;
+    awsRequest.SetBucket(request.bucket.c_str());
+    awsRequest.SetPrefix(request.prefix.c_str());
+    awsRequest.SetMaxKeys(static_cast<int>(request.maxKeys));
+    if (!request.continuation.empty()) awsRequest.SetContinuationToken(request.continuation.c_str());
+    auto outcome = client_->ListObjectsV2(awsRequest);
+    if (!outcome.IsSuccess()) return mapAwsFailure(outcome.GetError());
+    const auto &result = outcome.GetResult();
+    ListResponse response;
+    response.truncated = result.GetIsTruncated();
+    response.nextContinuation = result.GetNextContinuationToken().c_str();
+    response.objects.reserve(result.GetContents().size());
+    for (const auto &object : result.GetContents()) {
+      if (object.GetSize() < 0) {
+        return S3Failure{S3FailureKind::INVALID_RESPONSE, 200, "S3 LIST returned a negative object size"};
+      }
+      ListedObject listed;
+      listed.key = object.GetKey().c_str();
+      listed.size = static_cast<uint64_t>(object.GetSize());
+      if (!object.GetETag().empty()) listed.etag = object.GetETag().c_str();
+      response.objects.push_back(std::move(listed));
+    }
     return response;
   }
 

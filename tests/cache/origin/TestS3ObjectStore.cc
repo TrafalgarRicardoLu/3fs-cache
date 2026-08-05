@@ -27,11 +27,22 @@ class FakeExecutor : public S3RequestExecutor {
     return outcome;
   }
 
+  S3Outcome<ListResponse> listObjects(const ListRequest &request) override {
+    ++listCalls;
+    lastList = request;
+    auto outcome = std::move(listOutcomes.front());
+    listOutcomes.pop_front();
+    return outcome;
+  }
+
   uint32_t headCalls{0};
   uint32_t getCalls{0};
+  uint32_t listCalls{0};
   ByteRange lastRange;
+  ListRequest lastList;
   std::deque<S3Outcome<HeadResponse>> headOutcomes;
   std::deque<S3Outcome<GetRangeResponse>> getOutcomes;
+  std::deque<S3Outcome<ListResponse>> listOutcomes;
 };
 
 ObjectRef objectRef() { return ObjectRef{OriginId{1}, "bucket", "key"}; }
@@ -190,6 +201,43 @@ TEST(S3ObjectStore, RejectsZeroConcurrencyWithoutCallingBackend) {
   auto result = folly::coro::blockingWait(store.head(objectRef()));
   ASSERT_ERROR(result, StatusCode::kInvalidConfig);
   EXPECT_EQ(fake->headCalls, uint32_t{0});
+}
+
+TEST(S3ObjectStore, ListsStrictlySortedPagesAndAdvancesContinuation) {
+  auto executor = std::make_unique<FakeExecutor>();
+  auto *fake = executor.get();
+  fake->listOutcomes.emplace_back(
+      ListResponse{{{"prefix/a", 3, std::nullopt, "\"etag-a\""}, {"prefix/b", 4, std::nullopt, "\"etag-b\""}},
+                   "next",
+                   true});
+  fake->listOutcomes.emplace_back(ListResponse{{{"prefix/c", 5, std::nullopt, "\"etag-c\""}}, {}, false});
+  S3ObjectStore store(testConfig(), std::move(executor));
+  ListObjectsRequest request{OriginId{1}, "bucket", "prefix/", {}, 2};
+
+  auto first = folly::coro::blockingWait(store.listObjects(request));
+  ASSERT_OK(first);
+  ASSERT_FALSE(first->done);
+  ASSERT_EQ(first->nextContinuation, "next");
+  ASSERT_EQ(first->objects.size(), size_t{2});
+  EXPECT_EQ(first->objects[0].identity.version, (VersionSelector{VersionSelectorType::STRONG_ETAG, "etag-a"}));
+  request.continuation = first->nextContinuation;
+  auto second = folly::coro::blockingWait(store.listObjects(request));
+  ASSERT_OK(second);
+  ASSERT_TRUE(second->done);
+  ASSERT_EQ(second->objects[0].identity.key, "prefix/c");
+  EXPECT_EQ(fake->lastList.continuation, "next");
+}
+
+TEST(S3ObjectStore, RejectsListTokenWithoutProgressAndUnsortedResults) {
+  auto executor = std::make_unique<FakeExecutor>();
+  executor->listOutcomes.emplace_back(ListResponse{{}, "same", true});
+  executor->listOutcomes.emplace_back(
+      ListResponse{{{"prefix/b", 1, std::nullopt, "etag-b"}, {"prefix/a", 1, std::nullopt, "etag-a"}}, {}, false});
+  S3ObjectStore store(testConfig(), std::move(executor));
+  auto stuck = folly::coro::blockingWait(store.listObjects({OriginId{1}, "bucket", "prefix/", "same", 2}));
+  ASSERT_ERROR(stuck, CacheCode::kInvalidResponse);
+  auto unsorted = folly::coro::blockingWait(store.listObjects({OriginId{1}, "bucket", "prefix/", {}, 2}));
+  ASSERT_ERROR(unsorted, CacheCode::kInvalidResponse);
 }
 
 #ifndef HF3FS_ENABLE_CACHE

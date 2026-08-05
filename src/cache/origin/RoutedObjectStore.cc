@@ -22,4 +22,10 @@ CoTryTask<std::vector<uint8_t>> RoutedObjectStore::getRange(const ImmutableObjec
   co_return co_await (*store)->getRange(object, range);
 }
 
+CoTryTask<ListObjectsPage> RoutedObjectStore::listObjects(const ListObjectsRequest &request) {
+  auto store = find(request.originId);
+  CO_RETURN_ON_ERROR(store);
+  co_return co_await (*store)->listObjects(request);
+}
+
 }  // namespace hf3fs::cache::origin

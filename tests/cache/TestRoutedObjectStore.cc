@@ -24,6 +24,16 @@ class RecordingStore final : public ObjectStore {
     co_return std::vector<uint8_t>(range.length, static_cast<uint8_t>(object.originId.toUnderType()));
   }
 
+  CoTryTask<ListObjectsPage> listObjects(const ListObjectsRequest &request) override {
+    lastOrigin = request.originId;
+    co_return ListObjectsPage{
+        {ObjectMetadata{
+            {request.originId, request.bucket, request.prefix + "key", {VersionSelectorType::STRONG_ETAG, "etag"}},
+            5}},
+        {},
+        true};
+  }
+
   OriginId lastOrigin{};
   ByteRange lastRange{};
 };
@@ -44,6 +54,11 @@ TEST(RoutedObjectStore, RoutesHeadAndRangeByOriginId) {
   ASSERT_OK(range);
   EXPECT_EQ(*range, (std::vector<uint8_t>{1, 1}));
   EXPECT_EQ(first->lastRange, (ByteRange{4, 2}));
+
+  auto listed = folly::coro::blockingWait(store.listObjects({OriginId{2}, "bucket", "prefix/", {}, 10}));
+  ASSERT_OK(listed);
+  ASSERT_EQ(listed->objects[0].identity.key, "prefix/key");
+  EXPECT_EQ(second->lastOrigin, OriginId{2});
 }
 
 TEST(RoutedObjectStore, RejectsUnknownOriginWithoutFallingThrough) {
