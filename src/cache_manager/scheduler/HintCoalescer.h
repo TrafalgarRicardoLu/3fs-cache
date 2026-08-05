@@ -76,6 +76,7 @@ class HintCoalescer {
   std::set<Entry, EntryLess> ordered_;
 
   static void rebuild(Entry &entry);
+  static bool batchCompatible(const LoadHint &first, const LoadHint &next);
 };
 
 }  // namespace hf3fs::cache_manager

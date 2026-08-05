@@ -112,6 +112,21 @@ bool HintCoalescer::cancel(const cache::CacheBlockKey &key, cache::PrefetchJobId
   return true;
 }
 
+bool HintCoalescer::batchCompatible(const LoadHint &first, const LoadHint &next) {
+  if (first.priority != next.priority || first.reason != next.reason ||
+      first.jobClaims.size() != next.jobClaims.size()) {
+    return false;
+  }
+  for (const auto &claim : first.jobClaims) {
+    if (std::none_of(next.jobClaims.begin(), next.jobClaims.end(), [&](const auto &candidate) {
+          return candidate.jobId == claim.jobId;
+        })) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::optional<LoadHint> HintCoalescer::pop() {
   auto lock = std::unique_lock(mutex_);
   if (ordered_.empty()) return std::nullopt;
@@ -133,7 +148,7 @@ std::vector<LoadHint> HintCoalescer::popBatch(uint64_t maxBytes) {
   while (result.back().block.toUnderType() != std::numeric_limits<uint32_t>::max()) {
     auto nextBlock = cache::CacheBlockIndex{result.back().block.toUnderType() + 1};
     auto next = entries_.find(cache::CacheBlockKey{result.front().inode.u64(), nextBlock});
-    if (next == entries_.end() ||
+    if (next == entries_.end() || !batchCompatible(result.front(), next->second.hint) ||
         (maxBytes != 0 && (bytes >= maxBytes || next->second.hint.blockLength > maxBytes - bytes))) {
       break;
     }

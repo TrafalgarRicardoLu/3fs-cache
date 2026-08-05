@@ -72,6 +72,33 @@ TEST(TestHintCoalescer, BoundsJobClaimsWithoutDroppingExistingOwners) {
   EXPECT_EQ(retained->jobClaims.size(), kMaxJobClaimsPerHint);
 }
 
+TEST(TestHintCoalescer, StrictPriorityPreventsAdjacentBlocksFromRidingAlong) {
+  HintCoalescer hints;
+  ASSERT_TRUE(hints.enqueue({meta::InodeId{1}, cache::CacheBlockIndex{0}, 4096, EnsureReason::PREFETCH, 10}));
+  ASSERT_TRUE(hints.enqueue({meta::InodeId{1}, cache::CacheBlockIndex{1}, 4096, EnsureReason::PREFETCH, 1}));
+  ASSERT_TRUE(hints.enqueue({meta::InodeId{2}, cache::CacheBlockIndex{0}, 4096, EnsureReason::PREFETCH, 5}));
+  auto first = hints.popBatch(1U << 20);
+  ASSERT_EQ(first.size(), size_t{1});
+  EXPECT_EQ(first[0].priority, 10);
+  auto second = hints.pop();
+  ASSERT_TRUE(second);
+  EXPECT_EQ(second->priority, 5);
+}
+
+TEST(TestHintCoalescer, ContiguousBatchRequiresMatchingJobOwners) {
+  HintCoalescer hints;
+  auto firstJob = cache::PrefetchJobId{Uuid::from(1, 1)};
+  auto secondJob = cache::PrefetchJobId{Uuid::from(1, 2)};
+  LoadHint first{meta::InodeId{1}, cache::CacheBlockIndex{0}, 4096, EnsureReason::PREFETCH, 7};
+  first.jobClaims.push_back({firstJob, 7, {}});
+  LoadHint next{meta::InodeId{1}, cache::CacheBlockIndex{1}, 4096, EnsureReason::PREFETCH, 7};
+  next.jobClaims.push_back({secondJob, 7, {}});
+  ASSERT_OK(hints.attach(std::move(first)));
+  ASSERT_OK(hints.attach(std::move(next)));
+  EXPECT_EQ(hints.popBatch(8192).size(), size_t{1});
+  EXPECT_EQ(hints.size(), size_t{1});
+}
+
 TEST(TestCapacityGate, EnforcesGlobalAndOriginLimitsAndReleases) {
   CapacityGate gate({2, 8192}, {{cache::OriginId{1}, {1, 4096}}, {cache::OriginId{2}, {2, 8192}}});
   auto first = gate.tryAcquire(cache::OriginId{1}, 4096);
