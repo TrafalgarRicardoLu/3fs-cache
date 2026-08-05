@@ -41,6 +41,21 @@ Result<Void> addChecked(uint64_t &value, uint64_t increment, std::string_view co
   return Void{};
 }
 
+bool transitionAllowed(cache::PrefetchPlanEntryState from, cache::PrefetchPlanEntryState to) {
+  using State = cache::PrefetchPlanEntryState;
+  if (from == to) return true;
+  switch (from) {
+    case State::PLANNED:
+      return to == State::ADMITTED || to == State::ATTACHED || to == State::READY || to == State::FAILED ||
+             to == State::CANCELLED;
+    case State::ADMITTED:
+    case State::ATTACHED:
+      return to == State::ATTACHED || to == State::READY || to == State::FAILED || to == State::CANCELLED;
+    default:
+      return false;
+  }
+}
+
 }  // namespace
 
 CoTryTask<AppendPrefetchPlanResult> PrefetchPlanStore::append(kv::IReadWriteTransaction &txn,
@@ -141,6 +156,30 @@ CoTryTask<PrefetchPlanPage> PrefetchPlanStore::snapshotList(kv::IReadOnlyTransac
     page.entries.push_back(std::move(*entry));
   }
   co_return page;
+}
+
+CoTryTask<cache::PrefetchPlanEntry> PrefetchPlanStore::update(kv::IReadWriteTransaction &txn,
+                                                              const cache::PrefetchPlanEntry &expected,
+                                                              const cache::PrefetchPlanEntry &desired) {
+  CO_RETURN_ON_ERROR(expected.valid());
+  CO_RETURN_ON_ERROR(desired.valid());
+  if (expected.jobId != desired.jobId || expected.key != desired.key || expected.blockLength != desired.blockLength ||
+      expected.priority != desired.priority || !transitionAllowed(expected.state, desired.state)) {
+    co_return makeError(StatusCode::kInvalidArg, "invalid prefetch plan entry transition");
+  }
+  auto key = OrchestrationKey::plan(expected.jobId, expected.key);
+  auto loaded = co_await txn.get(key);
+  CO_RETURN_ON_ERROR(loaded);
+  if (!loaded->has_value()) co_return makeError(CacheCode::kNotFound, "prefetch plan entry not found");
+  kv::IReadOnlyTransaction::KeyValue currentValue{key, **loaded};
+  auto current = decode(currentValue);
+  CO_RETURN_ON_ERROR(current);
+  if (*current == desired) co_return desired;
+  if (*current != expected) co_return makeError(CacheCode::kStateConflict, "prefetch plan entry CAS mismatch");
+  auto value = encode(desired);
+  CO_RETURN_ON_ERROR(value);
+  CO_RETURN_ON_ERROR(co_await txn.set(key, *value));
+  co_return desired;
 }
 
 }  // namespace hf3fs::meta::server

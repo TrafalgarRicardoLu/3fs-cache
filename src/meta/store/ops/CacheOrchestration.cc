@@ -148,6 +148,28 @@ class ListPrefetchPlanOp : public ReadOnlyOperation<ListPrefetchPlanRsp> {
   const ListPrefetchPlanReq &req_;
 };
 
+class UpdatePrefetchPlanEntriesOp : public Operation<UpdatePrefetchPlanEntriesRsp> {
+ public:
+  UpdatePrefetchPlanEntriesOp(MetaStore &meta, const UpdatePrefetchPlanEntriesReq &req)
+      : Operation<UpdatePrefetchPlanEntriesRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<UpdatePrefetchPlanEntriesRsp> run(IReadWriteTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    UpdatePrefetchPlanEntriesRsp response;
+    response.results.reserve(req_.items.size());
+    for (const auto &item : req_.items) {
+      response.results.emplace_back(co_await PrefetchPlanStore::update(txn, item.expected, item.desired));
+    }
+    co_return response;
+  }
+
+ private:
+  const UpdatePrefetchPlanEntriesReq &req_;
+};
+
 class UpsertCachePinsOp : public Operation<UpsertCachePinsRsp> {
  public:
   UpsertCachePinsOp(MetaStore &meta, const UpsertCachePinsReq &req)
@@ -278,6 +300,11 @@ MetaStore::OpPtr<AppendPrefetchPlanRsp> MetaStore::appendPrefetchPlan(const Appe
 
 MetaStore::OpPtr<ListPrefetchPlanRsp> MetaStore::listPrefetchPlan(const ListPrefetchPlanReq &req) {
   return std::make_unique<ListPrefetchPlanOp>(*this, req);
+}
+
+MetaStore::OpPtr<UpdatePrefetchPlanEntriesRsp> MetaStore::updatePrefetchPlanEntries(
+    const UpdatePrefetchPlanEntriesReq &req) {
+  return std::make_unique<UpdatePrefetchPlanEntriesOp>(*this, req);
 }
 
 MetaStore::OpPtr<UpsertCachePinsRsp> MetaStore::upsertCachePins(const UpsertCachePinsReq &req) {

@@ -68,6 +68,7 @@ class MetaServiceStub : public IMetaServiceStub {
   META_STUB_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
   META_STUB_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
   META_STUB_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
+  META_STUB_METHOD(updatePrefetchPlanEntries, UpdatePrefetchPlanEntriesReq, UpdatePrefetchPlanEntriesRsp);
 
 #undef META_STUB_METHOD
 

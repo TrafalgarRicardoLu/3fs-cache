@@ -1504,6 +1504,39 @@ struct ListPrefetchPlanRsp : RspBase {
   SERDE_STRUCT_FIELD(more, false);
 };
 
+struct UpdatePrefetchPlanEntry {
+  SERDE_STRUCT_FIELD(expected, cache::PrefetchPlanEntry{});
+  SERDE_STRUCT_FIELD(desired, cache::PrefetchPlanEntry{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(expected.valid());
+    RETURN_ON_ERROR(desired.valid());
+    if (expected.jobId != desired.jobId || expected.key != desired.key)
+      return INVALID("prefetch plan CAS identity changed");
+    return VALID;
+  }
+};
+
+struct UpdatePrefetchPlanEntriesReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(items, std::vector<UpdatePrefetchPlanEntry>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (items.empty() || items.size() > kMaxCacheBatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "invalid prefetch plan update batch size");
+    for (const auto &item : items) RETURN_ON_ERROR(item.valid());
+    return VALID;
+  }
+};
+
+struct UpdatePrefetchPlanEntriesRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<cache::PrefetchPlanEntry>>{});
+};
+
 struct UpsertCachePinsReq : ReqBase {
   SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
   SERDE_STRUCT_FIELD(pins, std::vector<cache::PinRecord>{});
@@ -1661,6 +1694,7 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(removeCachePins, 49, RemoveCachePinsReq, RemoveCachePinsRsp);
   META_SERVICE_METHOD(listCachePinsByOwner, 51, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
   META_SERVICE_METHOD(queryCachePins, 52, QueryCachePinsReq, QueryCachePinsRsp);
+  META_SERVICE_METHOD(updatePrefetchPlanEntries, 53, UpdatePrefetchPlanEntriesReq, UpdatePrefetchPlanEntriesRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

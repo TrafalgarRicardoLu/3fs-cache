@@ -159,5 +159,42 @@ TEST_F(TestPrefetchPlanStore, EmptyFinalPagePersistsCompletionCursor) {
   }());
 }
 
+TEST_F(TestPrefetchPlanStore, CasUpdatesAdmissionIdentityAndRejectsStaleOrIllegalTransitions) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto desired = planJob(6);
+    auto planned = entry(desired.spec.jobId, 0);
+    auto txn = engine_.createReadWriteTransaction();
+    CO_ASSERT_OK(co_await PrefetchJobStore::create(*txn, desired));
+    std::vector plan{planned};
+    CO_ASSERT_OK(co_await PrefetchPlanStore::append(*txn, desired.spec.jobId, plan, 0, "done", true));
+    CO_ASSERT_OK(co_await txn->commit());
+
+    auto admitted = planned;
+    admitted.state = cache::PrefetchPlanEntryState::ADMITTED;
+    admitted.admissionAttemptId = Uuid::from(1, 2);
+    txn = engine_.createReadWriteTransaction();
+    auto updated = co_await PrefetchPlanStore::update(*txn, planned, admitted);
+    CO_ASSERT_OK(updated);
+    CO_ASSERT_EQ(*updated, admitted);
+    CO_ASSERT_OK(co_await txn->commit());
+
+    txn = engine_.createReadWriteTransaction();
+    updated = co_await PrefetchPlanStore::update(*txn, planned, admitted);
+    CO_ASSERT_OK(updated);
+    CO_ASSERT_EQ(*updated, admitted);
+    auto stale = admitted;
+    stale.state = cache::PrefetchPlanEntryState::ATTACHED;
+    CO_ASSERT_ERROR(co_await PrefetchPlanStore::update(*txn, planned, stale), CacheCode::kStateConflict);
+
+    auto changedIdentity = admitted;
+    changedIdentity.blockLength++;
+    CO_ASSERT_ERROR(co_await PrefetchPlanStore::update(*txn, admitted, changedIdentity), StatusCode::kInvalidArg);
+    auto backwards = admitted;
+    backwards.state = cache::PrefetchPlanEntryState::PLANNED;
+    backwards.admissionAttemptId = Uuid::zero();
+    CO_ASSERT_ERROR(co_await PrefetchPlanStore::update(*txn, admitted, backwards), StatusCode::kInvalidArg);
+  }());
+}
+
 }  // namespace
 }  // namespace hf3fs::meta::server
