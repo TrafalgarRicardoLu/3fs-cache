@@ -23,6 +23,7 @@ enum class JobAdmissionDisposition : uint8_t {
 
 struct JobAdmissionResult {
   JobAdmissionDisposition disposition{JobAdmissionDisposition::RETRYABLE};
+  std::optional<cache::ReadyIdentity> ready;
 };
 
 class JobRunnerBackend {

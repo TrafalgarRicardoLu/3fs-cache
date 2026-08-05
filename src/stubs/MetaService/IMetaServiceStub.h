@@ -72,6 +72,7 @@ class IMetaServiceStub {
   IMETA_STUB_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
   IMETA_STUB_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
   IMETA_STUB_METHOD(updatePrefetchPlanEntries, UpdatePrefetchPlanEntriesReq, UpdatePrefetchPlanEntriesRsp);
+  IMETA_STUB_METHOD(trackPrefetchReady, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
 
 #undef IMETA_STUB_METHOD
 };

@@ -145,6 +145,15 @@ Result<Void> PrefetchPlanEntry::valid() const {
       admissionAttemptId == Uuid::zero()) {
     return makeError(StatusCode::kInvalidArg, "admitted entry is missing admission identity");
   }
+  if (state == PrefetchPlanEntryState::READY) {
+    if (!ready.has_value()) return makeError(StatusCode::kInvalidArg, "ready plan entry has no generation fence");
+    RETURN_ON_ERROR(ready->valid());
+    if (ready->blockLength != blockLength) {
+      return makeError(StatusCode::kInvalidArg, "ready plan entry block length changed");
+    }
+  } else if (ready.has_value()) {
+    return makeError(StatusCode::kInvalidArg, "non-ready plan entry has a generation fence");
+  }
   return Void{};
 }
 

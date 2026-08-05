@@ -56,6 +56,34 @@ bool transitionAllowed(cache::PrefetchPlanEntryState from, cache::PrefetchPlanEn
   }
 }
 
+template <typename Transaction>
+CoTryTask<PrefetchPlanPage> listPlan(Transaction &txn,
+                                     cache::PrefetchJobId jobId,
+                                     std::optional<cache::CacheBlockKey> after,
+                                     uint32_t limit,
+                                     bool snapshot) {
+  if (jobId == cache::PrefetchJobId{} || limit == 0 || limit > cache::kMaxPhase2BatchItems) {
+    co_return makeError(StatusCode::kInvalidArg, "invalid prefetch plan page");
+  }
+  if (after) CO_RETURN_ON_ERROR(after->valid());
+  auto prefix = OrchestrationKey::planPrefix(jobId);
+  auto begin = after ? OrchestrationKey::plan(jobId, *after) : prefix;
+  auto end = kv::TransactionHelper::prefixListEndKey(prefix);
+  auto values = snapshot ? co_await txn.snapshotGetRange({begin, !after.has_value()}, {end, false}, limit + 1)
+                         : co_await txn.getRange({begin, !after.has_value()}, {end, false}, limit + 1);
+  CO_RETURN_ON_ERROR(values);
+  PrefetchPlanPage page;
+  page.more = values->kvs.size() > limit || values->hasMore;
+  auto count = std::min<size_t>(values->kvs.size(), limit);
+  page.entries.reserve(count);
+  for (size_t index = 0; index < count; ++index) {
+    auto entry = decode(values->kvs[index]);
+    CO_RETURN_ON_ERROR(entry);
+    page.entries.push_back(std::move(*entry));
+  }
+  co_return page;
+}
+
 }  // namespace
 
 CoTryTask<AppendPrefetchPlanResult> PrefetchPlanStore::append(kv::IReadWriteTransaction &txn,
@@ -136,26 +164,14 @@ CoTryTask<PrefetchPlanPage> PrefetchPlanStore::snapshotList(kv::IReadOnlyTransac
                                                             cache::PrefetchJobId jobId,
                                                             std::optional<cache::CacheBlockKey> after,
                                                             uint32_t limit) {
-  if (jobId == cache::PrefetchJobId{} || limit == 0 || limit > cache::kMaxPhase2BatchItems) {
-    co_return makeError(StatusCode::kInvalidArg, "invalid prefetch plan page");
-  }
-  if (after) CO_RETURN_ON_ERROR(after->valid());
-  auto prefix = OrchestrationKey::planPrefix(jobId);
-  auto begin = after ? OrchestrationKey::plan(jobId, *after) : prefix;
-  auto end = kv::TransactionHelper::prefixListEndKey(prefix);
-  auto values =
-      co_await txn.snapshotGetRange({begin, !after.has_value()}, {end, false}, static_cast<int32_t>(limit + 1));
-  CO_RETURN_ON_ERROR(values);
-  PrefetchPlanPage page;
-  page.more = values->kvs.size() > limit || values->hasMore;
-  auto count = std::min<size_t>(values->kvs.size(), limit);
-  page.entries.reserve(count);
-  for (size_t index = 0; index < count; ++index) {
-    auto entry = decode(values->kvs[index]);
-    CO_RETURN_ON_ERROR(entry);
-    page.entries.push_back(std::move(*entry));
-  }
-  co_return page;
+  co_return co_await listPlan(txn, jobId, after, limit, true);
+}
+
+CoTryTask<PrefetchPlanPage> PrefetchPlanStore::list(kv::IReadWriteTransaction &txn,
+                                                    cache::PrefetchJobId jobId,
+                                                    std::optional<cache::CacheBlockKey> after,
+                                                    uint32_t limit) {
+  co_return co_await listPlan(txn, jobId, after, limit, false);
 }
 
 CoTryTask<cache::PrefetchPlanEntry> PrefetchPlanStore::update(kv::IReadWriteTransaction &txn,

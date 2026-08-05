@@ -69,6 +69,7 @@ IMPL_META_STUB_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
 IMPL_META_STUB_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
 IMPL_META_STUB_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
 IMPL_META_STUB_METHOD(updatePrefetchPlanEntries, UpdatePrefetchPlanEntriesReq, UpdatePrefetchPlanEntriesRsp);
+IMPL_META_STUB_METHOD(trackPrefetchReady, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
 
 template class MetaServiceStub<serde::ClientContext>;
 template class MetaServiceStub<serde::ClientMockContext>;

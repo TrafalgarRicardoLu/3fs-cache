@@ -274,6 +274,9 @@ struct PrefetchPlanEntry {
   SERDE_STRUCT_FIELD(priority, uint32_t{});
   SERDE_STRUCT_FIELD(state, PrefetchPlanEntryState::INVALID);
   SERDE_STRUCT_FIELD(admissionAttemptId, Uuid::zero());
+  // Set once when READY is first observed. It fences current readiness while
+  // Job counters retain monotonic achieved readiness.
+  SERDE_STRUCT_FIELD(ready, std::optional<ReadyIdentity>{});
 
  public:
   Result<Void> valid() const;

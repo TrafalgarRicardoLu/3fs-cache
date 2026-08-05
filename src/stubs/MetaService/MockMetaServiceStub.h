@@ -81,6 +81,7 @@ class DummyMetaServiceStub : public IMetaServiceStub {
   NOT_IMPLEMENTED_FUNC(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
   NOT_IMPLEMENTED_FUNC(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
   NOT_IMPLEMENTED_FUNC(updatePrefetchPlanEntries, UpdatePrefetchPlanEntriesReq, UpdatePrefetchPlanEntriesRsp);
+  NOT_IMPLEMENTED_FUNC(trackPrefetchReady, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
 
   virtual CoTryTask<AuthRsp> authenticate(const AuthReq &req) { co_return AuthRsp{req.user}; }
   CoTryTask<AuthRsp> authenticate(const AuthReq &req, const net::UserRequestOptions &, serde::Timestamp *) override {
@@ -200,6 +201,7 @@ class MetaServiceStub<hf3fs::stubs::StubMockContext<IMetaServiceStub>> : public 
   FORWARD_RPC_FUNC(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
   FORWARD_RPC_FUNC(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
   FORWARD_RPC_FUNC(updatePrefetchPlanEntries, UpdatePrefetchPlanEntriesReq, UpdatePrefetchPlanEntriesRsp);
+  FORWARD_RPC_FUNC(trackPrefetchReady, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
 
 #undef FORWARD_RPC_FUNC
 

@@ -248,6 +248,7 @@ class MetaClient {
   CoTryTask<AppendPrefetchPlanRsp> appendPrefetchPlan(AppendPrefetchPlanReq req);
   CoTryTask<ListPrefetchPlanRsp> listPrefetchPlan(ListPrefetchPlanReq req);
   CoTryTask<UpdatePrefetchPlanEntriesRsp> updatePrefetchPlanEntries(UpdatePrefetchPlanEntriesReq req);
+  CoTryTask<TrackPrefetchReadyRsp> trackPrefetchReady(TrackPrefetchReadyReq req);
   CoTryTask<UpsertCachePinsRsp> upsertCachePins(UpsertCachePinsReq req);
   CoTryTask<RemoveCachePinsRsp> removeCachePins(RemoveCachePinsReq req);
   CoTryTask<ListCachePinsByOwnerRsp> listCachePinsByOwner(ListCachePinsByOwnerReq req);

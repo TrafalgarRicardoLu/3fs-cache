@@ -119,8 +119,13 @@ CoTryTask<JobRunnerPageResult> JobRunner::runNextPage(const cache::PrefetchJobRe
     auto desired = current;
     switch (admitted->disposition) {
       case JobAdmissionDisposition::READY:
+        if (!admitted->ready || admitted->ready->blockLength != current.blockLength) {
+          release(current);
+          co_return makeError(CacheCode::kInvalidResponse, "READY admission has no matching generation fence");
+        }
         release(current);
         desired.state = cache::PrefetchPlanEntryState::READY;
+        desired.ready = admitted->ready;
         ++result.ready;
         break;
       case JobAdmissionDisposition::QUEUED:

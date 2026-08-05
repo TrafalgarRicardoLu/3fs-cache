@@ -58,7 +58,12 @@ class FakeJobRunnerBackend : public JobRunnerBackend {
       completion(Status::OK);
     else
       completions[block] = std::move(completion);
-    co_return JobAdmissionResult{dispositions.at(block)};
+    auto disposition = dispositions.at(block);
+    std::optional<cache::ReadyIdentity> ready;
+    if (disposition == JobAdmissionDisposition::READY) {
+      ready = cache::ReadyIdentity{1, cache::CacheGeneration{block + 1}, 1, block + 10, entry.blockLength};
+    }
+    co_return JobAdmissionResult{disposition, ready};
   }
 
  private:

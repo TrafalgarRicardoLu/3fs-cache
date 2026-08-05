@@ -64,5 +64,6 @@ class MockMetaService : public serde::ServiceWrapper<MockMetaService, MetaSerde>
   META_MOCK_SERVICE_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
   META_MOCK_SERVICE_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
   META_MOCK_SERVICE_METHOD(updatePrefetchPlanEntries, UpdatePrefetchPlanEntriesReq, UpdatePrefetchPlanEntriesRsp);
+  META_MOCK_SERVICE_METHOD(trackPrefetchReady, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
 };
 }  // namespace hf3fs::meta

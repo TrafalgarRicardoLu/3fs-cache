@@ -133,6 +133,8 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     jobQuota_ = std::make_unique<JobQuota>();
     auto runnerBackend = std::make_shared<MetaJobRunnerBackend>(metaClient_, service, *ensureCached_);
     jobRunner_ = std::make_shared<JobRunner>(runnerBackend, *jobQuota_, config_.phase3_plan_page_size(), Uuid::random);
+    auto trackerBackend = std::make_shared<MetaJobTrackerBackend>(metaClient_, service);
+    jobTracker_ = std::make_shared<JobTracker>(trackerBackend, config_.phase3_plan_page_size());
     auto coordinatorBackend = std::make_shared<MetaOrchestrationCoordinatorBackend>(metaClient_, std::move(service));
     orchestration_ = std::make_unique<OrchestrationCoordinator>(
         std::move(coordinatorBackend),
@@ -143,6 +145,11 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                               std::optional<cache::CacheBlockKey> after,
                               const CancellationToken &cancellation) -> CoTryTask<JobRunnerPageResult> {
           co_return co_await runner->runNextPage(job, after, cancellation);
+        },
+        [tracker = jobTracker_](const cache::PrefetchJobRecord &job,
+                                const CancellationToken &cancellation) -> CoTryTask<void> {
+          CO_RETURN_ON_ERROR(co_await tracker->run(job, cancellation));
+          co_return Void{};
         });
     auto recovered = folly::coro::blockingWait(orchestration_->recover());
     if (recovered.hasError()) {

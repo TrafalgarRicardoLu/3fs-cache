@@ -9,6 +9,7 @@
 #include "meta/store/cache/PinStore.h"
 #include "meta/store/cache/PrefetchJobStore.h"
 #include "meta/store/cache/PrefetchPlanStore.h"
+#include "meta/store/cache/PrefetchReadyStore.h"
 
 namespace hf3fs::meta::server {
 
@@ -170,6 +171,31 @@ class UpdatePrefetchPlanEntriesOp : public Operation<UpdatePrefetchPlanEntriesRs
   const UpdatePrefetchPlanEntriesReq &req_;
 };
 
+class TrackPrefetchReadyOp : public Operation<TrackPrefetchReadyRsp> {
+ public:
+  TrackPrefetchReadyOp(MetaStore &meta, const TrackPrefetchReadyReq &req)
+      : Operation<TrackPrefetchReadyRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<TrackPrefetchReadyRsp> run(IReadWriteTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto tracked = co_await PrefetchReadyStore::track(txn, req_.jobId, req_.after, req_.limit);
+    CO_RETURN_ON_ERROR(tracked);
+    TrackPrefetchReadyRsp response;
+    response.job = std::move(tracked->job);
+    response.currentReadyBytes = tracked->currentReadyBytes;
+    response.currentReadyBlocks = tracked->currentReadyBlocks;
+    response.more = tracked->more;
+    response.nextAfter = tracked->nextAfter;
+    co_return response;
+  }
+
+ private:
+  const TrackPrefetchReadyReq &req_;
+};
+
 class UpsertCachePinsOp : public Operation<UpsertCachePinsRsp> {
  public:
   UpsertCachePinsOp(MetaStore &meta, const UpsertCachePinsReq &req)
@@ -305,6 +331,10 @@ MetaStore::OpPtr<ListPrefetchPlanRsp> MetaStore::listPrefetchPlan(const ListPref
 MetaStore::OpPtr<UpdatePrefetchPlanEntriesRsp> MetaStore::updatePrefetchPlanEntries(
     const UpdatePrefetchPlanEntriesReq &req) {
   return std::make_unique<UpdatePrefetchPlanEntriesOp>(*this, req);
+}
+
+MetaStore::OpPtr<TrackPrefetchReadyRsp> MetaStore::trackPrefetchReady(const TrackPrefetchReadyReq &req) {
+  return std::make_unique<TrackPrefetchReadyOp>(*this, req);
 }
 
 MetaStore::OpPtr<UpsertCachePinsRsp> MetaStore::upsertCachePins(const UpsertCachePinsReq &req) {

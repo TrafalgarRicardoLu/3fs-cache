@@ -34,6 +34,10 @@ class PrefetchPlanStore {
                                                   cache::PrefetchJobId jobId,
                                                   std::optional<cache::CacheBlockKey> after,
                                                   uint32_t limit);
+  static CoTryTask<PrefetchPlanPage> list(kv::IReadWriteTransaction &txn,
+                                          cache::PrefetchJobId jobId,
+                                          std::optional<cache::CacheBlockKey> after,
+                                          uint32_t limit);
   static CoTryTask<cache::PrefetchPlanEntry> update(kv::IReadWriteTransaction &txn,
                                                     const cache::PrefetchPlanEntry &expected,
                                                     const cache::PrefetchPlanEntry &desired);
