@@ -33,6 +33,45 @@ TEST(TestHintCoalescer, PopsContiguousRangeWithinByteLimit) {
   ASSERT_EQ(hints.size(), size_t{1});
 }
 
+TEST(TestHintCoalescer, MergesJobClaimsAndCancelsOnlySelectedOwner) {
+  HintCoalescer hints;
+  auto foreground = LoadHint{meta::InodeId{1}, cache::CacheBlockIndex{0}, 4096, EnsureReason::FOREGROUND_MISS, 3};
+  ASSERT_TRUE(hints.enqueue(foreground));
+  std::vector<status_code_t> completions;
+  auto firstJob = cache::PrefetchJobId{Uuid::from(1, 1)};
+  auto secondJob = cache::PrefetchJobId{Uuid::from(1, 2)};
+  LoadHint first{meta::InodeId{1}, cache::CacheBlockIndex{0}, 4096, EnsureReason::PREFETCH, 7};
+  first.jobClaims.push_back({firstJob, 7, [&](const Status &status) { completions.push_back(status.code()); }});
+  ASSERT_OK(hints.attach(std::move(first)));
+  LoadHint second{meta::InodeId{1}, cache::CacheBlockIndex{0}, 4096, EnsureReason::PREFETCH, 9};
+  second.jobClaims.push_back({secondJob, 9, [&](const Status &status) { completions.push_back(status.code()); }});
+  ASSERT_OK(hints.attach(std::move(second)));
+
+  ASSERT_TRUE(hints.cancel({1, cache::CacheBlockIndex{0}}, firstJob));
+  auto merged = hints.pop();
+  ASSERT_TRUE(merged);
+  EXPECT_EQ(merged->priority, 9);
+  ASSERT_EQ(merged->jobClaims.size(), size_t{1});
+  EXPECT_EQ(merged->jobClaims[0].jobId, secondJob);
+  merged->notify(Status::OK);
+  EXPECT_EQ(completions, (std::vector<status_code_t>{StatusCode::kOK}));
+}
+
+TEST(TestHintCoalescer, BoundsJobClaimsWithoutDroppingExistingOwners) {
+  HintCoalescer hints;
+  LoadHint initial{meta::InodeId{1}, cache::CacheBlockIndex{0}, 4096, EnsureReason::PREFETCH, 1};
+  for (size_t index = 0; index < kMaxJobClaimsPerHint; ++index) {
+    initial.jobClaims.push_back({cache::PrefetchJobId{Uuid::from(1, index + 1)}, static_cast<int32_t>(index), {}});
+  }
+  ASSERT_OK(hints.attach(std::move(initial)));
+  LoadHint overflow{meta::InodeId{1}, cache::CacheBlockIndex{0}, 4096, EnsureReason::PREFETCH, 100};
+  overflow.jobClaims.push_back({cache::PrefetchJobId{Uuid::from(2, 1)}, 100, {}});
+  ASSERT_ERROR(hints.attach(std::move(overflow)), StatusCode::kQueueConflict);
+  auto retained = hints.pop();
+  ASSERT_TRUE(retained);
+  EXPECT_EQ(retained->jobClaims.size(), kMaxJobClaimsPerHint);
+}
+
 TEST(TestCapacityGate, EnforcesGlobalAndOriginLimitsAndReleases) {
   CapacityGate gate({2, 8192}, {{cache::OriginId{1}, {1, 4096}}, {cache::OriginId{2}, {2, 8192}}});
   auto first = gate.tryAcquire(cache::OriginId{1}, 4096);

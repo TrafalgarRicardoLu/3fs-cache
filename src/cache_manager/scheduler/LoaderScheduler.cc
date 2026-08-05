@@ -10,7 +10,9 @@ CoTask<void> LoaderScheduler::runOne() {
   auto hints = hints_.popBatch(maxRangeBytes_);
   if (hints.empty()) co_return;
   auto first = hints.front();
-  auto result = co_await loader_.loadBatch(std::move(hints));
+  auto result = co_await loader_.loadBatch(hints);
+  const auto status = result.hasValue() ? Status::OK : result.error();
+  for (const auto &hint : hints) hint.notify(status);
   cache::metrics::setGauge(cache::metrics::Event::MANAGER_QUEUE, hints_.size());
   cache::metrics::recordCount(
       cache::metrics::Event::MANAGER_LOADER_RESULT,

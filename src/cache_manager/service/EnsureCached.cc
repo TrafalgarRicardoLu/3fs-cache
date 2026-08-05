@@ -165,7 +165,7 @@ CoTryTask<void> EnsureCached::cancelQueued(const cache::CacheBlockKey &key, cons
 
 Result<bool> EnsureCached::attach(LoadHint hint) {
   if (attach_) return attach_(std::move(hint));
-  return hints_.enqueue(std::move(hint));
+  return hints_.attach(std::move(hint));
 }
 
 CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
