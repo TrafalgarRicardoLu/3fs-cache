@@ -159,6 +159,17 @@ class MetaStore {
 
   OpPtr<FinishCleanCacheBlocksRsp> finishCleanCacheBlocks(const FinishCleanCacheBlocksReq &req);
 
+  OpPtr<CreatePrefetchJobRsp> createPrefetchJob(const CreatePrefetchJobReq &req);
+  OpPtr<GetPrefetchJobRsp> getPrefetchJob(const GetPrefetchJobReq &req);
+  OpPtr<ListPrefetchJobsRsp> listPrefetchJobs(const ListPrefetchJobsReq &req);
+  OpPtr<UpdatePrefetchJobRsp> updatePrefetchJob(const UpdatePrefetchJobReq &req);
+  OpPtr<AppendPrefetchPlanRsp> appendPrefetchPlan(const AppendPrefetchPlanReq &req);
+  OpPtr<ListPrefetchPlanRsp> listPrefetchPlan(const ListPrefetchPlanReq &req);
+  OpPtr<UpsertCachePinsRsp> upsertCachePins(const UpsertCachePinsReq &req);
+  OpPtr<RemoveCachePinsRsp> removeCachePins(const RemoveCachePinsReq &req);
+  OpPtr<ListCachePinsByOwnerRsp> listCachePinsByOwner(const ListCachePinsByOwnerReq &req);
+  OpPtr<QueryCachePinsRsp> queryCachePins(const QueryCachePinsReq &req);
+
  private:
   template <typename>
   FRIEND_TEST(TestRemove, GC);

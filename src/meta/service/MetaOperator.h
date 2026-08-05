@@ -226,6 +226,7 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   Result<Void> checkCacheService(const CacheServiceIdentity &service) const;
   Result<Void> checkCacheFeature(uint32_t protocolVersion) const;
   Result<Void> checkCachePhase2(uint32_t protocolVersion) const;
+  Result<Void> checkCachePhase3(uint32_t protocolVersion) const;
   Result<Void> checkCacheTable(flat::ChainTableId tableId) const;
 
   const Config &config_;
