@@ -18,7 +18,9 @@ struct NamespaceFileCursor {
   SERDE_STRUCT_FIELD(nextBlock, uint64_t{});
 };
 
-Result<uint64_t> blockCount(const meta::Inode &inode) {
+}  // namespace
+
+Result<uint64_t> originFileBlockCount(const meta::Inode &inode) {
   const auto blockSize = uint64_t{inode.fileLayout().chunkSize};
   const auto count = inode.fileLength() / blockSize + (inode.fileLength() % blockSize != 0);
   if (count > uint64_t{std::numeric_limits<uint32_t>::max()} + 1) {
@@ -27,7 +29,7 @@ Result<uint64_t> blockCount(const meta::Inode &inode) {
   return count;
 }
 
-Result<Void> validateSnapshot(const meta::Inode &inode) {
+Result<Void> validateOriginFileSnapshot(const meta::Inode &inode) {
   if (!inode.isOriginFile()) return makeError(MetaCode::kNotFile, "namespace source is not an OriginFile");
   const auto &origin = inode.asOriginFile();
   if (origin.superseded || origin.cacheAdmissionDisabled) {
@@ -38,9 +40,11 @@ Result<Void> validateSnapshot(const meta::Inode &inode) {
     return makeError(MetaCode::kInvalidFileLayout, "OriginFile cache layout is not empty");
   }
   RETURN_ON_ERROR(inode.fileLayout().valid(true));
-  RETURN_ON_ERROR(blockCount(inode));
+  RETURN_ON_ERROR(originFileBlockCount(inode));
   return Void{};
 }
+
+namespace {
 
 Result<std::string> encodeCursor(const NamespaceFileCursor &cursor) {
   auto encoded = serde::serialize(cursor);
@@ -53,8 +57,8 @@ Result<NamespaceFileCursor> decodeCursor(std::string_view encoded, const Planner
   if (cursor.version != kNamespaceFileCursorVersion || cursor.sourceIndex != context.sourceIndex) {
     return makeError(StatusCode::kInvalidArg, "namespace file cursor does not match its source");
   }
-  RETURN_ON_ERROR(validateSnapshot(cursor.inode));
-  auto blocks = blockCount(cursor.inode);
+  RETURN_ON_ERROR(validateOriginFileSnapshot(cursor.inode));
+  auto blocks = originFileBlockCount(cursor.inode);
   RETURN_ON_ERROR(blocks);
   if (cursor.nextBlock == 0 || cursor.nextBlock >= *blocks) {
     return makeError(StatusCode::kInvalidArg, "namespace file cursor block is invalid");
@@ -64,9 +68,34 @@ Result<NamespaceFileCursor> decodeCursor(std::string_view encoded, const Planner
 
 }  // namespace
 
+CoTryTask<NamespaceListPage> NamespaceFileResolver::list(meta::InodeId, std::string_view, uint32_t) {
+  co_return makeError(StatusCode::kNotImplemented, "namespace directory listing is not implemented");
+}
+
 CoTryTask<meta::Inode> MetaNamespaceFileResolver::stat(std::string_view path) {
   if (!metaClient_) co_return makeError(StatusCode::kInvalidConfig, "namespace planner MetaClient is not configured");
   co_return co_await metaClient_->stat(user_, meta::InodeId::root(), Path{std::string(path)}, true);
+}
+
+CoTryTask<NamespaceListPage> MetaNamespaceFileResolver::list(meta::InodeId directory,
+                                                             std::string_view after,
+                                                             uint32_t limit) {
+  if (!metaClient_) co_return makeError(StatusCode::kInvalidConfig, "namespace planner MetaClient is not configured");
+  auto result = co_await metaClient_->list(user_, directory, std::nullopt, after, static_cast<int32_t>(limit), true);
+  CO_RETURN_ON_ERROR(result);
+  if (result->entries.size() != result->inodes.size() || result->entries.size() > limit) {
+    co_return makeError(CacheCode::kInvalidResponse, "invalid namespace list response size");
+  }
+  NamespaceListPage page;
+  page.more = result->more;
+  page.entries.reserve(result->entries.size());
+  for (size_t index = 0; index < result->entries.size(); ++index) {
+    if (result->entries[index].id != result->inodes[index].id) {
+      co_return makeError(CacheCode::kInvalidResponse, "namespace list inode does not match directory entry");
+    }
+    page.entries.push_back({result->entries[index].name, std::move(result->inodes[index])});
+  }
+  co_return page;
 }
 
 NamespaceFilePlanner::NamespaceFilePlanner(std::shared_ptr<NamespaceFileResolver> resolver,
@@ -86,7 +115,7 @@ CoTryTask<PlannerPage> NamespaceFilePlanner::plan(std::string_view encodedCursor
     auto resolved = co_await resolver_->stat(source_.path);
     CO_RETURN_ON_ERROR(resolved);
     inode = std::move(*resolved);
-    CO_RETURN_ON_ERROR(validateSnapshot(inode));
+    CO_RETURN_ON_ERROR(validateOriginFileSnapshot(inode));
   } else {
     auto cursor = decodeCursor(encodedCursor, context());
     CO_RETURN_ON_ERROR(cursor);
@@ -94,7 +123,7 @@ CoTryTask<PlannerPage> NamespaceFilePlanner::plan(std::string_view encodedCursor
     beginBlock = cursor->nextBlock;
   }
 
-  auto blocks = blockCount(inode);
+  auto blocks = originFileBlockCount(inode);
   CO_RETURN_ON_ERROR(blocks);
   PlannerPage page;
   const auto endBlock = std::min(*blocks, beginBlock + context().pageLimit);
