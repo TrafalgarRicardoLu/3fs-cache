@@ -16,6 +16,7 @@ class EnsureCached {
   using SteadyClockFn = std::function<SteadyTime()>;
   using WallClockNsFn = std::function<uint64_t()>;
   using AttachFn = std::function<Result<bool>(LoadHint)>;
+  using PrefetchCompletion = std::function<void(const Status &)>;
 
   EnsureCached(std::shared_ptr<CacheManagerBackend> backend,
                HintCoalescer &hints,
@@ -36,15 +37,25 @@ class EnsureCached {
                AttachFn attach = {});
 
   CoTryTask<EnsureCachedRsp> run(const EnsureCachedReq &req);
+  CoTryTask<EnsureCachedRsp> runPrefetch(const cache::PrefetchPlanEntry &entry, PrefetchCompletion completion);
   BypassReason lastBypassReason() const { return lastBypassReason_.load(std::memory_order_relaxed); }
 
  private:
+  struct PrefetchContext {
+    cache::PrefetchJobId jobId;
+    Uuid attemptId;
+    uint64_t blockLength{0};
+    PrefetchCompletion completion;
+  };
+
+  CoTryTask<EnsureCachedRsp> run(const EnsureCachedReq &req, const PrefetchContext *prefetch);
   CoTryTask<EnsureCachedRsp> runLegacy(const EnsureCachedReq &req,
                                        const meta::Inode &inode,
                                        const std::vector<meta::CacheBlockRequestBase> &items);
   CoTryTask<EnsureCachedRsp> runPhase2(const EnsureCachedReq &req,
                                        const meta::Inode &inode,
-                                       const std::vector<meta::CacheBlockRequestBase> &items);
+                                       const std::vector<meta::CacheBlockRequestBase> &items,
+                                       const PrefetchContext *prefetch);
   CoTryTask<meta::EnqueueCacheBlocksRsp> enqueueWithRetry(const meta::CacheBlockRequestBase &item);
   CoTryTask<void> release(const storage::PermitIdentity &permit);
   CoTryTask<void> cancelQueued(const cache::CacheBlockKey &key, const storage::PermitIdentity &permit);

@@ -1465,7 +1465,7 @@ struct AppendPrefetchPlanReq : ReqBase {
   Result<Void> valid() const {
     RETURN_ON_ERROR(service.valid());
     if (jobId == cache::PrefetchJobId{}) return INVALID("prefetch job id not set");
-    if ((!planningComplete && entries.empty()) || entries.size() > kMaxCacheBatchItems)
+    if (entries.size() > kMaxCacheBatchItems)
       return makeError(CacheCode::kRequestTooLarge, "invalid prefetch plan page size");
     if (plannerCursor.size() > cache::kMaxDatasetPathLength)
       return makeError(CacheCode::kRequestTooLarge, "planner cursor too large");

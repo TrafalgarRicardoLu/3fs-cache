@@ -159,6 +159,24 @@ TEST_F(TestPrefetchPlanStore, EmptyFinalPagePersistsCompletionCursor) {
   }());
 }
 
+TEST_F(TestPrefetchPlanStore, EmptySourceCanAdvanceToNextSource) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto desired = planJob(7);
+    desired.spec.sources.push_back(cache::DatasetSource{cache::NamespacePathSource{"/second", true}});
+    auto txn = engine_.createReadWriteTransaction();
+    CO_ASSERT_OK(co_await PrefetchJobStore::create(*txn, desired));
+    CO_ASSERT_OK(co_await txn->commit());
+
+    txn = engine_.createReadWriteTransaction();
+    std::vector<cache::PrefetchPlanEntry> empty;
+    auto advanced = co_await PrefetchPlanStore::append(*txn, desired.spec.jobId, empty, 1, "", false);
+    CO_ASSERT_OK(advanced);
+    CO_ASSERT_EQ(advanced->job.plannerSourceIndex, 1u);
+    CO_ASSERT_FALSE(advanced->job.planningComplete);
+    CO_ASSERT_OK(co_await txn->commit());
+  }());
+}
+
 TEST_F(TestPrefetchPlanStore, CasUpdatesAdmissionIdentityAndRejectsStaleOrIllegalTransitions) {
   folly::coro::blockingWait([&]() -> CoTask<void> {
     auto desired = planJob(6);

@@ -8,6 +8,7 @@ load_lease = "30s"
 hint_timeout = "500ms"
 scheduler_interval = "100ms"
 enable_phase2 = false
+enable_phase3 = false
 admission_policy = "second_miss"
 eviction_policy = "lru"
 capacity_high_watermark = 0.90

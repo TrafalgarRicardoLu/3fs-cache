@@ -4,6 +4,11 @@
 #include <folly/experimental/coro/BlockingWait.h>
 #include <limits>
 
+#include "cache/origin/RoutedObjectStore.h"
+#include "cache_manager/planner/ManifestPlanner.h"
+#include "cache_manager/planner/NamespaceDatasetPlanner.h"
+#include "cache_manager/planner/S3PrefixPlanner.h"
+
 namespace hf3fs::cache_manager {
 
 CacheManagerOperator::CacheManagerOperator(const Config &config,
@@ -13,7 +18,8 @@ CacheManagerOperator::CacheManagerOperator(const Config &config,
                                            RealCacheManagerBackend::Stores stores)
     : config_(config),
       metaClient_(std::move(metaClient)),
-      storageClient_(std::move(storageClient)) {
+      storageClient_(std::move(storageClient)),
+      stores_(stores) {
   if (metaClient_ && storageClient_ && mgmtdClient) {
     backend_ = std::make_shared<RealCacheManagerBackend>(config_,
                                                          metaClient_,
@@ -97,6 +103,54 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
   } else {
     ensureCached_ = std::make_unique<EnsureCached>(backend_, hints_, cleanupWorker_.get());
   }
+  if (config_.enable_phase3()) {
+    cache::origin::RoutedObjectStore::Stores routedStores;
+    for (const auto &[originId, store] : stores_) routedStores.emplace(originId.toUnderType(), store);
+    auto objectStore = std::make_shared<cache::origin::RoutedObjectStore>(std::move(routedStores));
+    auto resolver = std::make_shared<MetaNamespaceFileResolver>(metaClient_, flat::UserInfo{});
+    auto importer = std::make_shared<MetaOriginFileImporter>(metaClient_, flat::UserInfo{});
+    SourcePlannerFactory::Builders builders;
+    builders.emplace(cache::DatasetSourceType::NAMESPACE_PATH,
+                     makeNamespaceDatasetPlannerBuilder(resolver, cache::DatasetSourceType::NAMESPACE_PATH));
+    builders.emplace(cache::DatasetSourceType::PATH_LIST,
+                     makeNamespaceDatasetPlannerBuilder(resolver, cache::DatasetSourceType::PATH_LIST));
+    builders.emplace(cache::DatasetSourceType::MANIFEST_PATH,
+                     makeManifestPlannerBuilder(resolver, objectStore, ManifestPlannerConfig{}));
+    S3PrefixPlannerConfig prefixConfig;
+    prefixConfig.layout.tableId = flat::ChainTableId{config_.phase3_prefix_table_id()};
+    prefixConfig.layout.blockSize = config_.phase3_prefix_block_size();
+    prefixConfig.layout.stripeSize = config_.phase3_prefix_stripe_size();
+    builders.emplace(cache::DatasetSourceType::S3_PREFIX,
+                     makeS3PrefixPlannerBuilder(objectStore, importer, prefixConfig));
+    auto factory = SourcePlannerFactory::create({config_.phase3_plan_page_size(), cache::kMaxDatasetPathLength},
+                                                std::move(builders));
+    RETURN_ON_ERROR(factory);
+    auto sharedFactory = std::shared_ptr<SourcePlannerFactory>(std::move(*factory));
+    meta::CacheServiceIdentity service{config_.service_name(), config_.service_token()};
+    auto plannerBackend = std::make_shared<MetaJobPlannerBackend>(metaClient_, service);
+    jobPlanner_ =
+        std::make_shared<JobPlanner>(plannerBackend, std::move(sharedFactory), config_.phase3_plan_page_size());
+    jobQuota_ = std::make_unique<JobQuota>();
+    auto runnerBackend = std::make_shared<MetaJobRunnerBackend>(metaClient_, service, *ensureCached_);
+    jobRunner_ = std::make_shared<JobRunner>(runnerBackend, *jobQuota_, config_.phase3_plan_page_size(), Uuid::random);
+    auto coordinatorBackend = std::make_shared<MetaOrchestrationCoordinatorBackend>(metaClient_, std::move(service));
+    orchestration_ = std::make_unique<OrchestrationCoordinator>(
+        std::move(coordinatorBackend),
+        config_.phase3_job_page_size(),
+        [planner = jobPlanner_](const cache::PrefetchJobRecord &job, const CancellationToken &cancellation)
+            -> CoTryTask<cache::PrefetchJobRecord> { co_return co_await planner->runNextPage(job, cancellation); },
+        [runner = jobRunner_](const cache::PrefetchJobRecord &job,
+                              std::optional<cache::CacheBlockKey> after,
+                              const CancellationToken &cancellation) -> CoTryTask<JobRunnerPageResult> {
+          co_return co_await runner->runNextPage(job, after, cancellation);
+        });
+    auto recovered = folly::coro::blockingWait(orchestration_->recover());
+    if (recovered.hasError()) {
+      orchestration_.reset();
+      if (accessFlushWorker_) accessFlushWorker_->stop();
+      return makeError(recovered.error());
+    }
+  }
   auto scheduler = std::make_unique<BackgroundRunner>(executor);
   if (!scheduler->start(
           "CacheManagerScheduler",
@@ -156,6 +210,35 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
       return makeError(StatusCode::kQueueConflict, "failed to start EVICTING recovery worker");
     }
   }
+  if (orchestration_) {
+    auto startWorker = [&](String name, auto task, Duration interval) {
+      return scheduler->start(
+          std::move(name),
+          [task = std::move(task)]() -> CoTask<void> {
+            auto result = co_await task();
+            if (result.hasError()) XLOGF(WARN, "Cache orchestration iteration failed: {}", result.error());
+          },
+          [interval] { return interval; });
+    };
+    bool started = startWorker(
+                       "CacheManagerJobPlanner",
+                       [this] { return orchestration_->runPlannerOnce(); },
+                       config_.phase3_planner_interval()) &&
+                   startWorker(
+                       "CacheManagerJobRunner",
+                       [this] { return orchestration_->runRunnerOnce(); },
+                       config_.phase3_runner_interval()) &&
+                   startWorker(
+                       "CacheManagerJobTracker",
+                       [this] { return orchestration_->runTrackerOnce(); },
+                       config_.phase3_tracker_interval());
+    if (!started) {
+      orchestration_->stop();
+      folly::coro::blockingWait(scheduler->stopAll());
+      if (accessFlushWorker_) accessFlushWorker_->stop();
+      return makeError(StatusCode::kQueueConflict, "failed to start cache orchestration workers");
+    }
+  }
   auto lock = std::unique_lock(mutex_);
   if (running_) {
     lock.unlock();
@@ -195,6 +278,7 @@ void CacheManagerOperator::stop() {
     scheduler = std::move(scheduler_);
     stopHook = std::move(schedulerStopHook_);
   }
+  if (orchestration_) orchestration_->stop();
   if (scheduler) folly::coro::blockingWait(scheduler->stopAll());
   if (accessFlushWorker_) accessFlushWorker_->stop();
   if (stopHook) stopHook();
@@ -217,7 +301,7 @@ Result<Void> CacheManagerOperator::checkPhase2Protocol(uint32_t version) const {
 }
 
 Result<Void> CacheManagerOperator::checkPhase3Protocol(uint32_t version) const {
-  return cache::checkPhase3Capability(version, false);
+  return cache::checkPhase3Capability(version, config_.enable_phase3());
 }
 
 Result<Void> CacheManagerOperator::checkService(const ServiceIdentity &service) const {

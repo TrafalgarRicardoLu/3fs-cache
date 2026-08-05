@@ -57,6 +57,15 @@ TEST(TestCacheManagerConfig, RejectsInvalidAndDuplicateOrigins) {
   ASSERT_ERROR(duplicate.validateRuntime(), StatusCode::kInvalidConfig);
 }
 
+TEST(TestCacheManagerConfig, PhaseThreeRequiresPhaseTwoAndDefaultsOff) {
+  auto config = makeConfig();
+  EXPECT_FALSE(config.enable_phase3());
+  config.set_enable_phase3(true);
+  ASSERT_ERROR(config.validateRuntime(), StatusCode::kInvalidConfig);
+  config.set_enable_phase2(true);
+  ASSERT_OK(config.validateRuntime());
+}
+
 TEST(TestCacheManagerLifecycle, StartStopAndRepeatedStop) {
   auto config = makeConfig();
   CacheManagerOperator operator_(config, nullptr, nullptr);

@@ -357,6 +357,29 @@ TEST_F(Phase2EnsureCachedTest, ExplicitPrefetchAdmitsFirstRequestButStillHonorsP
   EXPECT_EQ(backend->enqueueCalls.size(), size_t{1});
 }
 
+TEST_F(Phase2EnsureCachedTest, DurablePrefetchUsesPersistedAttemptAndRegistersJobClaim) {
+  auto ensure = create();
+  cache::PrefetchPlanEntry planned{cache::PrefetchJobId{Uuid::from(3, 4)},
+                                   {9, cache::CacheBlockIndex{0}},
+                                   4096,
+                                   7,
+                                   cache::PrefetchPlanEntryState::ADMITTED,
+                                   Uuid::from(5, 6)};
+  bool completed = false;
+  auto admitted =
+      folly::coro::blockingWait(ensure.runPrefetch(planned, [&](const Status &status) { completed = status.isOK(); }));
+  ASSERT_OK(admitted);
+  EXPECT_EQ(admitted->status, EnsureCachedStatus::ACCEPTED);
+  ASSERT_EQ(backend->made.size(), 1u);
+  EXPECT_EQ(backend->made.front().placement.admissionAttemptId, planned.admissionAttemptId);
+  auto hint = hints.pop();
+  ASSERT_TRUE(hint.has_value());
+  ASSERT_EQ(hint->jobClaims.size(), 1u);
+  EXPECT_EQ(hint->jobClaims.front().jobId, planned.jobId);
+  hint->notify(Status::OK);
+  EXPECT_TRUE(completed);
+}
+
 TEST_F(Phase2EnsureCachedTest, ClusterRolloutStateStopsPhase2Admission) {
   backend->rolloutRouting = phase2Routing();
   auto ensure = create();

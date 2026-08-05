@@ -42,6 +42,9 @@ class Config : public ConfigBase<Config> {
     if (capacity_low_watermark() <= 0.0 || capacity_low_watermark() >= capacity_high_watermark()) {
       return makeError(StatusCode::kInvalidConfig, "cache capacity low watermark must be below high watermark");
     }
+    if (enable_phase3() && !enable_phase2()) {
+      return makeError(StatusCode::kInvalidConfig, "cache phase three requires phase two");
+    }
     if (eviction_page_size() == 0 || eviction_page_size() > cache::kMaxPhase2BatchItems || eviction_batch_size() == 0 ||
         eviction_batch_size() > cache::kMaxPhase2BatchItems || evicting_page_size() == 0 ||
         evicting_page_size() > cache::kMaxPhase2BatchItems) {
@@ -82,6 +85,7 @@ class Config : public ConfigBase<Config> {
   CONFIG_OBJ(meta_client, meta::client::MetaClient::Config);
   CONFIG_ITEM(service_name, std::string{"cache-manager"});
   CONFIG_ITEM(enable_phase2, false);
+  CONFIG_ITEM(enable_phase3, false);
   CONFIG_ITEM(service_token, std::string{});
   CONFIG_ITEM(global_concurrency, uint32_t{64}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(max_inflight_bytes, uint64_t{1_GB}, ConfigCheckers::checkPositive);
@@ -89,6 +93,18 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(load_lease, 30_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(hint_timeout, 500_ms, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(scheduler_interval, 100_ms, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(phase3_planner_interval, 100_ms, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(phase3_runner_interval, 100_ms, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(phase3_tracker_interval, 1_s, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(phase3_job_page_size, uint32_t{100}, [](uint32_t value) {
+    return value > 0 && value <= meta::kMaxCacheBatchItems;
+  });
+  CONFIG_ITEM(phase3_plan_page_size, uint32_t{1000}, [](uint32_t value) {
+    return value > 0 && value <= cache::kMaxPhase2BatchItems;
+  });
+  CONFIG_ITEM(phase3_prefix_table_id, uint32_t{0});
+  CONFIG_ITEM(phase3_prefix_block_size, uint32_t{4_MB}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(phase3_prefix_stripe_size, uint32_t{1}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(admission_policy, std::string{"second_miss"});
   CONFIG_ITEM(eviction_policy, std::string{"lru"});
   CONFIG_ITEM(second_miss_window, 30_s, [](Duration value) { return value > 0_ns; });

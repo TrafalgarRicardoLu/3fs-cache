@@ -14,6 +14,9 @@
 #include "cache_manager/eviction/EvictionController.h"
 #include "cache_manager/eviction/EvictionPolicy.h"
 #include "cache_manager/eviction/EvictionPressureState.h"
+#include "cache_manager/job/JobPlanner.h"
+#include "cache_manager/job/MetaJobRunnerBackend.h"
+#include "cache_manager/job/OrchestrationCoordinator.h"
 #include "cache_manager/loader/CacheLoader.h"
 #include "cache_manager/recovery/PermitRecovery.h"
 #include "cache_manager/scheduler/LoaderScheduler.h"
@@ -66,6 +69,7 @@ class CacheManagerOperator {
   std::shared_ptr<meta::client::MetaClient> metaClient_;
   std::shared_ptr<storage::client::StorageClient> storageClient_;
   std::shared_ptr<CacheManagerBackend> backend_;
+  RealCacheManagerBackend::Stores stores_;
   HintCoalescer hints_;
   std::unique_ptr<CapacityGate> capacityGate_;
   std::unique_ptr<CacheLoader> loader_;
@@ -84,6 +88,10 @@ class CacheManagerOperator {
   std::unique_ptr<EvictingWorker> evictingWorker_;
   std::unique_ptr<PermitRecovery> permitRecovery_;
   std::unique_ptr<AccessFlushWorker> accessFlushWorker_;
+  std::unique_ptr<JobQuota> jobQuota_;
+  std::shared_ptr<JobPlanner> jobPlanner_;
+  std::shared_ptr<JobRunner> jobRunner_;
+  std::unique_ptr<OrchestrationCoordinator> orchestration_;
   Uuid managerEpoch_{Uuid::zero()};
   std::unique_ptr<BackgroundRunner> scheduler_;
   SchedulerStopHook schedulerStopHook_;

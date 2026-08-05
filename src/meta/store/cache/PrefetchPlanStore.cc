@@ -64,8 +64,8 @@ CoTryTask<AppendPrefetchPlanResult> PrefetchPlanStore::append(kv::IReadWriteTran
                                                               uint32_t plannerSourceIndex,
                                                               std::string_view plannerCursor,
                                                               bool planningComplete) {
-  if (jobId == cache::PrefetchJobId{} || (!planningComplete && entries.empty()) ||
-      entries.size() > cache::kMaxPhase2BatchItems || plannerCursor.size() > cache::kMaxDatasetPathLength) {
+  if (jobId == cache::PrefetchJobId{} || entries.size() > cache::kMaxPhase2BatchItems ||
+      plannerCursor.size() > cache::kMaxDatasetPathLength) {
     co_return makeError(StatusCode::kInvalidArg, "invalid prefetch plan page");
   }
   auto loaded = co_await PrefetchJobStore::load(txn, jobId);

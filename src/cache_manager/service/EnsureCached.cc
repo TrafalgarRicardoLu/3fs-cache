@@ -61,7 +61,26 @@ EnsureCachedRsp EnsureCached::respond(const meta::Inode &inode,
   return {status, bypassReason};
 }
 
-CoTryTask<EnsureCachedRsp> EnsureCached::run(const EnsureCachedReq &req) {
+CoTryTask<EnsureCachedRsp> EnsureCached::run(const EnsureCachedReq &req) { co_return co_await run(req, nullptr); }
+
+CoTryTask<EnsureCachedRsp> EnsureCached::runPrefetch(const cache::PrefetchPlanEntry &entry,
+                                                     PrefetchCompletion completion) {
+  CO_RETURN_ON_ERROR(entry.valid());
+  if (entry.state != cache::PrefetchPlanEntryState::ADMITTED &&
+      entry.state != cache::PrefetchPlanEntryState::ATTACHED) {
+    co_return makeError(StatusCode::kInvalidArg, "prefetch entry has not been admitted");
+  }
+  EnsureCachedReq request;
+  request.inode = meta::InodeId{entry.key.inode};
+  request.beginBlock = entry.key.block;
+  request.blockCount = 1;
+  request.reason = EnsureReason::PREFETCH;
+  request.priority = static_cast<int32_t>(entry.priority);
+  PrefetchContext prefetch{entry.jobId, entry.admissionAttemptId, entry.blockLength, std::move(completion)};
+  co_return co_await run(request, &prefetch);
+}
+
+CoTryTask<EnsureCachedRsp> EnsureCached::run(const EnsureCachedReq &req, const PrefetchContext *prefetch) {
   auto inode = co_await backend_->stat(req.inode);
   CO_RETURN_ON_ERROR(inode);
   if (!inode->isOriginFile()) co_return makeError(MetaCode::kNotFile, "cache hint inode is not an OriginFile");
@@ -90,8 +109,12 @@ CoTryTask<EnsureCachedRsp> EnsureCached::run(const EnsureCachedReq &req) {
     items.push_back({{inode->id.u64(), block}, std::min(blockSize, inode->fileLength() - offset)});
   }
   if (items.empty()) co_return respond(*inode, req, EnsureCachedStatus::BYPASSED, BypassReason::EMPTY_RANGE);
+  if (prefetch && (items.size() != 1 || items.front().key != cache::CacheBlockKey{req.inode.u64(), req.beginBlock} ||
+                   items.front().blockLength != prefetch->blockLength)) {
+    co_return makeError(CacheCode::kStateConflict, "prefetch plan no longer matches the origin inode");
+  }
 
-  if (admissionPolicy_ && physicalPreflight_) co_return co_await runPhase2(req, *inode, items);
+  if (admissionPolicy_ && physicalPreflight_) co_return co_await runPhase2(req, *inode, items, prefetch);
   co_return co_await runLegacy(req, *inode, items);
 }
 
@@ -170,7 +193,8 @@ Result<bool> EnsureCached::attach(LoadHint hint) {
 
 CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
                                                    const meta::Inode &inode,
-                                                   const std::vector<meta::CacheBlockRequestBase> &items) {
+                                                   const std::vector<meta::CacheBlockRequestBase> &items,
+                                                   const PrefetchContext *prefetch) {
   bool accepted = false;
   bool attached = false;
   bool capacityBypass = false;
@@ -184,15 +208,15 @@ CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
                                                 steadyTimeNs(receivedAt),
                                                 req.reason,
                                                 static_cast<uint32_t>(std::max(req.priority, int32_t{0})),
-                                                {},
-                                                req.reason != EnsureReason::FOREGROUND_MISS,
+                                                prefetch ? prefetch->jobId : cache::PrefetchJobId{},
+                                                prefetch || req.reason != EnsureReason::FOREGROUND_MISS,
                                                 false});
     if (decision.action != AdmissionAction::ADMIT) {
       policyBypass = true;
       continue;
     }
 
-    auto attemptId = Uuid::random();
+    auto attemptId = prefetch ? prefetch->attemptId : Uuid::random();
     auto permit =
         co_await backend_->makePermit(inode, base.key.block, base.blockLength, managerEpoch_, attemptId, uint64_t{1});
     if (permit.hasError()) {
@@ -256,7 +280,9 @@ CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
     if (result.enqueueOutcome == cache::CacheEnqueueOutcome::CREATED ||
         (result.enqueueOutcome == cache::CacheEnqueueOutcome::QUEUED &&
          persistedPermit == std::optional<storage::PermitIdentity>{*permit})) {
-      auto fresh = attach({inode.id, base.key.block, base.blockLength, req.reason, req.priority});
+      LoadHint hint{inode.id, base.key.block, base.blockLength, req.reason, req.priority};
+      if (prefetch) hint.jobClaims.push_back({prefetch->jobId, req.priority, prefetch->completion});
+      auto fresh = attach(std::move(hint));
       if (fresh.hasError()) {
         CO_RETURN_ON_ERROR(co_await cancelQueued(base.key, *permit));
         unavailableBypass = true;
@@ -304,7 +330,9 @@ CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
         unavailableBypass = true;
         continue;
       }
-      auto fresh = attach({inode.id, base.key.block, base.blockLength, req.reason, req.priority});
+      LoadHint hint{inode.id, base.key.block, base.blockLength, req.reason, req.priority};
+      if (prefetch) hint.jobClaims.push_back({prefetch->jobId, req.priority, prefetch->completion});
+      auto fresh = attach(std::move(hint));
       if (fresh.hasError()) {
         CO_RETURN_ON_ERROR(co_await cancelQueued(base.key, existing));
         unavailableBypass = true;
@@ -352,7 +380,9 @@ CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
       unavailableBypass = true;
       continue;
     }
-    auto fresh = attach({inode.id, base.key.block, base.blockLength, req.reason, req.priority});
+    LoadHint hint{inode.id, base.key.block, base.blockLength, req.reason, req.priority};
+    if (prefetch) hint.jobClaims.push_back({prefetch->jobId, req.priority, prefetch->completion});
+    auto fresh = attach(std::move(hint));
     if (fresh.hasError()) {
       CO_RETURN_ON_ERROR(co_await cancelQueued(base.key, replacement));
       unavailableBypass = true;
