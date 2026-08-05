@@ -20,6 +20,7 @@ struct EnsureCachedReq {
  public:
   Result<Void> valid() const {
     RETURN_ON_ERROR(service.valid());
+    if (priority < 0) return makeError(StatusCode::kInvalidArg, "priority is negative");
     if (blockCount == 0) return makeError(StatusCode::kInvalidArg, "blockCount is zero");
     if (blockCount > kMaxCacheManagerBlocks) return makeError(CacheCode::kRequestTooLarge, "blockCount too large");
     return Void{};

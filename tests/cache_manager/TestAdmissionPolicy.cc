@@ -8,7 +8,7 @@ namespace hf3fs::cache_manager::test {
 namespace {
 
 AdmissionContext miss(uint64_t inode, uint32_t block, uint64_t now) {
-  return {{inode, cache::CacheBlockIndex{block}}, now};
+  return {{inode, cache::CacheBlockIndex{block}}, now, EnsureReason::FOREGROUND_MISS, 0, {}, false, false};
 }
 
 TEST(TestAdmissionPolicy, AdmitsOnlySecondOrderedMissWithinWindow) {
@@ -45,6 +45,25 @@ TEST(TestAdmissionPolicy, FactoryRejectsUnknownPolicyAndRestartStartsEmpty) {
   auto restarted = createAdmissionPolicy("second_miss", 10, 1);
   ASSERT_OK(restarted);
   EXPECT_EQ((*restarted)->evaluate(miss(1, 0, 2)).action, AdmissionAction::BYPASS);
+}
+
+TEST(TestAdmissionPolicy, ExplicitPrefetchPinAndRecoveryBypassSecondMissState) {
+  SecondMissAdmissionPolicy policy(100, 8);
+  auto prefetch = miss(1, 0, 1);
+  prefetch.reason = EnsureReason::PREFETCH;
+  prefetch.explicitRequest = true;
+  prefetch.priority = 7;
+  prefetch.jobId = cache::PrefetchJobId{Uuid::from(1, 1)};
+  EXPECT_EQ(policy.evaluate(prefetch).reason, AdmissionReason::EXPLICIT_PREFETCH);
+
+  auto pin = miss(2, 0, 1);
+  pin.pin = true;
+  EXPECT_EQ(policy.evaluate(pin).reason, AdmissionReason::EXPLICIT_PIN);
+
+  auto recovery = miss(3, 0, 1);
+  recovery.reason = EnsureReason::RECOVERY;
+  EXPECT_EQ(policy.evaluate(recovery).reason, AdmissionReason::RECOVERY);
+  EXPECT_EQ(policy.size(), size_t{0});
 }
 
 }  // namespace

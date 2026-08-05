@@ -180,7 +180,13 @@ CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
 
   for (const auto &base : items) {
     auto receivedAt = steadyClock_();
-    auto decision = admissionPolicy_->evaluate({base.key, steadyTimeNs(receivedAt)});
+    auto decision = admissionPolicy_->evaluate({base.key,
+                                                steadyTimeNs(receivedAt),
+                                                req.reason,
+                                                static_cast<uint32_t>(std::max(req.priority, int32_t{0})),
+                                                {},
+                                                req.reason != EnsureReason::FOREGROUND_MISS,
+                                                false});
     if (decision.action != AdmissionAction::ADMIT) {
       policyBypass = true;
       continue;

@@ -5,6 +5,13 @@
 namespace hf3fs::cache_manager {
 
 AdmissionDecision SecondMissAdmissionPolicy::evaluate(const AdmissionContext &context) {
+  if (context.pin) return {AdmissionAction::ADMIT, AdmissionReason::EXPLICIT_PIN};
+  if (context.explicitRequest || context.reason == EnsureReason::PREFETCH) {
+    return {AdmissionAction::ADMIT, AdmissionReason::EXPLICIT_PREFETCH};
+  }
+  if (context.reason == EnsureReason::RECOVERY) {
+    return {AdmissionAction::ADMIT, AdmissionReason::RECOVERY};
+  }
   std::scoped_lock lock(mutex_);
   auto found = firstMisses_.find(context.key);
   if (found != firstMisses_.end()) {

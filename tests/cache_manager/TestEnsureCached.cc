@@ -336,6 +336,27 @@ TEST_F(Phase2EnsureCachedTest, FirstMissDoesNotReachMetadataAndSecondMissCreates
   EXPECT_TRUE(backend->released.empty());
 }
 
+TEST_F(Phase2EnsureCachedTest, ExplicitPrefetchAdmitsFirstRequestButStillHonorsPhysicalHighWatermark) {
+  auto ensure = create();
+  auto prefetch = oneBlockRequest();
+  prefetch.reason = EnsureReason::PREFETCH;
+  auto admitted = folly::coro::blockingWait(ensure.run(prefetch));
+  ASSERT_OK(admitted);
+  EXPECT_EQ(admitted->status, EnsureCachedStatus::ACCEPTED);
+  ASSERT_EQ(backend->enqueueCalls.size(), size_t{1});
+
+  hints.pop();
+  ASSERT_OK(topology.updateSpace(flat::NodeId{10},
+                                 phase2Space(850),
+                                 SteadyTime{std::chrono::nanoseconds(3)},
+                                 SteadyTime{std::chrono::nanoseconds(4)}));
+  auto rejected = folly::coro::blockingWait(ensure.run(prefetch));
+  ASSERT_OK(rejected);
+  EXPECT_EQ(rejected->status, EnsureCachedStatus::BYPASSED);
+  EXPECT_EQ(rejected->bypassReason, BypassReason::CAPACITY);
+  EXPECT_EQ(backend->enqueueCalls.size(), size_t{1});
+}
+
 TEST_F(Phase2EnsureCachedTest, ClusterRolloutStateStopsPhase2Admission) {
   backend->rolloutRouting = phase2Routing();
   auto ensure = create();

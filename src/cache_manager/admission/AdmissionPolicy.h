@@ -5,15 +5,21 @@
 
 #include "common/utils/Result.h"
 #include "fbs/cache/Common.h"
+#include "fbs/cache_manager/Common.h"
 
 namespace hf3fs::cache_manager {
 
 enum class AdmissionAction : uint8_t { ADMIT, BYPASS };
-enum class AdmissionReason : uint8_t { FIRST_MISS, SECOND_MISS };
+enum class AdmissionReason : uint8_t { FIRST_MISS, SECOND_MISS, EXPLICIT_PREFETCH, EXPLICIT_PIN, RECOVERY };
 
 struct AdmissionContext {
   cache::CacheBlockKey key;
   uint64_t managerReceiveTimeNs{0};
+  EnsureReason reason{EnsureReason::FOREGROUND_MISS};
+  uint32_t priority{0};
+  cache::PrefetchJobId jobId;
+  bool explicitRequest{false};
+  bool pin{false};
 };
 
 struct AdmissionDecision {
