@@ -240,4 +240,30 @@ CoTryTask<std::vector<cache::PinRecord>> PinStore::snapshotQueryActive(kv::IRead
   co_return active;
 }
 
+CoTryTask<std::vector<cache::PinRecord>> PinStore::queryActive(kv::IReadWriteTransaction &txn,
+                                                               const cache::CacheBlockKey &key,
+                                                               uint64_t nowMs) {
+  CO_RETURN_ON_ERROR(key.valid());
+  if (nowMs == 0) co_return makeError(StatusCode::kInvalidArg, "cache pin query time is zero");
+  auto prefix = OrchestrationKey::pinByBlockPrefix(key);
+  auto values = co_await kv::TransactionHelper::listByPrefix(
+      txn,
+      prefix,
+      kv::TransactionHelper::ListByPrefixOptions().withSnapshot(false).withLimit(0));
+  CO_RETURN_ON_ERROR(values);
+  std::vector<cache::PinRecord> active;
+  for (const auto &value : *values) {
+    auto pin = decodeByBlock(value.key, value.value);
+    CO_RETURN_ON_ERROR(pin);
+    auto counterpart = co_await txn.get(OrchestrationKey::pinByOwner(pin->owner, pin->key));
+    CO_RETURN_ON_ERROR(counterpart);
+    if (!counterpart->has_value()) co_return makeError(StatusCode::kDataCorruption, "cache pin counterpart is missing");
+    auto other = decodeByOwner(OrchestrationKey::pinByOwner(pin->owner, pin->key), **counterpart);
+    CO_RETURN_ON_ERROR(other);
+    if (*other != *pin) co_return makeError(StatusCode::kDataCorruption, "cache pin counterpart differs");
+    if (pin->expiresAtMs > nowMs) active.push_back(std::move(*pin));
+  }
+  co_return active;
+}
+
 }  // namespace hf3fs::meta::server

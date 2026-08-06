@@ -187,6 +187,16 @@ CoTryTask<meta::BeginEvictCacheBlocksRsp> RealCacheManagerBackend::beginEvict(
   co_return co_await metaClient_->beginEvictCacheBlocks(std::move(request));
 }
 
+CoTryTask<meta::QueryCachePinsRsp> RealCacheManagerBackend::queryPins(std::vector<cache::CacheBlockKey> keys,
+                                                                      uint64_t nowMs) {
+  meta::QueryCachePinsReq request;
+  request.service = service();
+  request.keys = std::move(keys);
+  request.nowMs = nowMs;
+  request.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+  co_return co_await metaClient_->queryCachePins(std::move(request));
+}
+
 CoTryTask<meta::ListEvictingCacheBlocksRsp> RealCacheManagerBackend::listEvicting(
     std::optional<cache::CacheBlockKey> after,
     uint32_t limit) {

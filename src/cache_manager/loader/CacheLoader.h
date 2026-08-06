@@ -92,6 +92,9 @@ class CacheManagerBackend {
   virtual CoTryTask<meta::BeginEvictCacheBlocksRsp> beginEvict(std::vector<meta::BeginEvictCacheBlockItem>) {
     co_return makeError(StatusCode::kNotImplemented);
   }
+  virtual CoTryTask<meta::QueryCachePinsRsp> queryPins(std::vector<cache::CacheBlockKey>, uint64_t) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
   virtual CoTryTask<meta::ListEvictingCacheBlocksRsp> listEvicting(std::optional<cache::CacheBlockKey>, uint32_t) {
     co_return makeError(StatusCode::kNotImplemented);
   }
@@ -152,6 +155,7 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
   CoTryTask<meta::ListReadyCacheBlocksRsp> listReadyCacheBlocks(std::optional<cache::CacheBlockKey> after,
                                                                 uint32_t limit) final;
   CoTryTask<meta::BeginEvictCacheBlocksRsp> beginEvict(std::vector<meta::BeginEvictCacheBlockItem> items) final;
+  CoTryTask<meta::QueryCachePinsRsp> queryPins(std::vector<cache::CacheBlockKey> keys, uint64_t nowMs) final;
   CoTryTask<meta::ListEvictingCacheBlocksRsp> listEvicting(std::optional<cache::CacheBlockKey> after,
                                                            uint32_t limit) final;
   CoTryTask<bool> coordinateRetire(const meta::CacheEvictionIdentity &identity) final;

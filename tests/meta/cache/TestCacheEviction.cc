@@ -7,6 +7,7 @@
 #include "common/serde/Serde.h"
 #include "meta/store/cache/CacheBlockStore.h"
 #include "meta/store/cache/CacheCapacityStore.h"
+#include "meta/store/cache/PinStore.h"
 #include "tests/GtestHelpers.h"
 #include "tests/meta/MetaTestBase.h"
 
@@ -198,6 +199,38 @@ TEST_F(TestCacheEviction, PersistsStableIdentityAndReadPlanFallsBack) {
     if (!plan) co_return;
     CO_ASSERT_EQ(plan->blocks.front().state, cache::CacheBlockState::EVICTING);
     CO_ASSERT_FALSE(plan->blocks.front().ready.has_value());
+  }());
+}
+
+TEST_F(TestCacheEviction, ActivePinFencesBeginEvictInTheMutationTransaction) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    auto inode = co_await prepare(cluster, "/evict-pinned", 11);
+    CO_ASSERT_OK(inode);
+    if (!inode) co_return;
+    auto ready = co_await seedReady(cluster, *inode, 0);
+    CO_ASSERT_OK(ready);
+    if (!ready) co_return;
+
+    cache::PinRecord pin{ready->key,
+                         {cache::PinOwnerKind::ACTIVE_JOB, cache::PinOwnerId{Uuid::from(9, 1)}},
+                         1,
+                         std::numeric_limits<uint64_t>::max(),
+                         ready->cacheGeneration};
+    auto txn = cluster.kvEngine()->createReadWriteTransaction();
+    CO_ASSERT_OK(co_await PinStore::upsert(*txn, pin));
+    CO_ASSERT_OK(co_await txn->commit());
+
+    auto evicted = co_await cluster.meta().getOperator().beginEvictCacheBlocks(
+        evictReq(*ready, cache::EvictionReason::CAPACITY_WATERMARK));
+    CO_ASSERT_OK(evicted);
+    CO_ASSERT_EQ(evicted->results.size(), size_t{1});
+    CO_ASSERT_ERROR(evicted->results.front(), CacheCode::kStateConflict);
+    auto read = cluster.kvEngine()->createReadonlyTransaction();
+    auto stored = co_await CacheBlockStore::snapshotLoad(*read, ready->key);
+    CO_ASSERT_OK(stored);
+    CO_ASSERT_TRUE(stored->has_value());
+    CO_ASSERT_EQ((*stored)->state, cache::CacheBlockState::READY);
   }());
 }
 

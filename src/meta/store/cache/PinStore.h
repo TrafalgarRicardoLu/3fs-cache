@@ -41,6 +41,11 @@ class PinStore {
   static CoTryTask<std::vector<cache::PinRecord>> snapshotQueryActive(kv::IReadOnlyTransaction &txn,
                                                                       const cache::CacheBlockKey &key,
                                                                       uint64_t nowMs);
+  // Uses non-snapshot reads so a subsequent mutation in the same transaction
+  // conflicts with concurrent pin creation or renewal.
+  static CoTryTask<std::vector<cache::PinRecord>> queryActive(kv::IReadWriteTransaction &txn,
+                                                              const cache::CacheBlockKey &key,
+                                                              uint64_t nowMs);
 };
 
 }  // namespace hf3fs::meta::server

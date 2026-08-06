@@ -85,7 +85,29 @@ CoTryTask<std::vector<EvictionCandidate>> EvictionController::collectCandidates(
   while (more && candidates.size() < config_.batchSize) {
     auto page = co_await candidateSource_.next(after, pressuredDisks);
     CO_RETURN_ON_ERROR(page);
-    for (auto &candidate : page->candidates) {
+    std::vector<cache::CacheBlockKey> keys;
+    keys.reserve(page->candidates.size());
+    for (const auto &candidate : page->candidates) keys.push_back(candidate.key);
+    std::vector<bool> pinned(keys.size(), false);
+    if (!keys.empty()) {
+      auto nowUs = wallNow.toMicroseconds();
+      if (nowUs <= 0) co_return makeError(StatusCode::kInvalidArg, "cache eviction wall clock is invalid");
+      auto queried = co_await backend_->queryPins(std::move(keys), static_cast<uint64_t>(nowUs / 1000));
+      CO_RETURN_ON_ERROR(queried);
+      if (queried->results.size() != page->candidates.size()) {
+        co_return makeError(CacheCode::kInvalidResponse, "invalid cache pin query result count");
+      }
+      for (size_t index = 0; index < queried->results.size(); ++index) {
+        CO_RETURN_ON_ERROR(queried->results[index]);
+        if (queried->results[index]->key != page->candidates[index].key) {
+          co_return makeError(CacheCode::kInvalidResponse, "cache pin query result order changed");
+        }
+        pinned[index] = queried->results[index]->pinned;
+      }
+    }
+    for (size_t index = 0; index < page->candidates.size(); ++index) {
+      auto &candidate = page->candidates[index];
+      if (pinned[index]) continue;
       if (protectedFromEviction(candidate, protectionContext)) continue;
       candidates.push_back(std::move(candidate));
       if (candidates.size() == config_.batchSize) break;

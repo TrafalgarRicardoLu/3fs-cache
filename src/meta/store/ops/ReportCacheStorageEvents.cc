@@ -8,6 +8,7 @@
 #include "meta/store/cache/CacheBlockStore.h"
 #include "meta/store/cache/CacheCapacityStore.h"
 #include "meta/store/cache/CacheEventStore.h"
+#include "meta/store/cache/PinStore.h"
 
 namespace hf3fs::meta::server {
 namespace {
@@ -71,6 +72,10 @@ CoTryTask<EventEffect> applyEvent(IReadWriteTransaction &txn, const CacheStorage
         co_return deadLetter("logical DELETED arrived while Metadata was READY");
       }
       {
+        auto nowMs = static_cast<uint64_t>(UtcClock::now().toMicroseconds() / 1000);
+        auto pins = co_await PinStore::queryActive(txn, record.key, nowMs);
+        CO_RETURN_ON_ERROR(pins);
+        if (!pins->empty()) co_return deadLetter("local eviction encountered an active cache pin");
         auto epoch = co_await CacheBlockStore::allocateEvictionEpoch(txn, record.key);
         if (epoch.hasError()) {
           if (epoch.error().code() == CacheCode::kStateConflict) {

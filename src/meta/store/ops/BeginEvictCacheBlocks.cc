@@ -5,6 +5,7 @@
 #include "meta/store/MetaStore.h"
 #include "meta/store/Operation.h"
 #include "meta/store/cache/CacheBlockStore.h"
+#include "meta/store/cache/PinStore.h"
 
 namespace hf3fs::meta::server {
 namespace {
@@ -57,6 +58,10 @@ class BeginEvictCacheBlocksOp : public Operation<BeginEvictCacheBlocksRsp> {
     if (record.state != cache::CacheBlockState::READY || record.ready != item.expectedReady) {
       co_return makeError(CacheCode::kStateConflict, "cache block is not the expected READY generation");
     }
+    auto nowMs = static_cast<uint64_t>(UtcClock::now().toMicroseconds() / 1000);
+    auto pins = co_await PinStore::queryActive(txn, item.key, nowMs);
+    CO_RETURN_ON_ERROR(pins);
+    if (!pins->empty()) co_return makeError(CacheCode::kStateConflict, "cache block is pinned");
     if (!record.placement.has_value() || !record.committedPermit.has_value() ||
         record.committedPermit->placement != *record.placement) {
       co_return makeError(CacheCode::kPlacementMismatch, "cache READY block has no immutable placement");

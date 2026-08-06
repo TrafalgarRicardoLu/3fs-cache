@@ -143,10 +143,19 @@ class ControllerBackend : public CacheManagerBackend {
     }
     co_return response;
   }
+  CoTryTask<meta::QueryCachePinsRsp> queryPins(std::vector<cache::CacheBlockKey> keys, uint64_t) final {
+    meta::QueryCachePinsRsp response;
+    for (const auto &key : keys) {
+      response.results.emplace_back(
+          meta::CachePinQueryResult{key, pinned.contains(key.inode), pinned.contains(key.inode) ? 1u : 0u});
+    }
+    co_return response;
+  }
 
   std::vector<meta::ListReadyCacheBlocksRsp> pages;
   std::map<uint64_t, storage::PlacementIdentity> placements;
   std::set<uint64_t> conflicts;
+  std::set<uint64_t> pinned;
   std::vector<std::vector<meta::BeginEvictCacheBlockItem>> beginCalls;
 };
 
@@ -248,6 +257,26 @@ TEST(TestEvictionController, RejectsInvalidPolicyBeforeMutation) {
 
   ASSERT_ERROR(folly::coro::blockingWait(controller.runOnce(at(3), UtcTime::fromMicroseconds(1000))),
                StatusCode::kInvalidArg);
+  EXPECT_TRUE(backend->beginCalls.empty());
+  EXPECT_TRUE(pressure.contains(diskId));
+}
+
+TEST(TestEvictionController, ExcludesPinnedCandidatesAndFailsClosedWhenPinsFillDisk) {
+  auto diskId = disk(1);
+  PhysicalTopology topology;
+  observe(topology, flat::NodeId{10}, {space(diskId, {flat::TargetId{1}}, 900)});
+  auto backend = std::make_shared<ControllerBackend>();
+  backend->pages.push_back(page({ready(1, flat::ChainId{1}, {flat::TargetId{1}}, {200})}));
+  backend->pinned.insert(1);
+  EvictionPressureState pressure;
+  LRUEvictionPolicy policy;
+  EvictionController controller(backend, topology, policy, pressure, config());
+
+  auto result = folly::coro::blockingWait(controller.runOnce(at(3), UtcTime::fromMicroseconds(1000)));
+  ASSERT_OK(result);
+  EXPECT_EQ(result->candidates, 0u);
+  EXPECT_EQ(result->begun, 0u);
+  EXPECT_FALSE(result->targetMet);
   EXPECT_TRUE(backend->beginCalls.empty());
   EXPECT_TRUE(pressure.contains(diskId));
 }
