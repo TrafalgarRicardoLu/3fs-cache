@@ -1684,6 +1684,26 @@ struct QueryCachePinsRsp : RspBase {
   SERDE_STRUCT_FIELD(results, std::vector<Result<CachePinQueryResult>>{});
 };
 
+struct ConvertActiveJobPinsReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(jobId, cache::PrefetchJobId{});
+  SERDE_STRUCT_FIELD(keys, std::vector<cache::CacheBlockKey>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (jobId == cache::PrefetchJobId{} || keys.empty() || keys.size() > kMaxCacheBatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "invalid active Job pin conversion batch");
+    for (const auto &key : keys) RETURN_ON_ERROR(key.valid());
+    return VALID;
+  }
+};
+struct ConvertActiveJobPinsRsp : RspBase {
+  SERDE_STRUCT_FIELD(converted, uint64_t{});
+  SERDE_STRUCT_FIELD(expiresAtMs, uint64_t{});
+};
+
 // testRpc
 struct TestRpcReq : ReqBase {
   SERDE_STRUCT_FIELD(path, PathAt());
@@ -1762,6 +1782,7 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(trackPrefetchReady, 54, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
   META_SERVICE_METHOD(advancePrefetchJobState, 55, AdvancePrefetchJobStateReq, AdvancePrefetchJobStateRsp);
   META_SERVICE_METHOD(cancelPrefetchJob, 56, CancelPrefetchJobReq, CancelPrefetchJobRsp);
+  META_SERVICE_METHOD(convertActiveJobPins, 57, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

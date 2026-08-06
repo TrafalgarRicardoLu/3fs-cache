@@ -70,6 +70,7 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
   META_SERVICE_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
   META_SERVICE_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
   META_SERVICE_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
+  META_SERVICE_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
 #undef META_SERVICE_METHOD
 
  private:

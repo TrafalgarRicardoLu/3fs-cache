@@ -350,6 +350,47 @@ class QueryCachePinsOp : public ReadOnlyOperation<QueryCachePinsRsp> {
   const QueryCachePinsReq &req_;
 };
 
+class ConvertActiveJobPinsOp : public Operation<ConvertActiveJobPinsRsp> {
+ public:
+  ConvertActiveJobPinsOp(MetaStore &meta, const ConvertActiveJobPinsReq &req)
+      : Operation<ConvertActiveJobPinsRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<ConvertActiveJobPinsRsp> run(IReadWriteTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto loaded = co_await PrefetchJobStore::load(txn, req_.jobId);
+    CO_RETURN_ON_ERROR(loaded);
+    if (!loaded->has_value()) co_return makeError(CacheCode::kNotFound, "prefetch Job not found");
+    const auto &job = **loaded;
+    if (job.state != cache::PrefetchJobState::READY || !job.spec.pinAfterReady || job.spec.pinTtlMs == 0) {
+      co_return makeError(CacheCode::kStateConflict, "prefetch Job is not eligible for post-ready pins");
+    }
+    if (job.spec.pinTtlMs > std::numeric_limits<uint64_t>::max() - job.updatedAtMs) {
+      co_return makeError(CacheCode::kStateConflict, "post-ready pin expiry overflow");
+    }
+    auto expiresAtMs = job.updatedAtMs + job.spec.pinTtlMs;
+    cache::PinOwner active{cache::PinOwnerKind::ACTIVE_JOB, cache::PinOwnerId{req_.jobId.toUnderType()}};
+    cache::PinOwner postReady{cache::PinOwnerKind::POST_READY, cache::PinOwnerId{req_.jobId.toUnderType()}};
+    uint64_t converted = 0;
+    for (const auto &key : req_.keys) {
+      cache::PinRecord desired{key, postReady, job.updatedAtMs, expiresAtMs, {}};
+      CO_RETURN_ON_ERROR(co_await PinStore::upsert(txn, desired));
+      auto removed = co_await PinStore::remove(txn, key, active);
+      CO_RETURN_ON_ERROR(removed);
+      converted += *removed;
+    }
+    ConvertActiveJobPinsRsp response;
+    response.converted = converted;
+    response.expiresAtMs = expiresAtMs;
+    co_return response;
+  }
+
+ private:
+  const ConvertActiveJobPinsReq &req_;
+};
+
 MetaStore::OpPtr<CreatePrefetchJobRsp> MetaStore::createPrefetchJob(const CreatePrefetchJobReq &req) {
   return std::make_unique<CreatePrefetchJobOp>(*this, req);
 }
@@ -405,6 +446,10 @@ MetaStore::OpPtr<ListCachePinsByOwnerRsp> MetaStore::listCachePinsByOwner(const 
 
 MetaStore::OpPtr<QueryCachePinsRsp> MetaStore::queryCachePins(const QueryCachePinsReq &req) {
   return std::make_unique<QueryCachePinsOp>(*this, req);
+}
+
+MetaStore::OpPtr<ConvertActiveJobPinsRsp> MetaStore::convertActiveJobPins(const ConvertActiveJobPinsReq &req) {
+  return std::make_unique<ConvertActiveJobPinsOp>(*this, req);
 }
 
 }  // namespace hf3fs::meta::server

@@ -51,6 +51,16 @@ CoTryTask<void> MetaActiveJobPinBackend::remove(cache::PinOwner owner) {
   co_return Void{};
 }
 
+CoTryTask<void> MetaActiveJobPinBackend::convert(cache::PrefetchJobId jobId, std::vector<cache::CacheBlockKey> keys) {
+  meta::ConvertActiveJobPinsReq request;
+  request.service = service_;
+  request.jobId = jobId;
+  request.keys = std::move(keys);
+  request.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+  CO_RETURN_ON_ERROR(co_await metaClient_->convertActiveJobPins(std::move(request)));
+  co_return Void{};
+}
+
 ActiveJobPinManager::ActiveJobPinManager(std::shared_ptr<ActiveJobPinBackend> backend,
                                          uint32_t jobPageLimit,
                                          uint32_t planPageLimit,
@@ -98,15 +108,24 @@ CoTryTask<void> ActiveJobPinManager::reconcile(const cache::PrefetchJobRecord &j
       co_return makeError(CacheCode::kInvalidResponse, "invalid active Job pin plan page");
     }
     std::vector<cache::PinRecord> pins;
+    std::vector<cache::CacheBlockKey> keys;
     pins.reserve(page->entries.size());
+    keys.reserve(page->entries.size());
     for (const auto &entry : page->entries) {
       CO_RETURN_ON_ERROR(entry.valid());
-      pins.push_back({entry.key, pinOwner, job.createdAtMs, expiresAtMs, {}});
+      if (job.state == cache::PrefetchJobState::READY)
+        keys.push_back(entry.key);
+      else
+        pins.push_back({entry.key, pinOwner, job.createdAtMs, expiresAtMs, {}});
     }
-    if (!pins.empty()) CO_RETURN_ON_ERROR(co_await backend_->upsert(std::move(pins)));
+    if (!keys.empty())
+      CO_RETURN_ON_ERROR(co_await backend_->convert(job.spec.jobId, std::move(keys)));
+    else if (!pins.empty())
+      CO_RETURN_ON_ERROR(co_await backend_->upsert(std::move(pins)));
     if (!page->more) break;
     after = page->entries.back().key;
   } while (true);
+  if (job.state == cache::PrefetchJobState::READY) CO_RETURN_ON_ERROR(co_await backend_->remove(pinOwner));
   co_return Void{};
 }
 

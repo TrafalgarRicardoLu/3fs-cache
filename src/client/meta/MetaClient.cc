@@ -1013,6 +1013,7 @@ META_CACHE_CLIENT_METHOD(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp
 META_CACHE_CLIENT_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
 META_CACHE_CLIENT_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
 META_CACHE_CLIENT_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
+META_CACHE_CLIENT_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
 #undef META_CACHE_CLIENT_METHOD
 
 }  // namespace hf3fs::meta::client

@@ -13,6 +13,7 @@ class ActiveJobPinBackend {
                                                         uint32_t limit) = 0;
   virtual CoTryTask<void> upsert(std::vector<cache::PinRecord> pins) = 0;
   virtual CoTryTask<void> remove(cache::PinOwner owner) = 0;
+  virtual CoTryTask<void> convert(cache::PrefetchJobId jobId, std::vector<cache::CacheBlockKey> keys) = 0;
 };
 
 class MetaActiveJobPinBackend final : public ActiveJobPinBackend {
@@ -27,6 +28,7 @@ class MetaActiveJobPinBackend final : public ActiveJobPinBackend {
                                                 uint32_t limit) override;
   CoTryTask<void> upsert(std::vector<cache::PinRecord> pins) override;
   CoTryTask<void> remove(cache::PinOwner owner) override;
+  CoTryTask<void> convert(cache::PrefetchJobId jobId, std::vector<cache::CacheBlockKey> keys) override;
 
  private:
   std::shared_ptr<meta::client::MetaClient> metaClient_;

@@ -255,6 +255,7 @@ class MetaClient {
   CoTryTask<RemoveCachePinsRsp> removeCachePins(RemoveCachePinsReq req);
   CoTryTask<ListCachePinsByOwnerRsp> listCachePinsByOwner(ListCachePinsByOwnerReq req);
   CoTryTask<QueryCachePinsRsp> queryCachePins(QueryCachePinsReq req);
+  CoTryTask<ConvertActiveJobPinsRsp> convertActiveJobPins(ConvertActiveJobPinsReq req);
 
   CoTryTask<Inode> extendStripe(const UserInfo &userInfo, InodeId inodeId, uint32_t stripe);
 

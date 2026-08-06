@@ -752,6 +752,7 @@ META_PHASE3_METHOD(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp);
 META_PHASE3_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
 META_PHASE3_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
 META_PHASE3_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
+META_PHASE3_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
 #undef META_PHASE3_METHOD
 
 CoTryTask<BeginEvictCacheBlocksRsp> MetaOperator::beginEvictCacheBlocks(BeginEvictCacheBlocksReq req) {

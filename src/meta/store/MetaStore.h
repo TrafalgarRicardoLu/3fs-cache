@@ -173,6 +173,7 @@ class MetaStore {
   OpPtr<RemoveCachePinsRsp> removeCachePins(const RemoveCachePinsReq &req);
   OpPtr<ListCachePinsByOwnerRsp> listCachePinsByOwner(const ListCachePinsByOwnerReq &req);
   OpPtr<QueryCachePinsRsp> queryCachePins(const QueryCachePinsReq &req);
+  OpPtr<ConvertActiveJobPinsRsp> convertActiveJobPins(const ConvertActiveJobPinsReq &req);
 
  private:
   template <typename>

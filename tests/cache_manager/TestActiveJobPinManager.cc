@@ -44,6 +44,7 @@ class FakeBackend : public ActiveJobPinBackend {
   std::map<Uuid, std::vector<cache::PrefetchPlanEntry>> plans;
   std::vector<cache::PinRecord> pins;
   std::vector<cache::PinOwner> removed;
+  std::vector<std::pair<cache::PrefetchJobId, std::vector<cache::CacheBlockKey>>> converted;
   bool failUpsert = false;
 
   CoTryTask<meta::ListPrefetchJobsRsp> listJobs(std::optional<cache::PrefetchJobId> after, uint32_t limit) override {
@@ -84,6 +85,10 @@ class FakeBackend : public ActiveJobPinBackend {
     removed.push_back(owner);
     co_return Void{};
   }
+  CoTryTask<void> convert(cache::PrefetchJobId jobId, std::vector<cache::CacheBlockKey> keys) override {
+    converted.emplace_back(jobId, std::move(keys));
+    co_return Void{};
+  }
 };
 
 TEST(TestActiveJobPinManager, RecoversRenewsOverlappingJobsAndRetriesFailures) {
@@ -116,9 +121,10 @@ TEST(TestActiveJobPinManager, RemovesTerminalOwnersAndRetainsReadyPinByPolicy) {
   ActiveJobPinManager manager(backend, 10, 10, 500, [] { return 1000; });
 
   ASSERT_OK(folly::coro::blockingWait(manager.runOnce()));
-  EXPECT_EQ(backend->removed.size(), 3u);
-  ASSERT_EQ(backend->pins.size(), 1u);
-  EXPECT_EQ(backend->pins.front().owner.id, cache::PinOwnerId{retained.spec.jobId.toUnderType()});
+  EXPECT_TRUE(backend->pins.empty());
+  ASSERT_EQ(backend->converted.size(), 1u);
+  EXPECT_EQ(backend->converted.front().first, retained.spec.jobId);
+  EXPECT_EQ(backend->removed.size(), 4u);
 }
 
 }  // namespace

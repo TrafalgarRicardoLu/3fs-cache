@@ -75,6 +75,7 @@ class IMetaServiceStub {
   IMETA_STUB_METHOD(trackPrefetchReady, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
   IMETA_STUB_METHOD(advancePrefetchJobState, AdvancePrefetchJobStateReq, AdvancePrefetchJobStateRsp);
   IMETA_STUB_METHOD(cancelPrefetchJob, CancelPrefetchJobReq, CancelPrefetchJobRsp);
+  IMETA_STUB_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
 
 #undef IMETA_STUB_METHOD
 };

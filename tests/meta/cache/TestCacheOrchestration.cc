@@ -3,6 +3,8 @@
 #include <limits>
 
 #include "meta/store/cache/CacheBlockStore.h"
+#include "meta/store/cache/PinStore.h"
+#include "meta/store/cache/PrefetchJobStore.h"
 #include "tests/GtestHelpers.h"
 #include "tests/meta/MetaTestBase.h"
 
@@ -210,6 +212,57 @@ TEST_F(TestCacheOrchestration, PinBatchUsesGenerationFenceAndServerClock) {
     removed = co_await meta.removeCachePins(remove);
     CO_ASSERT_OK(removed);
     CO_ASSERT_EQ(removed->removed, uint64_t{0});
+  }());
+}
+
+TEST_F(TestCacheOrchestration, ConvertsReadyJobPinsWithoutAnEvictionGap) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster(true);
+    enableCacheFeature(cluster);
+    auto record = job(8);
+    record.spec.pinAfterReady = true;
+    record.spec.pinTtlMs = 10'000;
+    auto key = cache::CacheBlockKey{30, cache::CacheBlockIndex{0}};
+    auto active = cache::PinOwner{cache::PinOwnerKind::ACTIVE_JOB, cache::PinOwnerId{record.spec.jobId.toUnderType()}};
+    auto txn = cluster.kvEngine()->createReadWriteTransaction();
+    CO_ASSERT_OK(co_await PrefetchJobStore::create(*txn, record));
+    CO_ASSERT_OK(co_await PinStore::upsert(*txn, {key, active, record.createdAtMs, 50'000, {}}));
+    CO_ASSERT_OK(co_await txn->commit());
+
+    record.state = cache::PrefetchJobState::READY;
+    record.stateVersion = 2;
+    record.updatedAtMs = 200;
+    record.planningComplete = true;
+    record.plannerSourceIndex = 1;
+    record.plannedBlocks = record.readyBlocks = 1;
+    record.plannedBytes = record.readyBytes = 4096;
+    txn = cluster.kvEngine()->createReadWriteTransaction();
+    CO_ASSERT_OK(co_await PrefetchJobStore::update(*txn, 1, record));
+    CO_ASSERT_OK(co_await txn->commit());
+
+    ConvertActiveJobPinsReq request;
+    request.service = service();
+    request.jobId = record.spec.jobId;
+    request.keys = {key};
+    request.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+    auto converted = co_await cluster.meta().getOperator().convertActiveJobPins(request);
+    CO_ASSERT_OK(converted);
+    CO_ASSERT_EQ(converted->converted, uint64_t{1});
+    CO_ASSERT_EQ(converted->expiresAtMs, uint64_t{10'200});
+
+    auto read = cluster.kvEngine()->createReadonlyTransaction();
+    auto activePins = co_await PinStore::snapshotListByOwner(*read, active, std::nullopt, 10);
+    CO_ASSERT_OK(activePins);
+    CO_ASSERT_TRUE(activePins->pins.empty());
+    cache::PinOwner postReady{cache::PinOwnerKind::POST_READY, cache::PinOwnerId{record.spec.jobId.toUnderType()}};
+    auto fixedPins = co_await PinStore::snapshotListByOwner(*read, postReady, std::nullopt, 10);
+    CO_ASSERT_OK(fixedPins);
+    CO_ASSERT_EQ(fixedPins->pins.size(), size_t{1});
+    CO_ASSERT_EQ(fixedPins->pins.front().expiresAtMs, uint64_t{10'200});
+
+    converted = co_await cluster.meta().getOperator().convertActiveJobPins(request);
+    CO_ASSERT_OK(converted);
+    CO_ASSERT_EQ(converted->converted, uint64_t{0});
   }());
 }
 

@@ -141,6 +141,7 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   CoTryTask<RemoveCachePinsRsp> removeCachePins(RemoveCachePinsReq req);
   CoTryTask<ListCachePinsByOwnerRsp> listCachePinsByOwner(ListCachePinsByOwnerReq req);
   CoTryTask<QueryCachePinsRsp> queryCachePins(QueryCachePinsReq req);
+  CoTryTask<ConvertActiveJobPinsRsp> convertActiveJobPins(ConvertActiveJobPinsReq req);
 
  private:
   friend class MockMeta;

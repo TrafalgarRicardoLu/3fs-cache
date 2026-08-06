@@ -72,6 +72,7 @@ IMPL_META_STUB_METHOD(updatePrefetchPlanEntries, UpdatePrefetchPlanEntriesReq, U
 IMPL_META_STUB_METHOD(trackPrefetchReady, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
 IMPL_META_STUB_METHOD(advancePrefetchJobState, AdvancePrefetchJobStateReq, AdvancePrefetchJobStateRsp);
 IMPL_META_STUB_METHOD(cancelPrefetchJob, CancelPrefetchJobReq, CancelPrefetchJobRsp);
+IMPL_META_STUB_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
 
 template class MetaServiceStub<serde::ClientContext>;
 template class MetaServiceStub<serde::ClientMockContext>;
