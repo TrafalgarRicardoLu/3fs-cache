@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "cache/metrics/CacheMetrics.h"
+
 namespace hf3fs::cache_manager {
 
 CoTryTask<cache::PrefetchJobRecord> MetaJobCancellerBackend::cancelJob(cache::PrefetchJobId jobId) {
@@ -122,6 +124,9 @@ CoTryTask<JobCancellationResult> JobCanceller::cancel(cache::PrefetchJobId jobId
     if (!page->more) break;
     after = page->entries.back().key;
   } while (true);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_JOB_CANCEL,
+                              1,
+                              {.sourceId = jobId.toUnderType().toHexString(), .reason = "cancelled"});
   co_return result;
 }
 

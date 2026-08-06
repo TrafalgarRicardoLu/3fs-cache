@@ -52,6 +52,13 @@ CoTryTask<Dispatcher::OutputTable> handle(IEnv &ienv,
       {"manager.ready", std::to_string(managerResult->ready)},
       {"manager.cleaning", std::to_string(managerResult->cleaning)},
       {"manager.last_bypass_reason", std::string(magic_enum::enum_name(managerResult->lastBypassReason))}};
+  table.push_back({"phase3.enabled", managerResult->phase3Enabled ? "true" : "false"});
+  table.push_back({"phase3.active_jobs", std::to_string(managerResult->activeJobs)});
+  table.push_back({"phase3.failed_jobs", std::to_string(managerResult->failedJobs)});
+  table.push_back({"phase3.planned_bytes", std::to_string(managerResult->phase3PlannedBytes)});
+  table.push_back({"phase3.ready_bytes", std::to_string(managerResult->phase3ReadyBytes)});
+  table.push_back({"phase3.pinned_bytes", std::to_string(managerResult->pinnedBytes)});
+  table.push_back({"phase3.last_job_error", managerResult->lastJobError});
   if (phase2Result.hasError()) {
     table.push_back({"phase2.available", "false"});
     table.push_back({"phase2.error", phase2Result.error().describe()});

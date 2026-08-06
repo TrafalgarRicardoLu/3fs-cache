@@ -97,6 +97,13 @@ struct GetCacheStatusRsp {
   SERDE_STRUCT_FIELD(cleaning, uint64_t{0});
   SERDE_STRUCT_FIELD(inflightBytes, uint64_t{0});
   SERDE_STRUCT_FIELD(lastBypassReason, BypassReason::NONE);
+  SERDE_STRUCT_FIELD(phase3Enabled, false);
+  SERDE_STRUCT_FIELD(activeJobs, uint64_t{0});
+  SERDE_STRUCT_FIELD(failedJobs, uint64_t{0});
+  SERDE_STRUCT_FIELD(phase3PlannedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(phase3ReadyBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(pinnedBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(lastJobError, String{});
 };
 
 struct CacheAccessReportItem {

@@ -2,6 +2,8 @@
 
 #include <limits>
 
+#include "cache/metrics/CacheMetrics.h"
+
 namespace hf3fs::cache_manager {
 namespace {
 
@@ -75,6 +77,9 @@ CoTryTask<JobTrackerResult> JobTracker::run(const cache::PrefetchJobRecord &job,
     result.job = std::move(advanced->job);
     result.achievedReadyBps = advanced->achievedReadyBps;
   }
+  cache::metrics::setGauge(cache::metrics::Event::MANAGER_JOB_READY_BPS,
+                           result.achievedReadyBps,
+                           {.sourceId = job.spec.jobId.toUnderType().toHexString()});
   co_return result;
 }
 

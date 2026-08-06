@@ -60,5 +60,14 @@ TEST_F(TestCacheMetrics, IgnoresSentinelEvent) {
   ASSERT_TRUE(lastTagsForTest(Event::COUNT).reason.empty());
 }
 
+TEST_F(TestCacheMetrics, BoundsOrchestrationLabels) {
+  recordCount(Event::MANAGER_ORCHESTRATION_TICK,
+              1,
+              {.sourceId = std::string(100, 'j'), .reason = std::string(100, 'r')});
+  auto tags = lastTagsForTest(Event::MANAGER_ORCHESTRATION_TICK);
+  EXPECT_EQ(tags.sourceId.size(), 64u);
+  EXPECT_EQ(tags.reason.size(), 64u);
+}
+
 }  // namespace
 }  // namespace hf3fs::cache::metrics

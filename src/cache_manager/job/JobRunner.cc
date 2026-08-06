@@ -3,6 +3,8 @@
 #include <tuple>
 #include <utility>
 
+#include "cache/metrics/CacheMetrics.h"
+
 namespace hf3fs::cache_manager {
 
 JobRunner::JobRunner(std::shared_ptr<JobRunnerBackend> backend,
@@ -33,12 +35,18 @@ Result<std::shared_ptr<JobQuota::Permit>> JobRunner::acquire(const cache::Prefet
   auto permit = std::make_shared<JobQuota::Permit>(std::move(*acquired));
   auto lock = std::scoped_lock(claims_->mutex);
   auto [found, inserted] = claims_->permits.emplace(key, permit);
+  cache::metrics::setGauge(cache::metrics::Event::MANAGER_JOB_INFLIGHT,
+                           static_cast<int64_t>(quota_.inflight(entry.jobId)),
+                           {.sourceId = entry.jobId.toUnderType().toHexString()});
   return inserted ? permit : found->second;
 }
 
 void JobRunner::release(const cache::PrefetchPlanEntry &entry) {
   auto lock = std::scoped_lock(claims_->mutex);
   claims_->permits.erase(ClaimKey{entry.jobId, entry.key});
+  cache::metrics::setGauge(cache::metrics::Event::MANAGER_JOB_INFLIGHT,
+                           static_cast<int64_t>(quota_.inflight(entry.jobId)),
+                           {.sourceId = entry.jobId.toUnderType().toHexString()});
 }
 
 JobRunnerBackend::Completion JobRunner::completion(const cache::PrefetchPlanEntry &entry) {
@@ -83,6 +91,9 @@ CoTryTask<JobRunnerPageResult> JobRunner::runNextPage(const cache::PrefetchJobRe
     auto permit = acquire(current, cancellation);
     if (permit.hasError()) {
       if (permit.error().code() == CacheCode::kThrottled) {
+        cache::metrics::recordCount(cache::metrics::Event::MANAGER_JOB_QUOTA_WAIT,
+                                    1,
+                                    {.sourceId = job.spec.jobId.toUnderType().toHexString(), .reason = "quota"});
         result.throttled = true;
         result.more = true;
         break;

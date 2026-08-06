@@ -1,5 +1,7 @@
 #include "cache_manager/job/OrchestrationCoordinator.h"
 
+#include "cache/metrics/CacheMetrics.h"
+
 namespace hf3fs::cache_manager {
 
 CoTryTask<meta::ListPrefetchJobsRsp> MetaOrchestrationCoordinatorBackend::list(
@@ -66,6 +68,7 @@ CoTryTask<void> OrchestrationCoordinator::refresh() {
     if (!page->more) break;
     after = nextAfter;
   } while (true);
+  cache::metrics::setGauge(cache::metrics::Event::MANAGER_ACTIVE_JOBS, static_cast<int64_t>(activeJobs()));
   co_return Void{};
 }
 
@@ -75,6 +78,7 @@ CoTryTask<uint32_t> OrchestrationCoordinator::recover() {
 }
 
 CoTryTask<void> OrchestrationCoordinator::runPlannerOnce() {
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_ORCHESTRATION_TICK, 1, {.reason = "planner"});
   CO_RETURN_ON_ERROR(co_await refresh());
   if (!planner_) co_return Void{};
   for (const auto &job : snapshot()) {
@@ -88,6 +92,7 @@ CoTryTask<void> OrchestrationCoordinator::runPlannerOnce() {
 }
 
 CoTryTask<void> OrchestrationCoordinator::runRunnerOnce() {
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_ORCHESTRATION_TICK, 1, {.reason = "runner"});
   CO_RETURN_ON_ERROR(co_await refresh());
   if (!runner_) co_return Void{};
   for (const auto &job : snapshot()) {
@@ -106,6 +111,7 @@ CoTryTask<void> OrchestrationCoordinator::runRunnerOnce() {
 }
 
 CoTryTask<void> OrchestrationCoordinator::runTrackerOnce() {
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_ORCHESTRATION_TICK, 1, {.reason = "tracker"});
   CO_RETURN_ON_ERROR(co_await refresh());
   if (!tracker_) co_return Void{};
   for (const auto &job : snapshot()) {

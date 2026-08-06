@@ -58,6 +58,17 @@ struct LegacyPhase2CacheStatus {
   SERDE_STRUCT_FIELD(deadLetters, uint64_t{0});
 };
 
+struct LegacyCacheManagerStatus {
+  SERDE_STRUCT_FIELD(logicalCapacity, uint64_t{0});
+  SERDE_STRUCT_FIELD(usedCapacity, uint64_t{0});
+  SERDE_STRUCT_FIELD(queued, uint64_t{0});
+  SERDE_STRUCT_FIELD(loading, uint64_t{0});
+  SERDE_STRUCT_FIELD(ready, uint64_t{0});
+  SERDE_STRUCT_FIELD(cleaning, uint64_t{0});
+  SERDE_STRUCT_FIELD(inflightBytes, uint64_t{0});
+  SERDE_STRUCT_FIELD(lastBypassReason, cache_manager::BypassReason::NONE);
+};
+
 struct LegacyCacheSpaceInfo {
   SERDE_STRUCT_FIELD(physicalDiskId, storage::PhysicalDiskId{});
   SERDE_STRUCT_FIELD(role, storage::StorageRole::INVALID);
@@ -114,6 +125,24 @@ TEST(ServiceContracts, Phase2ContractsRoundTrip) {
   ASSERT_EQ(decoded.items.size(), 1);
   EXPECT_EQ(decoded.items.front().key, original.items.front().key);
   EXPECT_EQ(decoded.items.front().generation, CacheGeneration{7});
+}
+
+TEST(ServiceContracts, Phase3StatusExtensionsAreBackwardCompatible) {
+  LegacyCacheManagerStatus legacy;
+  legacy.ready = 7;
+  cache_manager::GetCacheStatusRsp current;
+  ASSERT_OK(serde::deserialize(current, serde::serialize(legacy)));
+  EXPECT_EQ(current.ready, 7u);
+  EXPECT_FALSE(current.phase3Enabled);
+  EXPECT_EQ(current.activeJobs, 0u);
+  EXPECT_EQ(current.pinnedBytes, 0u);
+
+  current.phase3Enabled = true;
+  current.activeJobs = 2;
+  current.pinnedBytes = 4096;
+  LegacyCacheManagerStatus oldReader;
+  ASSERT_OK(serde::deserialize(oldReader, serde::serialize(current)));
+  EXPECT_EQ(oldReader.ready, 7u);
 }
 
 TEST(ServiceContracts, Phase3ContractsRoundTripAndBoundPages) {

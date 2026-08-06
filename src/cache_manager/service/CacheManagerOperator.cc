@@ -5,6 +5,7 @@
 #include <folly/experimental/coro/BlockingWait.h>
 #include <limits>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "cache/origin/RoutedObjectStore.h"
 #include "cache_manager/planner/ManifestPlanner.h"
 #include "cache_manager/planner/NamespaceDatasetPlanner.h"
@@ -365,6 +366,7 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
   CO_RETURN_ON_ERROR(checkProtocol(req.cacheProtocolVersion));
   if (backend_) CO_RETURN_ON_ERROR(co_await backend_->authorizeAdmin(req.user, req.inode));
   GetCacheStatusRsp response;
+  response.phase3Enabled = config_.enable_phase3();
   response.queued = hints_.size();
   if (capacityGate_) {
     response.loading = capacityGate_->inflightRequests();
@@ -391,6 +393,46 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
         default:
           break;
       }
+    }
+    if (response.phase3Enabled) {
+      std::optional<cache::PrefetchJobId> after;
+      do {
+        meta::ListPrefetchJobsReq list;
+        list.service = {config_.service_name(), config_.service_token()};
+        if (!req.user.isRoot()) list.ownerUid = req.user.uid;
+        list.after = after;
+        list.limit = config_.phase3_job_page_size();
+        list.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+        auto jobs = co_await metaClient_->listPrefetchJobs(std::move(list));
+        CO_RETURN_ON_ERROR(jobs);
+        for (const auto &job : jobs->jobs) {
+          auto terminal = job.state == cache::PrefetchJobState::READY || job.state == cache::PrefetchJobState::FAILED ||
+                          job.state == cache::PrefetchJobState::CANCELLED;
+          if (!terminal) ++response.activeJobs;
+          if (job.state == cache::PrefetchJobState::FAILED) {
+            ++response.failedJobs;
+            if (!job.error.empty()) response.lastJobError = job.error.substr(0, 256);
+          }
+          response.phase3PlannedBytes +=
+              std::min(job.plannedBytes, std::numeric_limits<uint64_t>::max() - response.phase3PlannedBytes);
+          response.phase3ReadyBytes +=
+              std::min(job.readyBytes, std::numeric_limits<uint64_t>::max() - response.phase3ReadyBytes);
+          if (job.spec.pinAfterReady) {
+            GetPinStatusReq pinStatus{req.user,
+                                      cache::PinOwnerId{job.spec.jobId.toUnderType()},
+                                      cache::kCachePhase3ProtocolVersion};
+            auto pin = co_await getPinStatus(pinStatus);
+            CO_RETURN_ON_ERROR(pin);
+            response.pinnedBytes +=
+                std::min(pin->pinnedBytes, std::numeric_limits<uint64_t>::max() - response.pinnedBytes);
+          }
+        }
+        if (!jobs->more) break;
+        if (jobs->jobs.empty()) co_return makeError(CacheCode::kInvalidResponse, "Job status page did not advance");
+        after = jobs->jobs.back().spec.jobId;
+      } while (true);
+      cache::metrics::setGauge(cache::metrics::Event::MANAGER_ACTIVE_JOBS, response.activeJobs);
+      cache::metrics::setGauge(cache::metrics::Event::MANAGER_PINNED_BYTES, response.pinnedBytes);
     }
   }
   co_return response;
