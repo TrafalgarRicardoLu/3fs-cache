@@ -137,6 +137,7 @@ TEST(OrchestrationTypes, AppendedSpecFieldsKeepDefaults) {
   EXPECT_EQ(current.requiredReadyBps, kReadyRatioScaleBps);
   EXPECT_FALSE(current.pinAfterReady);
   EXPECT_EQ(current.pinTtlMs, uint64_t{0});
+  EXPECT_TRUE(current.loadMissing);
   ASSERT_OK(current.valid());
 }
 

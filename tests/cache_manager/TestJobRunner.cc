@@ -172,5 +172,19 @@ TEST(TestJobRunner, HandlesCompletionRacingWithAttach) {
   EXPECT_EQ(quota.inflight(job().spec.jobId), 0u);
 }
 
+TEST(TestJobRunner, ObserveOnlyPinDoesNotAdmitMissingBlocks) {
+  auto backend = std::make_shared<FakeJobRunnerBackend>();
+  backend->entries = {entry(0)};
+  JobQuota quota;
+  JobRunner runner(backend, quota);
+  auto observeOnly = job();
+  observeOnly.spec.loadMissing = false;
+  auto result = folly::coro::blockingWait(runner.runNextPage(observeOnly));
+  ASSERT_OK(result);
+  EXPECT_EQ(result->visited, 0u);
+  EXPECT_TRUE(backend->seenAttempts.empty());
+  EXPECT_EQ(backend->entries.front().state, cache::PrefetchPlanEntryState::PLANNED);
+}
+
 }  // namespace
 }  // namespace hf3fs::cache_manager::test

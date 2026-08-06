@@ -1,5 +1,6 @@
 #include "cache_manager/service/CacheManagerOperator.h"
 
+#include <algorithm>
 #include <cmath>
 #include <folly/experimental/coro/BlockingWait.h>
 #include <limits>
@@ -486,20 +487,175 @@ CoTryTask<GetPhase2CacheStatusRsp> CacheManagerOperator::getPhase2CacheStatus(co
   co_return response;
 }
 
-#define PHASE3_DISABLED_METHOD(NAME, REQ, RSP)                                         \
-  CoTryTask<RSP> CacheManagerOperator::NAME(const REQ &req) {                          \
-    CO_RETURN_ON_ERROR(req.valid());                                                   \
-    CO_RETURN_ON_ERROR(checkPhase3Protocol(req.cacheProtocolVersion));                 \
-    co_return makeError(CacheCode::kFeatureDisabled, "cache phase three is disabled"); \
-  }
+CoTryTask<CreatePrefetchJobRsp> CacheManagerOperator::createPrefetchJob(const CreatePrefetchJobReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkPhase3Protocol(req.cacheProtocolVersion));
+  if (!metaClient_) co_return makeError(CacheCode::kUnavailable, "metadata client is unavailable");
+  auto nowMs = static_cast<uint64_t>(UtcClock::now().toMicroseconds() / 1000);
+  if (nowMs == 0) co_return makeError(StatusCode::kInvalidArg, "cache manager clock is invalid");
+  cache::PrefetchJobRecord job;
+  job.spec = req.spec;
+  job.state = cache::PrefetchJobState::PENDING;
+  job.stateVersion = 1;
+  job.createdAtMs = job.updatedAtMs = nowMs;
+  meta::CreatePrefetchJobReq create;
+  create.service = {config_.service_name(), config_.service_token()};
+  create.job = std::move(job);
+  create.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+  auto created = co_await metaClient_->createPrefetchJob(std::move(create));
+  CO_RETURN_ON_ERROR(created);
+  co_return CreatePrefetchJobRsp{std::move(created->job)};
+}
 
-PHASE3_DISABLED_METHOD(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
-PHASE3_DISABLED_METHOD(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
-PHASE3_DISABLED_METHOD(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);
-PHASE3_DISABLED_METHOD(cancelPrefetchJob, CancelPrefetchJobReq, CancelPrefetchJobRsp);
-PHASE3_DISABLED_METHOD(pinDataset, PinDatasetReq, PinDatasetRsp);
-PHASE3_DISABLED_METHOD(unpinDataset, UnpinDatasetReq, UnpinDatasetRsp);
-PHASE3_DISABLED_METHOD(getPinStatus, GetPinStatusReq, GetPinStatusRsp);
-#undef PHASE3_DISABLED_METHOD
+CoTryTask<GetPrefetchJobRsp> CacheManagerOperator::getPrefetchJob(const GetPrefetchJobReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkPhase3Protocol(req.cacheProtocolVersion));
+  if (!metaClient_) co_return makeError(CacheCode::kUnavailable, "metadata client is unavailable");
+  meta::GetPrefetchJobReq get;
+  get.service = {config_.service_name(), config_.service_token()};
+  get.jobId = req.jobId;
+  get.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+  auto fetched = co_await metaClient_->getPrefetchJob(std::move(get));
+  CO_RETURN_ON_ERROR(fetched);
+  if (!req.user.isRoot() && fetched->job.spec.ownerUid != req.user.uid) {
+    co_return makeError(MetaCode::kNoPermission, "prefetch Job belongs to another user");
+  }
+  co_return GetPrefetchJobRsp{std::move(fetched->job)};
+}
+
+CoTryTask<ListPrefetchJobsRsp> CacheManagerOperator::listPrefetchJobs(const ListPrefetchJobsReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkPhase3Protocol(req.cacheProtocolVersion));
+  if (!metaClient_) co_return makeError(CacheCode::kUnavailable, "metadata client is unavailable");
+  meta::ListPrefetchJobsReq list;
+  list.service = {config_.service_name(), config_.service_token()};
+  if (!req.user.isRoot()) list.ownerUid = req.user.uid;
+  list.after = req.after;
+  list.limit = req.limit;
+  list.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+  auto page = co_await metaClient_->listPrefetchJobs(std::move(list));
+  CO_RETURN_ON_ERROR(page);
+  ListPrefetchJobsRsp response;
+  response.jobs = std::move(page->jobs);
+  response.more = page->more;
+  co_return response;
+}
+
+CoTryTask<CancelPrefetchJobRsp> CacheManagerOperator::cancelPrefetchJob(const CancelPrefetchJobReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkPhase3Protocol(req.cacheProtocolVersion));
+  GetPrefetchJobReq get{req.user, req.jobId, req.cacheProtocolVersion};
+  CO_RETURN_ON_ERROR(co_await getPrefetchJob(get));
+  if (!jobCanceller_) co_return makeError(CacheCode::kUnavailable, "prefetch Job canceller is unavailable");
+  auto cancelled = co_await jobCanceller_->cancel(req.jobId);
+  CO_RETURN_ON_ERROR(cancelled);
+  co_return CancelPrefetchJobRsp{std::move(cancelled->job)};
+}
+
+CoTryTask<PinDatasetRsp> CacheManagerOperator::pinDataset(const PinDatasetReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkPhase3Protocol(req.cacheProtocolVersion));
+  cache::PrefetchJobSpec spec;
+  spec.jobId = cache::PrefetchJobId{req.pinId.toUnderType()};
+  spec.ownerUid = req.user.uid;
+  spec.sources = req.sources;
+  spec.priority = req.priority;
+  spec.pinAfterReady = true;
+  spec.pinTtlMs = req.ttlMs;
+  spec.loadMissing = req.prefetchMissing;
+  CreatePrefetchJobReq create{req.user, std::move(spec), req.cacheProtocolVersion};
+  auto created = co_await createPrefetchJob(create);
+  CO_RETURN_ON_ERROR(created);
+  PinDatasetRsp response;
+  response.pinId = req.pinId;
+  response.plannedBytes = created->job.plannedBytes;
+  co_return response;
+}
+
+CoTryTask<UnpinDatasetRsp> CacheManagerOperator::unpinDataset(const UnpinDatasetReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkPhase3Protocol(req.cacheProtocolVersion));
+  if (!metaClient_) co_return makeError(CacheCode::kUnavailable, "metadata client is unavailable");
+  auto jobId = cache::PrefetchJobId{req.pinId.toUnderType()};
+  GetPrefetchJobReq get{req.user, jobId, req.cacheProtocolVersion};
+  auto fetched = co_await getPrefetchJob(get);
+  CO_RETURN_ON_ERROR(fetched);
+  if (fetched->job.state != cache::PrefetchJobState::READY && fetched->job.state != cache::PrefetchJobState::FAILED &&
+      fetched->job.state != cache::PrefetchJobState::CANCELLED && jobCanceller_) {
+    CO_RETURN_ON_ERROR(co_await jobCanceller_->cancel(jobId));
+  }
+  uint64_t removed = 0;
+  for (auto kind :
+       {cache::PinOwnerKind::ACTIVE_JOB, cache::PinOwnerKind::EXPLICIT_PIN, cache::PinOwnerKind::POST_READY}) {
+    meta::RemoveCachePinsReq remove;
+    remove.service = {config_.service_name(), config_.service_token()};
+    remove.owner = {kind, req.pinId};
+    remove.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+    auto result = co_await metaClient_->removeCachePins(std::move(remove));
+    CO_RETURN_ON_ERROR(result);
+    if (result->removed > std::numeric_limits<uint64_t>::max() - removed) {
+      co_return makeError(CacheCode::kStateConflict, "removed pin counter overflow");
+    }
+    removed += result->removed;
+  }
+  co_return UnpinDatasetRsp{removed};
+}
+
+CoTryTask<GetPinStatusRsp> CacheManagerOperator::getPinStatus(const GetPinStatusReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkPhase3Protocol(req.cacheProtocolVersion));
+  if (!metaClient_) co_return makeError(CacheCode::kUnavailable, "metadata client is unavailable");
+  auto jobId = cache::PrefetchJobId{req.pinId.toUnderType()};
+  GetPrefetchJobReq get{req.user, jobId, req.cacheProtocolVersion};
+  auto fetched = co_await getPrefetchJob(get);
+  CO_RETURN_ON_ERROR(fetched);
+  GetPinStatusRsp response;
+  response.pinId = req.pinId;
+  response.plannedBytes = fetched->job.plannedBytes;
+  response.readyBytes = fetched->job.readyBytes;
+  std::vector<cache::PinRecord> pins;
+  for (auto kind :
+       {cache::PinOwnerKind::ACTIVE_JOB, cache::PinOwnerKind::EXPLICIT_PIN, cache::PinOwnerKind::POST_READY}) {
+    std::optional<cache::CacheBlockKey> after;
+    do {
+      meta::ListCachePinsByOwnerReq list;
+      list.service = {config_.service_name(), config_.service_token()};
+      list.owner = {kind, req.pinId};
+      list.after = after;
+      list.limit = config_.phase3_plan_page_size();
+      list.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+      auto page = co_await metaClient_->listCachePinsByOwner(std::move(list));
+      CO_RETURN_ON_ERROR(page);
+      pins.insert(pins.end(), page->pins.begin(), page->pins.end());
+      if (!page->more) break;
+      if (page->pins.empty()) co_return makeError(CacheCode::kInvalidResponse, "pin status page did not advance");
+      after = page->pins.back().key;
+    } while (true);
+  }
+  std::optional<cache::CacheBlockKey> after;
+  do {
+    meta::ListPrefetchPlanReq list;
+    list.service = {config_.service_name(), config_.service_token()};
+    list.jobId = jobId;
+    list.after = after;
+    list.limit = config_.phase3_plan_page_size();
+    list.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+    auto page = co_await metaClient_->listPrefetchPlan(std::move(list));
+    CO_RETURN_ON_ERROR(page);
+    for (const auto &entry : page->entries) {
+      auto found = std::find_if(pins.begin(), pins.end(), [&](const auto &pin) { return pin.key == entry.key; });
+      if (found == pins.end()) continue;
+      if (entry.blockLength > std::numeric_limits<uint64_t>::max() - response.pinnedBytes) {
+        co_return makeError(CacheCode::kStateConflict, "pinned byte counter overflow");
+      }
+      response.pinnedBytes += entry.blockLength;
+      response.expiresAtMs = std::max(response.expiresAtMs, found->expiresAtMs);
+    }
+    if (!page->more) break;
+    if (page->entries.empty()) co_return makeError(CacheCode::kInvalidResponse, "pin plan page did not advance");
+    after = page->entries.back().key;
+  } while (true);
+  co_return response;
+}
 
 }  // namespace hf3fs::cache_manager

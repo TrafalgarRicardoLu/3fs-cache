@@ -179,6 +179,8 @@ struct PrefetchJobSpec {
   SERDE_STRUCT_FIELD(requiredReadyBps, kReadyRatioScaleBps);
   SERDE_STRUCT_FIELD(pinAfterReady, false);
   SERDE_STRUCT_FIELD(pinTtlMs, uint64_t{});
+  // Explicit PinDataset may observe existing READY data without admitting missing blocks.
+  SERDE_STRUCT_FIELD(loadMissing, true);
 
  public:
   Result<Void> valid() const;

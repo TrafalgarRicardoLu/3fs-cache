@@ -56,6 +56,7 @@ CoTryTask<JobRunnerPageResult> JobRunner::runNextPage(const cache::PrefetchJobRe
                                                       std::optional<cache::CacheBlockKey> after,
                                                       const CancellationToken &cancellation) {
   CO_RETURN_ON_ERROR(job.valid());
+  if (!job.spec.loadMissing) co_return JobRunnerPageResult{};
   if (pageLimit_ == 0 || pageLimit_ > cache::kMaxPhase2BatchItems) {
     co_return makeError(StatusCode::kInvalidConfig, "invalid JobRunner page limit");
   }
