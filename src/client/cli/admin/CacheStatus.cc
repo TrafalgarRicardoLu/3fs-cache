@@ -58,6 +58,7 @@ CoTryTask<Dispatcher::OutputTable> handle(IEnv &ienv,
   table.push_back({"phase3.planned_bytes", std::to_string(managerResult->phase3PlannedBytes)});
   table.push_back({"phase3.ready_bytes", std::to_string(managerResult->phase3ReadyBytes)});
   table.push_back({"phase3.pinned_bytes", std::to_string(managerResult->pinnedBytes)});
+  table.push_back({"phase3.exclusive_queued_claims", std::to_string(managerResult->exclusiveQueuedClaims)});
   table.push_back({"phase3.last_job_error", managerResult->lastJobError});
   if (phase2Result.hasError()) {
     table.push_back({"phase2.available", "false"});

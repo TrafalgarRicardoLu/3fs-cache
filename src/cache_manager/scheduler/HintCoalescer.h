@@ -64,6 +64,7 @@ class HintCoalescer {
   std::optional<LoadHint> pop();
   std::vector<LoadHint> popBatch(uint64_t maxBytes);
   size_t size() const;
+  size_t exclusiveJobClaims() const;
 
  private:
   struct Entry {

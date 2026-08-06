@@ -2,6 +2,7 @@
 
 #include "fbs/mgmtd/NodeConversion.h"
 #include "mgmtd/service/CachePhase2Rollout.h"
+#include "mgmtd/service/CachePhase3Rollout.h"
 #include "mgmtd/service/helpers.h"
 
 namespace hf3fs::mgmtd {
@@ -52,6 +53,26 @@ CoTryTask<SetUniversalTagsRsp> SetUniversalTagsOperation::handle(MgmtdState &sta
         for (const auto &[_, node] : dataPtr->routingInfo.nodeMap) nodes.push_back(node.base());
       }
       CO_RETURN_ON_ERROR(validateCachePhase2Transition(current, *requested, nodes));
+    }
+    if (req.universalId == flat::kCachePhase3RolloutTagId) {
+      if (req.mode != flat::SetTagMode::REPLACE) {
+        co_return makeError(StatusCode::kInvalidArg, "cache phase three rollout state requires replace mode");
+      }
+      auto requested = parseCachePhase3Rollout(newTags);
+      CO_RETURN_ON_ERROR(requested);
+      auto current = flat::CachePhase3RolloutState::DISABLED;
+      if (!oldTags.empty()) {
+        auto parsed = parseCachePhase3Rollout(oldTags);
+        CO_RETURN_ON_ERROR(parsed);
+        current = parsed->state;
+      }
+      std::vector<flat::NodeInfo> nodes;
+      {
+        auto dataPtr = co_await state.data_.coSharedLock();
+        nodes.reserve(dataPtr->routingInfo.nodeMap.size());
+        for (const auto &[_, node] : dataPtr->routingInfo.nodeMap) nodes.push_back(node.base());
+      }
+      CO_RETURN_ON_ERROR(validateCachePhase3Transition(current, *requested, nodes));
     }
 
     CO_RETURN_ON_ERROR(

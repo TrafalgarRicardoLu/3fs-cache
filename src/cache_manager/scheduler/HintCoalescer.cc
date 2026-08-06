@@ -184,4 +184,11 @@ size_t HintCoalescer::size() const {
   return entries_.size();
 }
 
+size_t HintCoalescer::exclusiveJobClaims() const {
+  auto lock = std::scoped_lock(mutex_);
+  return static_cast<size_t>(std::count_if(entries_.begin(), entries_.end(), [](const auto &item) {
+    return !item.second.baseClaim.has_value() && !item.second.hint.jobClaims.empty();
+  }));
+}
+
 }  // namespace hf3fs::cache_manager

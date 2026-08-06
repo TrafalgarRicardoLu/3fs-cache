@@ -5,6 +5,7 @@
 #include "client/cli/admin/CacheOrchestration.h"
 #include "client/cli/admin/CacheOriginCli.h"
 #include "client/cli/admin/CachePhase2Rollout.h"
+#include "client/cli/admin/CachePhase3Rollout.h"
 #include "client/cli/admin/registerAdminCommands.h"
 
 namespace hf3fs::client::cli::test {
@@ -61,9 +62,23 @@ TEST(CacheAdminCli, RegistersLifecycleCommands) {
                               "cache-cleanup",
                               "cache-phase2-rollout",
                               "cache-prefetch",
-                              "cache-pin"}) {
+                              "cache-pin",
+                              "cache-phase3-rollout"}) {
     EXPECT_TRUE(usages.contains(command)) << command;
   }
+}
+
+TEST(CacheAdminCli, Phase3InventoryIncludesJobsPinsAndExclusiveClaims) {
+  cache_manager::GetCacheStatusRsp status;
+  EXPECT_TRUE(cachePhase3InventoryHealthy(status));
+  status.activeJobs = 1;
+  EXPECT_FALSE(cachePhase3InventoryHealthy(status));
+  status.activeJobs = 0;
+  status.pinnedBytes = 1;
+  EXPECT_FALSE(cachePhase3InventoryHealthy(status));
+  status.pinnedBytes = 0;
+  status.exclusiveQueuedClaims = 1;
+  EXPECT_FALSE(cachePhase3InventoryHealthy(status));
 }
 
 TEST(CacheAdminCli, ConvertsReadyRatioWithoutOverflow) {

@@ -1,6 +1,7 @@
 #include "MgmtdData.h"
 
 #include "CachePhase2Rollout.h"
+#include "CachePhase3Rollout.h"
 #include "MgmtdConfig.h"
 #include "core/utils/ServiceOperation.h"
 #include "helpers.h"
@@ -100,6 +101,11 @@ std::optional<flat::RoutingInfo> MgmtdData::getRoutingInfo(flat::RoutingInfoVers
       rollout != universalTagsMap.end()) {
     auto parsed = parseCachePhase2Rollout(rollout->second);
     if (parsed.hasValue()) res.cachePhase2State = parsed->state;
+  }
+  if (auto rollout = universalTagsMap.find(std::string(flat::kCachePhase3RolloutTagId));
+      rollout != universalTagsMap.end()) {
+    auto parsed = parseCachePhase3Rollout(rollout->second);
+    if (parsed.hasValue()) res.cachePhase3State = parsed->state;
   }
   for (const auto &[id, nw] : info.nodeMap) {
     res.nodes[id] = nw.base();

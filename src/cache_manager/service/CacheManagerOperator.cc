@@ -243,11 +243,23 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     };
     bool started = startWorker(
                        "CacheManagerJobPlanner",
-                       [this] { return orchestration_->runPlannerOnce(); },
+                       [this]() -> CoTryTask<void> {
+                         auto routing = backend_->routingInfo();
+                         if (routing && routing->raw() &&
+                             routing->raw()->cachePhase3State == flat::CachePhase3RolloutState::ENABLED)
+                           co_return co_await orchestration_->runPlannerOnce();
+                         co_return Void{};
+                       },
                        config_.phase3_planner_interval()) &&
                    startWorker(
                        "CacheManagerJobRunner",
-                       [this] { return orchestration_->runRunnerOnce(); },
+                       [this]() -> CoTryTask<void> {
+                         auto routing = backend_->routingInfo();
+                         if (routing && routing->raw() &&
+                             routing->raw()->cachePhase3State == flat::CachePhase3RolloutState::ENABLED)
+                           co_return co_await orchestration_->runRunnerOnce();
+                         co_return Void{};
+                       },
                        config_.phase3_runner_interval()) &&
                    startWorker(
                        "CacheManagerJobTracker",
@@ -326,7 +338,15 @@ Result<Void> CacheManagerOperator::checkPhase2Protocol(uint32_t version) const {
 }
 
 Result<Void> CacheManagerOperator::checkPhase3Protocol(uint32_t version) const {
-  return cache::checkPhase3Capability(version, config_.enable_phase3());
+  RETURN_ON_ERROR(cache::checkPhase3Capability(version, config_.enable_phase3()));
+  if (backend_) {
+    auto routing = backend_->routingInfo();
+    if (!routing || !routing->raw() || routing->raw()->cachePhase2State != flat::CachePhase2RolloutState::ENABLED ||
+        routing->raw()->cachePhase3State == flat::CachePhase3RolloutState::DISABLED) {
+      return makeError(CacheCode::kFeatureDisabled, "cache phase three rollout is not enabled");
+    }
+  }
+  return Void{};
 }
 
 Result<Void> CacheManagerOperator::checkService(const ServiceIdentity &service) const {
@@ -368,6 +388,7 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
   GetCacheStatusRsp response;
   response.phase3Enabled = config_.enable_phase3();
   response.queued = hints_.size();
+  response.exclusiveQueuedClaims = hints_.exclusiveJobClaims();
   if (capacityGate_) {
     response.loading = capacityGate_->inflightRequests();
     response.inflightBytes = capacityGate_->inflightBytes();
@@ -532,6 +553,12 @@ CoTryTask<GetPhase2CacheStatusRsp> CacheManagerOperator::getPhase2CacheStatus(co
 CoTryTask<CreatePrefetchJobRsp> CacheManagerOperator::createPrefetchJob(const CreatePrefetchJobReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkPhase3Protocol(req.cacheProtocolVersion));
+  if (backend_) {
+    auto routing = backend_->routingInfo();
+    if (!routing || !routing->raw() || routing->raw()->cachePhase3State != flat::CachePhase3RolloutState::ENABLED) {
+      co_return makeError(CacheCode::kFeatureDisabled, "cache phase three is draining");
+    }
+  }
   if (!metaClient_) co_return makeError(CacheCode::kUnavailable, "metadata client is unavailable");
   auto nowMs = static_cast<uint64_t>(UtcClock::now().toMicroseconds() / 1000);
   if (nowMs == 0) co_return makeError(StatusCode::kInvalidArg, "cache manager clock is invalid");

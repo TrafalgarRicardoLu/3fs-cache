@@ -104,6 +104,7 @@ struct GetCacheStatusRsp {
   SERDE_STRUCT_FIELD(phase3ReadyBytes, uint64_t{0});
   SERDE_STRUCT_FIELD(pinnedBytes, uint64_t{0});
   SERDE_STRUCT_FIELD(lastJobError, String{});
+  SERDE_STRUCT_FIELD(exclusiveQueuedClaims, uint64_t{0});
 };
 
 struct CacheAccessReportItem {

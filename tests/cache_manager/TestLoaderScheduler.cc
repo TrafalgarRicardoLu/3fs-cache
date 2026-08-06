@@ -72,6 +72,18 @@ TEST(TestHintCoalescer, BoundsJobClaimsWithoutDroppingExistingOwners) {
   EXPECT_EQ(retained->jobClaims.size(), kMaxJobClaimsPerHint);
 }
 
+TEST(TestHintCoalescer, CountsOnlyExclusiveQueuedJobClaimsForDrain) {
+  HintCoalescer hints;
+  LoadHint prefetch{meta::InodeId{1}, cache::CacheBlockIndex{0}, 4096, EnsureReason::PREFETCH, 7};
+  prefetch.jobClaims.push_back({cache::PrefetchJobId{Uuid::from(1, 1)}, 7, {}});
+  ASSERT_TRUE(hints.enqueue(std::move(prefetch)));
+  EXPECT_EQ(hints.exclusiveJobClaims(), 1u);
+
+  LoadHint foreground{meta::InodeId{1}, cache::CacheBlockIndex{0}, 4096, EnsureReason::FOREGROUND_MISS, 3};
+  ASSERT_OK(hints.attach(std::move(foreground)));
+  EXPECT_EQ(hints.exclusiveJobClaims(), 0u);
+}
+
 TEST(TestHintCoalescer, StrictPriorityPreventsAdjacentBlocksFromRidingAlong) {
   HintCoalescer hints;
   ASSERT_TRUE(hints.enqueue({meta::InodeId{1}, cache::CacheBlockIndex{0}, 4096, EnsureReason::PREFETCH, 10}));
