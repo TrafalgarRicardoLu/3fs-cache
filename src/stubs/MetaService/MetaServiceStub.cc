@@ -70,6 +70,7 @@ IMPL_META_STUB_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePi
 IMPL_META_STUB_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
 IMPL_META_STUB_METHOD(updatePrefetchPlanEntries, UpdatePrefetchPlanEntriesReq, UpdatePrefetchPlanEntriesRsp);
 IMPL_META_STUB_METHOD(trackPrefetchReady, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
+IMPL_META_STUB_METHOD(advancePrefetchJobState, AdvancePrefetchJobStateReq, AdvancePrefetchJobStateRsp);
 
 template class MetaServiceStub<serde::ClientContext>;
 template class MetaServiceStub<serde::ClientMockContext>;

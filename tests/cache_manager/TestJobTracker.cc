@@ -27,11 +27,20 @@ class FakeTrackerBackend : public JobTrackerBackend {
  public:
   std::vector<meta::TrackPrefetchReadyRsp> pages;
   size_t calls{0};
+  size_t advanceCalls{0};
 
   CoTryTask<meta::TrackPrefetchReadyRsp> track(cache::PrefetchJobId,
                                                std::optional<cache::CacheBlockKey>,
                                                uint32_t) override {
     co_return pages.at(calls++);
+  }
+
+  CoTryTask<meta::AdvancePrefetchJobStateRsp> advance(cache::PrefetchJobId, uint64_t) override {
+    ++advanceCalls;
+    meta::AdvancePrefetchJobStateRsp response;
+    response.job = pages.back().job;
+    response.achievedReadyBps = 1;
+    co_return response;
   }
 };
 
@@ -67,6 +76,8 @@ TEST(TestJobTracker, RecalculatesCurrentReadinessAcrossPages) {
   EXPECT_EQ(result->currentReadyBlocks, 2u);
   EXPECT_EQ(result->job.readyBytes, 4097u);
   EXPECT_EQ(backend->calls, 2u);
+  EXPECT_EQ(backend->advanceCalls, 1u);
+  EXPECT_EQ(result->achievedReadyBps, 1u);
 }
 
 TEST(TestJobTracker, RejectsCurrentCounterOverflowAndNonAdvancingPages) {

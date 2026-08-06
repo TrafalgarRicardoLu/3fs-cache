@@ -10,6 +10,8 @@ class JobTrackerBackend {
   virtual CoTryTask<meta::TrackPrefetchReadyRsp> track(cache::PrefetchJobId jobId,
                                                        std::optional<cache::CacheBlockKey> after,
                                                        uint32_t limit) = 0;
+  virtual CoTryTask<meta::AdvancePrefetchJobStateRsp> advance(cache::PrefetchJobId jobId,
+                                                              uint64_t expectedStateVersion) = 0;
 };
 
 class MetaJobTrackerBackend final : public JobTrackerBackend {
@@ -21,6 +23,8 @@ class MetaJobTrackerBackend final : public JobTrackerBackend {
   CoTryTask<meta::TrackPrefetchReadyRsp> track(cache::PrefetchJobId jobId,
                                                std::optional<cache::CacheBlockKey> after,
                                                uint32_t limit) override;
+  CoTryTask<meta::AdvancePrefetchJobStateRsp> advance(cache::PrefetchJobId jobId,
+                                                      uint64_t expectedStateVersion) override;
 
  private:
   std::shared_ptr<meta::client::MetaClient> metaClient_;
@@ -31,6 +35,7 @@ struct JobTrackerResult {
   cache::PrefetchJobRecord job;
   uint64_t currentReadyBytes{0};
   uint64_t currentReadyBlocks{0};
+  uint32_t achievedReadyBps{0};
 };
 
 class JobTracker {

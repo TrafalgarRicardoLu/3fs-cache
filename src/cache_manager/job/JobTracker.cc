@@ -27,6 +27,16 @@ CoTryTask<meta::TrackPrefetchReadyRsp> MetaJobTrackerBackend::track(cache::Prefe
   co_return co_await metaClient_->trackPrefetchReady(std::move(request));
 }
 
+CoTryTask<meta::AdvancePrefetchJobStateRsp> MetaJobTrackerBackend::advance(cache::PrefetchJobId jobId,
+                                                                           uint64_t expectedStateVersion) {
+  meta::AdvancePrefetchJobStateReq request;
+  request.service = service_;
+  request.jobId = jobId;
+  request.expectedStateVersion = expectedStateVersion;
+  request.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+  co_return co_await metaClient_->advancePrefetchJobState(std::move(request));
+}
+
 CoTryTask<JobTrackerResult> JobTracker::run(const cache::PrefetchJobRecord &job,
                                             const CancellationToken &cancellation) {
   CO_RETURN_ON_ERROR(job.valid());
@@ -54,6 +64,17 @@ CoTryTask<JobTrackerResult> JobTracker::run(const cache::PrefetchJobRecord &job,
     }
     after = page->nextAfter;
   } while (true);
+  if (result.job.planningComplete) {
+    auto advanced = co_await backend_->advance(job.spec.jobId, result.job.stateVersion);
+    CO_RETURN_ON_ERROR(advanced);
+    CO_RETURN_ON_ERROR(advanced->job.valid());
+    if (advanced->job.spec.jobId != job.spec.jobId || advanced->job.readyBytes < result.job.readyBytes ||
+        advanced->job.readyBlocks < result.job.readyBlocks) {
+      co_return makeError(CacheCode::kInvalidResponse, "invalid Job state transition response");
+    }
+    result.job = std::move(advanced->job);
+    result.achievedReadyBps = advanced->achievedReadyBps;
+  }
   co_return result;
 }
 

@@ -746,6 +746,7 @@ META_PHASE3_METHOD(appendPrefetchPlan, AppendPrefetchPlanReq, AppendPrefetchPlan
 META_PHASE3_METHOD(listPrefetchPlan, ListPrefetchPlanReq, ListPrefetchPlanRsp);
 META_PHASE3_METHOD(updatePrefetchPlanEntries, UpdatePrefetchPlanEntriesReq, UpdatePrefetchPlanEntriesRsp);
 META_PHASE3_METHOD(trackPrefetchReady, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
+META_PHASE3_METHOD(advancePrefetchJobState, AdvancePrefetchJobStateReq, AdvancePrefetchJobStateRsp);
 META_PHASE3_METHOD(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp);
 META_PHASE3_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
 META_PHASE3_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);

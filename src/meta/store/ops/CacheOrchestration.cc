@@ -7,6 +7,7 @@
 #include "meta/store/Operation.h"
 #include "meta/store/cache/CacheBlockStore.h"
 #include "meta/store/cache/PinStore.h"
+#include "meta/store/cache/PrefetchJobStateMachine.h"
 #include "meta/store/cache/PrefetchJobStore.h"
 #include "meta/store/cache/PrefetchPlanStore.h"
 #include "meta/store/cache/PrefetchReadyStore.h"
@@ -196,6 +197,28 @@ class TrackPrefetchReadyOp : public Operation<TrackPrefetchReadyRsp> {
   const TrackPrefetchReadyReq &req_;
 };
 
+class AdvancePrefetchJobStateOp : public Operation<AdvancePrefetchJobStateRsp> {
+ public:
+  AdvancePrefetchJobStateOp(MetaStore &meta, const AdvancePrefetchJobStateReq &req)
+      : Operation<AdvancePrefetchJobStateRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<AdvancePrefetchJobStateRsp> run(IReadWriteTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto job = co_await PrefetchJobStateMachine::advance(txn, req_.jobId, req_.expectedStateVersion);
+    CO_RETURN_ON_ERROR(job);
+    AdvancePrefetchJobStateRsp response;
+    response.achievedReadyBps = prefetchReadyRatioBps(job->readyBytes, job->plannedBytes);
+    response.job = std::move(*job);
+    co_return response;
+  }
+
+ private:
+  const AdvancePrefetchJobStateReq &req_;
+};
+
 class UpsertCachePinsOp : public Operation<UpsertCachePinsRsp> {
  public:
   UpsertCachePinsOp(MetaStore &meta, const UpsertCachePinsReq &req)
@@ -335,6 +358,10 @@ MetaStore::OpPtr<UpdatePrefetchPlanEntriesRsp> MetaStore::updatePrefetchPlanEntr
 
 MetaStore::OpPtr<TrackPrefetchReadyRsp> MetaStore::trackPrefetchReady(const TrackPrefetchReadyReq &req) {
   return std::make_unique<TrackPrefetchReadyOp>(*this, req);
+}
+
+MetaStore::OpPtr<AdvancePrefetchJobStateRsp> MetaStore::advancePrefetchJobState(const AdvancePrefetchJobStateReq &req) {
+  return std::make_unique<AdvancePrefetchJobStateOp>(*this, req);
 }
 
 MetaStore::OpPtr<UpsertCachePinsRsp> MetaStore::upsertCachePins(const UpsertCachePinsReq &req) {
