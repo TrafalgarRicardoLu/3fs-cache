@@ -1,6 +1,8 @@
 #include <folly/experimental/coro/BlockingWait.h>
 #include <gtest/gtest.h>
+#include <limits>
 
+#include "client/cli/admin/CacheOrchestration.h"
 #include "client/cli/admin/CacheOriginCli.h"
 #include "client/cli/admin/CachePhase2Rollout.h"
 #include "client/cli/admin/registerAdminCommands.h"
@@ -57,9 +59,17 @@ TEST(CacheAdminCli, RegistersLifecycleCommands) {
                               "cache-status",
                               "cache-list-blocks",
                               "cache-cleanup",
-                              "cache-phase2-rollout"}) {
+                              "cache-phase2-rollout",
+                              "cache-prefetch",
+                              "cache-pin"}) {
     EXPECT_TRUE(usages.contains(command)) << command;
   }
+}
+
+TEST(CacheAdminCli, ConvertsReadyRatioWithoutOverflow) {
+  EXPECT_EQ(cacheReadyBps(0, 1), 0u);
+  EXPECT_EQ(cacheReadyBps(1, 3), 3333u);
+  EXPECT_EQ(cacheReadyBps(std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max()), 10000u);
 }
 
 TEST(CacheAdminCli, RefreshRequestIdIsStableAndIdentitySensitive) {
