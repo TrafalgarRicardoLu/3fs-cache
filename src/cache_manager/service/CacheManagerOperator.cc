@@ -128,8 +128,13 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     auto sharedFactory = std::shared_ptr<SourcePlannerFactory>(std::move(*factory));
     meta::CacheServiceIdentity service{config_.service_name(), config_.service_token()};
     auto plannerBackend = std::make_shared<MetaJobPlannerBackend>(metaClient_, service);
+    auto activePinTtlMs = static_cast<uint64_t>(config_.phase3_active_pin_ttl().asMs().count());
     jobPlanner_ =
-        std::make_shared<JobPlanner>(plannerBackend, std::move(sharedFactory), config_.phase3_plan_page_size());
+        std::make_shared<JobPlanner>(plannerBackend,
+                                     std::move(sharedFactory),
+                                     config_.phase3_plan_page_size(),
+                                     activePinTtlMs,
+                                     [] { return static_cast<uint64_t>(UtcClock::now().toMicroseconds() / 1000); });
     jobQuota_ = std::make_unique<JobQuota>();
     auto runnerBackend = std::make_shared<MetaJobRunnerBackend>(metaClient_, service, *ensureCached_);
     jobRunner_ = std::make_shared<JobRunner>(runnerBackend, *jobQuota_, config_.phase3_plan_page_size(), Uuid::random);
@@ -137,6 +142,11 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     jobTracker_ = std::make_shared<JobTracker>(trackerBackend, config_.phase3_plan_page_size());
     auto cancellerBackend = std::make_shared<MetaJobCancellerBackend>(metaClient_, service, backend_);
     jobCanceller_ = std::make_shared<JobCanceller>(cancellerBackend, hints_, config_.phase3_plan_page_size());
+    auto pinBackend = std::make_shared<MetaActiveJobPinBackend>(metaClient_, service);
+    activeJobPins_ = std::make_shared<ActiveJobPinManager>(pinBackend,
+                                                           config_.phase3_job_page_size(),
+                                                           config_.phase3_plan_page_size(),
+                                                           activePinTtlMs);
     auto coordinatorBackend = std::make_shared<MetaOrchestrationCoordinatorBackend>(metaClient_, std::move(service));
     orchestration_ = std::make_unique<OrchestrationCoordinator>(
         std::move(coordinatorBackend),
@@ -240,7 +250,11 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                    startWorker(
                        "CacheManagerJobTracker",
                        [this] { return orchestration_->runTrackerOnce(); },
-                       config_.phase3_tracker_interval());
+                       config_.phase3_tracker_interval()) &&
+                   startWorker(
+                       "CacheManagerActiveJobPins",
+                       [this] { return activeJobPins_->runOnce(); },
+                       config_.phase3_pin_renew_interval());
     if (!started) {
       orchestration_->stop();
       folly::coro::blockingWait(scheduler->stopAll());

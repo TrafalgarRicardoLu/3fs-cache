@@ -45,6 +45,9 @@ class Config : public ConfigBase<Config> {
     if (enable_phase3() && !enable_phase2()) {
       return makeError(StatusCode::kInvalidConfig, "cache phase three requires phase two");
     }
+    if (phase3_active_pin_ttl() <= phase3_pin_renew_interval()) {
+      return makeError(StatusCode::kInvalidConfig, "cache phase three active pin TTL must exceed its renew interval");
+    }
     if (eviction_page_size() == 0 || eviction_page_size() > cache::kMaxPhase2BatchItems || eviction_batch_size() == 0 ||
         eviction_batch_size() > cache::kMaxPhase2BatchItems || evicting_page_size() == 0 ||
         evicting_page_size() > cache::kMaxPhase2BatchItems) {
@@ -96,6 +99,8 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(phase3_planner_interval, 100_ms, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(phase3_runner_interval, 100_ms, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(phase3_tracker_interval, 1_s, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(phase3_pin_renew_interval, 1_min, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(phase3_active_pin_ttl, 5_min, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(phase3_job_page_size, uint32_t{100}, [](uint32_t value) {
     return value > 0 && value <= meta::kMaxCacheBatchItems;
   });

@@ -6,6 +6,7 @@
 
 #include "common/serde/Serde.h"
 #include "meta/store/cache/OrchestrationKey.h"
+#include "meta/store/cache/PinStore.h"
 #include "meta/store/cache/PrefetchJobStore.h"
 
 namespace hf3fs::meta::server {
@@ -91,7 +92,8 @@ CoTryTask<AppendPrefetchPlanResult> PrefetchPlanStore::append(kv::IReadWriteTran
                                                               std::span<const cache::PrefetchPlanEntry> entries,
                                                               uint32_t plannerSourceIndex,
                                                               std::string_view plannerCursor,
-                                                              bool planningComplete) {
+                                                              bool planningComplete,
+                                                              uint64_t activePinExpiresAtMs) {
   if (jobId == cache::PrefetchJobId{} || entries.size() > cache::kMaxPhase2BatchItems ||
       plannerCursor.size() > cache::kMaxDatasetPathLength) {
     co_return makeError(StatusCode::kInvalidArg, "invalid prefetch plan page");
@@ -100,6 +102,7 @@ CoTryTask<AppendPrefetchPlanResult> PrefetchPlanStore::append(kv::IReadWriteTran
   CO_RETURN_ON_ERROR(loaded);
   if (!loaded->has_value()) co_return makeError(CacheCode::kNotFound, "prefetch job not found");
   auto job = std::move(**loaded);
+  const auto jobCreatedAtMs = job.createdAtMs;
   if ((job.state != cache::PrefetchJobState::PENDING && job.state != cache::PrefetchJobState::PLANNING) ||
       plannerSourceIndex > job.spec.sources.size()) {
     co_return makeError(CacheCode::kStateConflict, "prefetch job is not planning or cursor is invalid");
@@ -157,6 +160,13 @@ CoTryTask<AppendPrefetchPlanResult> PrefetchPlanStore::append(kv::IReadWriteTran
     result.job = std::move(job);
   }
   for (const auto &[key, value] : inserts) CO_RETURN_ON_ERROR(co_await txn.set(key, value));
+  if (activePinExpiresAtMs != 0) {
+    cache::PinOwner owner{cache::PinOwnerKind::ACTIVE_JOB, cache::PinOwnerId{jobId.toUnderType()}};
+    for (const auto &entry : entries) {
+      cache::PinRecord pin{entry.key, owner, jobCreatedAtMs, activePinExpiresAtMs, {}};
+      CO_RETURN_ON_ERROR(co_await PinStore::upsert(txn, pin));
+    }
+  }
   co_return result;
 }
 

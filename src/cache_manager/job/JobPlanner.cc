@@ -1,12 +1,15 @@
 #include "cache_manager/job/JobPlanner.h"
 
+#include <limits>
+
 namespace hf3fs::cache_manager {
 
 CoTryTask<void> MetaJobPlannerBackend::append(cache::PrefetchJobId jobId,
                                               std::vector<cache::PrefetchPlanEntry> entries,
                                               uint32_t sourceIndex,
                                               std::string cursor,
-                                              bool complete) {
+                                              bool complete,
+                                              uint64_t activePinExpiresAtMs) {
   meta::AppendPrefetchPlanReq request;
   request.service = service_;
   request.jobId = jobId;
@@ -14,6 +17,7 @@ CoTryTask<void> MetaJobPlannerBackend::append(cache::PrefetchJobId jobId,
   request.plannerSourceIndex = sourceIndex;
   request.plannerCursor = std::move(cursor);
   request.planningComplete = complete;
+  request.activePinExpiresAtMs = activePinExpiresAtMs;
   request.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
   CO_RETURN_ON_ERROR(co_await metaClient_->appendPrefetchPlan(std::move(request)));
   co_return Void{};
@@ -56,8 +60,18 @@ CoTryTask<cache::PrefetchJobRecord> JobPlanner::runNextPage(const cache::Prefetc
     cursor.clear();
   }
   const bool complete = sourceIndex == job.spec.sources.size();
+  uint64_t pinExpiresAtMs = 0;
+  if (activePinTtlMs_ != 0) {
+    if (!wallClockMs_) co_return makeError(StatusCode::kInvalidConfig, "active Job pin clock is not configured");
+    auto nowMs = wallClockMs_();
+    if (nowMs == 0 || activePinTtlMs_ > std::numeric_limits<uint64_t>::max() - nowMs) {
+      co_return makeError(CacheCode::kStateConflict, "active Job pin expiry overflow");
+    }
+    pinExpiresAtMs = nowMs + activePinTtlMs_;
+  }
   CO_RETURN_ON_ERROR(
-      co_await backend_->append(job.spec.jobId, std::move(page->entries), sourceIndex, std::move(cursor), complete));
+      co_await backend_
+          ->append(job.spec.jobId, std::move(page->entries), sourceIndex, std::move(cursor), complete, pinExpiresAtMs));
   co_return co_await backend_->get(job.spec.jobId);
 }
 

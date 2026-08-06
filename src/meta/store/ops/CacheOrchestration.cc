@@ -117,7 +117,8 @@ class AppendPrefetchPlanOp : public Operation<AppendPrefetchPlanRsp> {
                                                        req_.entries,
                                                        req_.plannerSourceIndex,
                                                        req_.plannerCursor,
-                                                       req_.planningComplete);
+                                                       req_.planningComplete,
+                                                       req_.activePinExpiresAtMs);
     CO_RETURN_ON_ERROR(appended);
     AppendPrefetchPlanRsp response;
     response.insertedBlocks = appended->insertedBlocks;

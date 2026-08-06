@@ -29,7 +29,8 @@ class PrefetchPlanStore {
                                                     std::span<const cache::PrefetchPlanEntry> entries,
                                                     uint32_t plannerSourceIndex,
                                                     std::string_view plannerCursor,
-                                                    bool planningComplete);
+                                                    bool planningComplete,
+                                                    uint64_t activePinExpiresAtMs = 0);
   static CoTryTask<PrefetchPlanPage> snapshotList(kv::IReadOnlyTransaction &txn,
                                                   cache::PrefetchJobId jobId,
                                                   std::optional<cache::CacheBlockKey> after,

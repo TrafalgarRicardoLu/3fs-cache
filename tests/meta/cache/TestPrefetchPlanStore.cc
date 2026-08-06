@@ -3,6 +3,7 @@
 #include <limits>
 
 #include "common/kv/mem/MemKVEngine.h"
+#include "meta/store/cache/PinStore.h"
 #include "meta/store/cache/PrefetchJobStore.h"
 #include "meta/store/cache/PrefetchPlanStore.h"
 #include "tests/GtestHelpers.h"
@@ -174,6 +175,25 @@ TEST_F(TestPrefetchPlanStore, EmptySourceCanAdvanceToNextSource) {
     CO_ASSERT_EQ(advanced->job.plannerSourceIndex, 1u);
     CO_ASSERT_FALSE(advanced->job.planningComplete);
     CO_ASSERT_OK(co_await txn->commit());
+  }());
+}
+
+TEST_F(TestPrefetchPlanStore, CreatesActiveJobPinsAtomicallyWithPlanEntries) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto desired = planJob(8);
+    auto txn = engine_.createReadWriteTransaction();
+    CO_ASSERT_OK(co_await PrefetchJobStore::create(*txn, desired));
+    std::vector page{entry(desired.spec.jobId, 0)};
+    CO_ASSERT_OK(co_await PrefetchPlanStore::append(*txn, desired.spec.jobId, page, 0, "next", false, 500));
+    CO_ASSERT_OK(co_await txn->commit());
+
+    auto read = engine_.createReadonlyTransaction();
+    cache::PinOwner owner{cache::PinOwnerKind::ACTIVE_JOB, cache::PinOwnerId{desired.spec.jobId.toUnderType()}};
+    auto pins = co_await PinStore::snapshotListByOwner(*read, owner, std::nullopt, 10);
+    CO_ASSERT_OK(pins);
+    CO_ASSERT_EQ(pins->pins.size(), size_t{1});
+    CO_ASSERT_EQ(pins->pins.front().createdAtMs, desired.createdAtMs);
+    CO_ASSERT_EQ(pins->pins.front().expiresAtMs, uint64_t{500});
   }());
 }
 

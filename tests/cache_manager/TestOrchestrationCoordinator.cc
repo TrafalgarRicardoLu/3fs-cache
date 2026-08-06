@@ -41,12 +41,15 @@ class FakePlannerBackend : public JobPlannerBackend {
  public:
   cache::PrefetchJobRecord record;
   std::vector<cache::PrefetchPlanEntry> appended;
+  uint64_t activePinExpiresAtMs = 0;
 
   CoTryTask<void> append(cache::PrefetchJobId,
                          std::vector<cache::PrefetchPlanEntry> entries,
                          uint32_t sourceIndex,
                          std::string cursor,
-                         bool complete) override {
+                         bool complete,
+                         uint64_t pinExpiresAtMs) override {
+    activePinExpiresAtMs = pinExpiresAtMs;
     appended = std::move(entries);
     record.plannerSourceIndex = sourceIndex;
     record.plannerCursor = std::move(cursor);
@@ -96,6 +99,13 @@ TEST(TestJobPlanner, PersistsSourceProgressIncludingEmptyFinalPage) {
   EXPECT_EQ(result->plannedBlocks, 1u);
   ASSERT_EQ(backend->appended.size(), 1u);
   EXPECT_EQ(backend->appended.front(), expected);
+
+  backend->record = job(3);
+  JobPlanner pinned(backend, factory({{planEntry(backend->record.spec.jobId)}, {}, true}), 100, 500, [] {
+    return 1000;
+  });
+  ASSERT_OK(folly::coro::blockingWait(pinned.runNextPage(backend->record)));
+  EXPECT_EQ(backend->activePinExpiresAtMs, 1500u);
 }
 
 class FakeCoordinatorBackend : public OrchestrationCoordinatorBackend {

@@ -1459,6 +1459,7 @@ struct AppendPrefetchPlanReq : ReqBase {
   SERDE_STRUCT_FIELD(plannerSourceIndex, uint32_t{});
   SERDE_STRUCT_FIELD(plannerCursor, String{});
   SERDE_STRUCT_FIELD(planningComplete, false);
+  SERDE_STRUCT_FIELD(activePinExpiresAtMs, uint64_t{});
   SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
 
  public:
