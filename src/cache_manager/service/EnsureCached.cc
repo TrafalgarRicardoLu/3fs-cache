@@ -282,6 +282,7 @@ CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
          persistedPermit == std::optional<storage::PermitIdentity>{*permit})) {
       LoadHint hint{inode.id, base.key.block, base.blockLength, req.reason, req.priority};
       if (prefetch) hint.jobClaims.push_back({prefetch->jobId, req.priority, prefetch->completion});
+      hint.permit = *permit;
       auto fresh = attach(std::move(hint));
       if (fresh.hasError()) {
         CO_RETURN_ON_ERROR(co_await cancelQueued(base.key, *permit));
@@ -332,6 +333,7 @@ CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
       }
       LoadHint hint{inode.id, base.key.block, base.blockLength, req.reason, req.priority};
       if (prefetch) hint.jobClaims.push_back({prefetch->jobId, req.priority, prefetch->completion});
+      hint.permit = existing;
       auto fresh = attach(std::move(hint));
       if (fresh.hasError()) {
         CO_RETURN_ON_ERROR(co_await cancelQueued(base.key, existing));
@@ -382,6 +384,7 @@ CoTryTask<EnsureCachedRsp> EnsureCached::runPhase2(const EnsureCachedReq &req,
     }
     LoadHint hint{inode.id, base.key.block, base.blockLength, req.reason, req.priority};
     if (prefetch) hint.jobClaims.push_back({prefetch->jobId, req.priority, prefetch->completion});
+    hint.permit = replacement;
     auto fresh = attach(std::move(hint));
     if (fresh.hasError()) {
       CO_RETURN_ON_ERROR(co_await cancelQueued(base.key, replacement));

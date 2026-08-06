@@ -92,24 +92,42 @@ Result<bool> HintCoalescer::attach(LoadHint hint) {
 }
 
 bool HintCoalescer::cancel(const cache::CacheBlockKey &key, cache::PrefetchJobId jobId) {
+  return cancelClaim(key, jobId).found;
+}
+
+HintCoalescer::CancelClaimResult HintCoalescer::cancelClaim(const cache::CacheBlockKey &key,
+                                                            cache::PrefetchJobId jobId) {
+  std::function<void(const Status &)> completion;
+  CancelClaimResult result;
   auto lock = std::unique_lock(mutex_);
   auto found = entries_.find(key);
-  if (found == entries_.end()) return false;
+  if (found == entries_.end()) return result;
   auto updated = found->second;
   auto claim = std::find_if(updated.hint.jobClaims.begin(), updated.hint.jobClaims.end(), [&](const auto &current) {
     return current.jobId == jobId;
   });
-  if (claim == updated.hint.jobClaims.end()) return false;
+  if (claim == updated.hint.jobClaims.end()) return result;
+  result.found = true;
+  completion = std::move(claim->completion);
   ordered_.erase(updated);
   updated.hint.jobClaims.erase(claim);
   if (updated.hint.jobClaims.empty() && !updated.baseClaim) {
+    result.hintRemoved = true;
+    result.permit = updated.hint.permit;
     entries_.erase(found);
-    return true;
+  } else {
+    rebuild(updated);
+    found->second = updated;
+    ordered_.emplace(std::move(updated));
   }
-  rebuild(updated);
-  found->second = updated;
-  ordered_.emplace(std::move(updated));
-  return true;
+  lock.unlock();
+  if (completion) {
+    try {
+      completion(Status(MetaCode::kRequestCanceled));
+    } catch (...) {
+    }
+  }
+  return result;
 }
 
 bool HintCoalescer::batchCompatible(const LoadHint &first, const LoadHint &next) {

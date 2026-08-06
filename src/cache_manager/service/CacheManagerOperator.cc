@@ -135,6 +135,8 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     jobRunner_ = std::make_shared<JobRunner>(runnerBackend, *jobQuota_, config_.phase3_plan_page_size(), Uuid::random);
     auto trackerBackend = std::make_shared<MetaJobTrackerBackend>(metaClient_, service);
     jobTracker_ = std::make_shared<JobTracker>(trackerBackend, config_.phase3_plan_page_size());
+    auto cancellerBackend = std::make_shared<MetaJobCancellerBackend>(metaClient_, service, backend_);
+    jobCanceller_ = std::make_shared<JobCanceller>(cancellerBackend, hints_, config_.phase3_plan_page_size());
     auto coordinatorBackend = std::make_shared<MetaOrchestrationCoordinatorBackend>(metaClient_, std::move(service));
     orchestration_ = std::make_unique<OrchestrationCoordinator>(
         std::move(coordinatorBackend),

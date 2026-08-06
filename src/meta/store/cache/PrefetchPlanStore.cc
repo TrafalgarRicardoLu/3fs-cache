@@ -192,6 +192,15 @@ CoTryTask<cache::PrefetchPlanEntry> PrefetchPlanStore::update(kv::IReadWriteTran
   CO_RETURN_ON_ERROR(current);
   if (*current == desired) co_return desired;
   if (*current != expected) co_return makeError(CacheCode::kStateConflict, "prefetch plan entry CAS mismatch");
+  if (desired.state == cache::PrefetchPlanEntryState::ADMITTED ||
+      desired.state == cache::PrefetchPlanEntryState::ATTACHED) {
+    auto job = co_await PrefetchJobStore::load(txn, desired.jobId);
+    CO_RETURN_ON_ERROR(job);
+    if (!job->has_value() || (*job)->state == cache::PrefetchJobState::CANCELLED ||
+        (*job)->state == cache::PrefetchJobState::FAILED || (*job)->state == cache::PrefetchJobState::READY) {
+      co_return makeError(CacheCode::kStateConflict, "prefetch Job no longer accepts admission");
+    }
+  }
   auto value = encode(desired);
   CO_RETURN_ON_ERROR(value);
   CO_RETURN_ON_ERROR(co_await txn.set(key, *value));

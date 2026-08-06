@@ -14,6 +14,7 @@
 #include "cache_manager/eviction/EvictionController.h"
 #include "cache_manager/eviction/EvictionPolicy.h"
 #include "cache_manager/eviction/EvictionPressureState.h"
+#include "cache_manager/job/JobCanceller.h"
 #include "cache_manager/job/JobPlanner.h"
 #include "cache_manager/job/JobTracker.h"
 #include "cache_manager/job/MetaJobRunnerBackend.h"
@@ -93,6 +94,7 @@ class CacheManagerOperator {
   std::shared_ptr<JobPlanner> jobPlanner_;
   std::shared_ptr<JobRunner> jobRunner_;
   std::shared_ptr<JobTracker> jobTracker_;
+  std::shared_ptr<JobCanceller> jobCanceller_;
   std::unique_ptr<OrchestrationCoordinator> orchestration_;
   Uuid managerEpoch_{Uuid::zero()};
   std::unique_ptr<BackgroundRunner> scheduler_;

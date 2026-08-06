@@ -1583,6 +1583,23 @@ struct AdvancePrefetchJobStateRsp : RspBase {
   SERDE_STRUCT_FIELD(achievedReadyBps, uint32_t{});
 };
 
+struct CancelPrefetchJobReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(jobId, cache::PrefetchJobId{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (jobId == cache::PrefetchJobId{}) return INVALID("prefetch Job id not set");
+    return VALID;
+  }
+};
+
+struct CancelPrefetchJobRsp : RspBase {
+  SERDE_STRUCT_FIELD(job, cache::PrefetchJobRecord{});
+};
+
 struct UpsertCachePinsReq : ReqBase {
   SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
   SERDE_STRUCT_FIELD(pins, std::vector<cache::PinRecord>{});
@@ -1743,6 +1760,7 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(updatePrefetchPlanEntries, 53, UpdatePrefetchPlanEntriesReq, UpdatePrefetchPlanEntriesRsp);
   META_SERVICE_METHOD(trackPrefetchReady, 54, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
   META_SERVICE_METHOD(advancePrefetchJobState, 55, AdvancePrefetchJobStateReq, AdvancePrefetchJobStateRsp);
+  META_SERVICE_METHOD(cancelPrefetchJob, 56, CancelPrefetchJobReq, CancelPrefetchJobRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

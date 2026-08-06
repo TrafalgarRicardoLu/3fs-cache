@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "fbs/cache_manager/Service.h"
+#include "fbs/storage/Common.h"
 
 namespace hf3fs::cache_manager {
 
@@ -27,19 +28,22 @@ struct LoadHint {
   EnsureReason reason{EnsureReason::FOREGROUND_MISS};
   int32_t priority{0};
   std::vector<JobLoadClaim> jobClaims;
+  std::optional<storage::PermitIdentity> permit;
 
   LoadHint(meta::InodeId inode = meta::InodeId{},
            cache::CacheBlockIndex block = cache::CacheBlockIndex{},
            uint64_t blockLength = 0,
            EnsureReason reason = EnsureReason::FOREGROUND_MISS,
            int32_t priority = 0,
-           std::vector<JobLoadClaim> jobClaims = {})
+           std::vector<JobLoadClaim> jobClaims = {},
+           std::optional<storage::PermitIdentity> permit = std::nullopt)
       : inode(inode),
         block(block),
         blockLength(blockLength),
         reason(reason),
         priority(priority),
-        jobClaims(std::move(jobClaims)) {}
+        jobClaims(std::move(jobClaims)),
+        permit(std::move(permit)) {}
 
   cache::CacheBlockKey key() const { return {inode.u64(), block}; }
   void notify(const Status &status) const noexcept;
@@ -47,9 +51,16 @@ struct LoadHint {
 
 class HintCoalescer {
  public:
+  struct CancelClaimResult {
+    bool found{false};
+    bool hintRemoved{false};
+    std::optional<storage::PermitIdentity> permit;
+  };
+
   bool enqueue(LoadHint hint);
   Result<bool> attach(LoadHint hint);
   bool cancel(const cache::CacheBlockKey &key, cache::PrefetchJobId jobId);
+  CancelClaimResult cancelClaim(const cache::CacheBlockKey &key, cache::PrefetchJobId jobId);
   std::optional<LoadHint> pop();
   std::vector<LoadHint> popBatch(uint64_t maxBytes);
   size_t size() const;

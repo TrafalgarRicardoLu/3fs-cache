@@ -1008,6 +1008,7 @@ META_CACHE_CLIENT_METHOD(listPrefetchPlan, ListPrefetchPlanReq, ListPrefetchPlan
 META_CACHE_CLIENT_METHOD(updatePrefetchPlanEntries, UpdatePrefetchPlanEntriesReq, UpdatePrefetchPlanEntriesRsp);
 META_CACHE_CLIENT_METHOD(trackPrefetchReady, TrackPrefetchReadyReq, TrackPrefetchReadyRsp);
 META_CACHE_CLIENT_METHOD(advancePrefetchJobState, AdvancePrefetchJobStateReq, AdvancePrefetchJobStateRsp);
+META_CACHE_CLIENT_METHOD(cancelPrefetchJob, CancelPrefetchJobReq, CancelPrefetchJobRsp);
 META_CACHE_CLIENT_METHOD(upsertCachePins, UpsertCachePinsReq, UpsertCachePinsRsp);
 META_CACHE_CLIENT_METHOD(removeCachePins, RemoveCachePinsReq, RemoveCachePinsRsp);
 META_CACHE_CLIENT_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);

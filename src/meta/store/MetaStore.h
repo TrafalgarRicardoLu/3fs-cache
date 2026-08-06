@@ -168,6 +168,7 @@ class MetaStore {
   OpPtr<UpdatePrefetchPlanEntriesRsp> updatePrefetchPlanEntries(const UpdatePrefetchPlanEntriesReq &req);
   OpPtr<TrackPrefetchReadyRsp> trackPrefetchReady(const TrackPrefetchReadyReq &req);
   OpPtr<AdvancePrefetchJobStateRsp> advancePrefetchJobState(const AdvancePrefetchJobStateReq &req);
+  OpPtr<CancelPrefetchJobRsp> cancelPrefetchJob(const CancelPrefetchJobReq &req);
   OpPtr<UpsertCachePinsRsp> upsertCachePins(const UpsertCachePinsReq &req);
   OpPtr<RemoveCachePinsRsp> removeCachePins(const RemoveCachePinsReq &req);
   OpPtr<ListCachePinsByOwnerRsp> listCachePinsByOwner(const ListCachePinsByOwnerReq &req);

@@ -7,6 +7,7 @@
 #include "meta/store/Operation.h"
 #include "meta/store/cache/CacheBlockStore.h"
 #include "meta/store/cache/PinStore.h"
+#include "meta/store/cache/PrefetchCancellationStore.h"
 #include "meta/store/cache/PrefetchJobStateMachine.h"
 #include "meta/store/cache/PrefetchJobStore.h"
 #include "meta/store/cache/PrefetchPlanStore.h"
@@ -219,6 +220,27 @@ class AdvancePrefetchJobStateOp : public Operation<AdvancePrefetchJobStateRsp> {
   const AdvancePrefetchJobStateReq &req_;
 };
 
+class CancelPrefetchJobOp : public Operation<CancelPrefetchJobRsp> {
+ public:
+  CancelPrefetchJobOp(MetaStore &meta, const CancelPrefetchJobReq &req)
+      : Operation<CancelPrefetchJobRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<CancelPrefetchJobRsp> run(IReadWriteTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto job = co_await PrefetchCancellationStore::cancel(txn, req_.jobId);
+    CO_RETURN_ON_ERROR(job);
+    CancelPrefetchJobRsp response;
+    response.job = std::move(*job);
+    co_return response;
+  }
+
+ private:
+  const CancelPrefetchJobReq &req_;
+};
+
 class UpsertCachePinsOp : public Operation<UpsertCachePinsRsp> {
  public:
   UpsertCachePinsOp(MetaStore &meta, const UpsertCachePinsReq &req)
@@ -362,6 +384,10 @@ MetaStore::OpPtr<TrackPrefetchReadyRsp> MetaStore::trackPrefetchReady(const Trac
 
 MetaStore::OpPtr<AdvancePrefetchJobStateRsp> MetaStore::advancePrefetchJobState(const AdvancePrefetchJobStateReq &req) {
   return std::make_unique<AdvancePrefetchJobStateOp>(*this, req);
+}
+
+MetaStore::OpPtr<CancelPrefetchJobRsp> MetaStore::cancelPrefetchJob(const CancelPrefetchJobReq &req) {
+  return std::make_unique<CancelPrefetchJobOp>(*this, req);
 }
 
 MetaStore::OpPtr<UpsertCachePinsRsp> MetaStore::upsertCachePins(const UpsertCachePinsReq &req) {
