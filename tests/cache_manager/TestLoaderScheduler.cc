@@ -54,7 +54,7 @@ TEST(TestHintCoalescer, MergesJobClaimsAndCancelsOnlySelectedOwner) {
   ASSERT_EQ(merged->jobClaims.size(), size_t{1});
   EXPECT_EQ(merged->jobClaims[0].jobId, secondJob);
   merged->notify(Status::OK);
-  EXPECT_EQ(completions, (std::vector<status_code_t>{StatusCode::kOK}));
+  EXPECT_EQ(completions, (std::vector<status_code_t>{MetaCode::kRequestCanceled, StatusCode::kOK}));
 }
 
 TEST(TestHintCoalescer, BoundsJobClaimsWithoutDroppingExistingOwners) {

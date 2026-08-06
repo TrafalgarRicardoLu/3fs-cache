@@ -13,6 +13,7 @@ cache::PrefetchJobRecord job(uint64_t id, cache::PrefetchJobState state, bool pi
   result.spec.ownerUid = flat::Uid{1};
   result.spec.sources.push_back(cache::DatasetSource{cache::NamespacePathSource{"/dataset", true}});
   result.spec.pinAfterReady = pinAfterReady;
+  result.spec.pinTtlMs = pinAfterReady ? 60000 : 0;
   result.state = state;
   result.stateVersion = 1;
   result.createdAtMs = result.updatedAtMs = 100;
@@ -26,6 +27,7 @@ cache::PrefetchJobRecord job(uint64_t id, cache::PrefetchJobState state, bool pi
     result.readyBlocks = result.plannedBlocks;
     result.readyBytes = result.plannedBytes;
   }
+  if (state == cache::PrefetchJobState::CANCELLED) result.cancelEpoch = 1;
   return result;
 }
 

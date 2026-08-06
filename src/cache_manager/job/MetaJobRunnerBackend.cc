@@ -34,22 +34,22 @@ CoTryTask<JobAdmissionResult> MetaJobRunnerBackend::admit(const cache::PrefetchP
   auto response = co_await admission_.runPrefetch(entry, completion);
   CO_RETURN_ON_ERROR(response);
   if (response->status == EnsureCachedStatus::ACCEPTED) {
-    co_return JobAdmissionResult{JobAdmissionDisposition::QUEUED};
+    co_return JobAdmissionResult{JobAdmissionDisposition::QUEUED, std::nullopt};
   }
   if (response->status == EnsureCachedStatus::ATTACHED) {
     completion(Status::OK);
-    co_return JobAdmissionResult{JobAdmissionDisposition::LOADING};
+    co_return JobAdmissionResult{JobAdmissionDisposition::LOADING, std::nullopt};
   }
   switch (response->bypassReason) {
     case BypassReason::CAPACITY:
-      co_return JobAdmissionResult{JobAdmissionDisposition::CAPACITY_WAIT};
+      co_return JobAdmissionResult{JobAdmissionDisposition::CAPACITY_WAIT, std::nullopt};
     case BypassReason::ADMISSION_DISABLED:
     case BypassReason::FEATURE_DISABLED:
     case BypassReason::POLICY:
     case BypassReason::UNAVAILABLE:
-      co_return JobAdmissionResult{JobAdmissionDisposition::RETRYABLE};
+      co_return JobAdmissionResult{JobAdmissionDisposition::RETRYABLE, std::nullopt};
     case BypassReason::EMPTY_RANGE:
-      co_return JobAdmissionResult{JobAdmissionDisposition::TERMINAL};
+      co_return JobAdmissionResult{JobAdmissionDisposition::TERMINAL, std::nullopt};
     case BypassReason::NONE:
       break;
   }

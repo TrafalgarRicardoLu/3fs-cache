@@ -31,6 +31,7 @@ static_assert(meta::MetaSerde<>::updatePrefetchPlanEntriesMethodId == 53);
 static_assert(meta::MetaSerde<>::trackPrefetchReadyMethodId == 54);
 static_assert(meta::MetaSerde<>::advancePrefetchJobStateMethodId == 55);
 static_assert(meta::MetaSerde<>::cancelPrefetchJobMethodId == 56);
+static_assert(meta::MetaSerde<>::convertActiveJobPinsMethodId == 57);
 
 struct LegacyPhase2DiskStatus {
   SERDE_STRUCT_FIELD(physicalDiskId, storage::PhysicalDiskId{});

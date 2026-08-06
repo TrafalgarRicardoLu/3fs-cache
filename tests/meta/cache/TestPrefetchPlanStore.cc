@@ -204,7 +204,7 @@ TEST_F(TestPrefetchPlanStore, CasUpdatesAdmissionIdentityAndRejectsStaleOrIllega
     auto txn = engine_.createReadWriteTransaction();
     CO_ASSERT_OK(co_await PrefetchJobStore::create(*txn, desired));
     std::vector plan{planned};
-    CO_ASSERT_OK(co_await PrefetchPlanStore::append(*txn, desired.spec.jobId, plan, 0, "done", true));
+    CO_ASSERT_OK(co_await PrefetchPlanStore::append(*txn, desired.spec.jobId, plan, 1, "done", true));
     CO_ASSERT_OK(co_await txn->commit());
 
     auto admitted = planned;
