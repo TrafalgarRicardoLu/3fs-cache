@@ -81,7 +81,8 @@ class PublishOriginFileFromStagingOp : public Operation<PublishOriginFileFromSta
     auto staging = (co_await Inode::load(txn, req_.expectedStagingInode)).then(checkMetaFound<Inode>);
     CO_RETURN_ON_ERROR(staging);
     if (!staging->isFile() || staging->asFile().length != job.stagingLength ||
-        !(staging->acl.iflags & FS_IMMUTABLE_FL)) {
+        !(staging->acl.iflags & FS_IMMUTABLE_FL) || staging->acl.uid != job.ownerUid ||
+        staging->acl.perm != Permission(req_.metadata.permission.toUnderType() & ALLPERMS)) {
       co_return makeError(CacheCode::kStateConflict, "staging inode is not the sealed upload snapshot");
     }
     auto routing = chainAlloc().getRoutingInfo();
@@ -100,8 +101,10 @@ class PublishOriginFileFromStagingOp : public Operation<PublishOriginFileFromSta
     CO_RETURN_ON_ERROR(co_await chainAlloc().allocateChainsForLayout(layout));
     auto inodeId = co_await allocateInodeId(txn, false);
     CO_RETURN_ON_ERROR(inodeId);
+    auto owner = req_.user;
+    owner.gid = staging->acl.gid;
     auto inode = Inode::newOriginFile(*inodeId,
-                                      makeOriginAcl(*parent, req_.user, req_.metadata.permission),
+                                      makeOriginAcl(*parent, owner, req_.metadata.permission),
                                       req_.metadata.objectSize,
                                       std::move(layout),
                                       req_.metadata.object,

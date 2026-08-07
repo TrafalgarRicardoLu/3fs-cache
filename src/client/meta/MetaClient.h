@@ -267,6 +267,7 @@ class MetaClient {
   CoTryTask<CheckpointUploadPartRsp> checkpointUploadPart(CheckpointUploadPartReq req);
   CoTryTask<MutateMultipartUploadRsp> mutateMultipartUpload(MutateMultipartUploadReq req);
   CoTryTask<PublishOriginFileFromStagingRsp> publishOriginFileFromStaging(PublishOriginFileFromStagingReq req);
+  CoTryTask<ListUploadJobsRsp> listUploadJobs(ListUploadJobsReq req);
 
   CoTryTask<Inode> extendStripe(const UserInfo &userInfo, InodeId inodeId, uint32_t stripe);
 

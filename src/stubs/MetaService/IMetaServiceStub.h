@@ -87,6 +87,7 @@ class IMetaServiceStub {
   IMETA_STUB_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
   IMETA_STUB_METHOD(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
   IMETA_STUB_METHOD(publishOriginFileFromStaging, PublishOriginFileFromStagingReq, PublishOriginFileFromStagingRsp);
+  IMETA_STUB_METHOD(listUploadJobs, ListUploadJobsReq, ListUploadJobsRsp);
 
 #undef IMETA_STUB_METHOD
 };

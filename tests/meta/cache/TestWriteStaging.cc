@@ -562,6 +562,16 @@ TEST_F(TestWriteStaging, PublishesOriginAndUploadJobAtomicallyAndRetriesSameInod
     auto openSession = co_await FileSession::load(*read, request->expectedStagingInode, session.session);
     CO_ASSERT_OK(openSession);
     CO_ASSERT_TRUE(openSession->has_value());
+
+    ListUploadJobsReq active;
+    active.service = {std::string{kServiceName}, std::string{kServiceToken}};
+    active.ownerUid = SUPER_USER.uid;
+    active.includeTerminal = false;
+    active.limit = 10;
+    active.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto activeJobs = co_await meta.listUploadJobs(active);
+    CO_ASSERT_OK(activeJobs);
+    CO_ASSERT_TRUE(activeJobs->jobs.empty());
   }());
 }
 
@@ -638,6 +648,36 @@ TEST_F(TestWriteStaging, StagedPublishContractEnforcesServiceProtocolAndCacheLay
     CO_ASSERT_ERROR(co_await meta.publishOriginFileFromStaging(request), CacheCode::kUpgradeRequired);
     request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
     CO_ASSERT_ERROR(co_await meta.publishOriginFileFromStaging(request), MetaCode::kInvalidFileLayout);
+  }());
+}
+
+TEST_F(TestWriteStaging, ListsUploadJobsWithServiceAuthOwnerFilterAndPagination) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    enableWriteStaging(cluster);
+    auto &meta = cluster.meta().getOperator();
+    for (uint64_t id = 45; id != 48; ++id) {
+      CO_ASSERT_OK(co_await meta.createWriteStaging(
+          stagingReq("/listed-" + std::to_string(id), cache::UploadJobId{Uuid::from(1, id)})));
+    }
+
+    ListUploadJobsReq request;
+    request.service = {std::string{kServiceName}, std::string{kServiceToken}};
+    request.ownerUid = SUPER_USER.uid;
+    request.limit = 2;
+    request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto first = co_await meta.listUploadJobs(request);
+    CO_ASSERT_OK(first);
+    CO_ASSERT_EQ(first->jobs.size(), 2);
+    CO_ASSERT_TRUE(first->more);
+
+    request.after = first->jobs.back().jobId;
+    auto second = co_await meta.listUploadJobs(request);
+    CO_ASSERT_OK(second);
+    CO_ASSERT_EQ(second->jobs.size(), 1);
+    CO_ASSERT_FALSE(second->more);
+    request.service.token = "wrong-token";
+    CO_ASSERT_ERROR(co_await meta.listUploadJobs(request), MetaCode::kNoPermission);
   }());
 }
 

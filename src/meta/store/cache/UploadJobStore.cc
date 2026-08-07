@@ -120,7 +120,8 @@ CoTryTask<std::optional<cache::UploadJobRecord>> UploadJobStore::load(kv::IReadW
 CoTryTask<UploadJobPage> UploadJobStore::snapshotList(kv::IReadOnlyTransaction &txn,
                                                       std::optional<flat::Uid> ownerUid,
                                                       std::optional<cache::UploadJobId> after,
-                                                      uint32_t limit) {
+                                                      uint32_t limit,
+                                                      bool includeTerminal) {
   if (limit == 0 || limit > cache::kMaxPhase2BatchItems || (after && *after == cache::UploadJobId{})) {
     co_return makeError(StatusCode::kInvalidArg, "invalid upload job page");
   }
@@ -135,7 +136,9 @@ CoTryTask<UploadJobPage> UploadJobStore::snapshotList(kv::IReadOnlyTransaction &
     for (const auto &value : values->kvs) {
       auto job = decode(value.key, value.value);
       CO_RETURN_ON_ERROR(job);
-      if (!ownerUid || job->ownerUid == *ownerUid) page.jobs.push_back(std::move(*job));
+      if ((!ownerUid || job->ownerUid == *ownerUid) && (includeTerminal || !terminal(job->state))) {
+        page.jobs.push_back(std::move(*job));
+      }
       if (page.jobs.size() > limit) break;
     }
     if (page.jobs.size() > limit || !values->hasMore) break;

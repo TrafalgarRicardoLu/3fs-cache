@@ -29,7 +29,8 @@ class UploadJobStore {
   static CoTryTask<UploadJobPage> snapshotList(kv::IReadOnlyTransaction &txn,
                                                std::optional<flat::Uid> ownerUid,
                                                std::optional<cache::UploadJobId> after,
-                                               uint32_t limit);
+                                               uint32_t limit,
+                                               bool includeTerminal = true);
   static CoTryTask<cache::UploadJobRecord> update(kv::IReadWriteTransaction &txn,
                                                   uint64_t expectedStateVersion,
                                                   const cache::UploadJobRecord &job);

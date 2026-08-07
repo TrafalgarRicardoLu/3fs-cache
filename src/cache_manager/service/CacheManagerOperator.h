@@ -28,6 +28,7 @@
 #include "cache_manager/service/AdminCleanupCacheBlocks.h"
 #include "cache_manager/service/EnsureCached.h"
 #include "cache_manager/service/ReportCacheBlockInvalid.h"
+#include "cache_manager/upload/WritePublishController.h"
 #include "common/utils/BackgroundRunner.h"
 #include "fbs/cache_manager/Service.h"
 
@@ -74,7 +75,9 @@ class CacheManagerOperator {
   const Config &config_;
   std::shared_ptr<meta::client::MetaClient> metaClient_;
   std::shared_ptr<storage::client::StorageClient> storageClient_;
+  std::shared_ptr<client::ICommonMgmtdClient> mgmtdClient_;
   std::shared_ptr<CacheManagerBackend> backend_;
+  std::shared_ptr<cache::origin::ObjectStore> objectStore_;
   RealCacheManagerBackend::Stores stores_;
   HintCoalescer hints_;
   std::unique_ptr<CapacityGate> capacityGate_;
@@ -102,6 +105,7 @@ class CacheManagerOperator {
   std::shared_ptr<ActiveJobPinManager> activeJobPins_;
   std::shared_ptr<JobCanceller> jobCanceller_;
   std::unique_ptr<OrchestrationCoordinator> orchestration_;
+  std::unique_ptr<WritePublishController> writePublishController_;
   Uuid managerEpoch_{Uuid::zero()};
   std::unique_ptr<BackgroundRunner> scheduler_;
   SchedulerStopHook schedulerStopHook_;

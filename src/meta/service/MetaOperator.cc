@@ -511,6 +511,13 @@ CoTryTask<PublishOriginFileFromStagingRsp> MetaOperator::publishOriginFileFromSt
   co_return co_await runOp(&MetaStore::publishOriginFileFromStaging, req);
 }
 
+CoTryTask<ListUploadJobsRsp> MetaOperator::listUploadJobs(ListUploadJobsReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::listUploadJobs, req);
+}
+
 CoTryTask<MkdirsRsp> MetaOperator::mkdirs(MkdirsReq req) {
   AUTHENTICATE(req.user);
   co_return co_await runOp(&MetaStore::mkdirs, req);

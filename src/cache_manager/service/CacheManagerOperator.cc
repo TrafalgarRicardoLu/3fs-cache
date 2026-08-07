@@ -22,12 +22,13 @@ CacheManagerOperator::CacheManagerOperator(const Config &config,
     : config_(config),
       metaClient_(std::move(metaClient)),
       storageClient_(std::move(storageClient)),
+      mgmtdClient_(std::move(mgmtdClient)),
       stores_(stores) {
-  if (metaClient_ && storageClient_ && mgmtdClient) {
+  if (metaClient_ && storageClient_ && mgmtdClient_) {
     backend_ = std::make_shared<RealCacheManagerBackend>(config_,
                                                          metaClient_,
                                                          storageClient_,
-                                                         std::move(mgmtdClient),
+                                                         mgmtdClient_,
                                                          std::move(stores));
   }
 }
@@ -129,7 +130,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
   if (config_.enable_phase3()) {
     cache::origin::RoutedObjectStore::Stores routedStores;
     for (const auto &[originId, store] : stores_) routedStores.emplace(originId.toUnderType(), store);
-    auto objectStore = std::make_shared<cache::origin::RoutedObjectStore>(std::move(routedStores));
+    objectStore_ = std::make_shared<cache::origin::RoutedObjectStore>(std::move(routedStores));
     auto resolver = std::make_shared<MetaNamespaceFileResolver>(metaClient_, flat::UserInfo{});
     auto importer = std::make_shared<MetaOriginFileImporter>(metaClient_, flat::UserInfo{});
     SourcePlannerFactory::Builders builders;
@@ -138,13 +139,13 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     builders.emplace(cache::DatasetSourceType::PATH_LIST,
                      makeNamespaceDatasetPlannerBuilder(resolver, cache::DatasetSourceType::PATH_LIST));
     builders.emplace(cache::DatasetSourceType::MANIFEST_PATH,
-                     makeManifestPlannerBuilder(resolver, objectStore, ManifestPlannerConfig{}));
+                     makeManifestPlannerBuilder(resolver, objectStore_, ManifestPlannerConfig{}));
     S3PrefixPlannerConfig prefixConfig;
     prefixConfig.layout.tableId = flat::ChainTableId{config_.phase3_prefix_table_id()};
     prefixConfig.layout.blockSize = config_.phase3_prefix_block_size();
     prefixConfig.layout.stripeSize = config_.phase3_prefix_stripe_size();
     builders.emplace(cache::DatasetSourceType::S3_PREFIX,
-                     makeS3PrefixPlannerBuilder(objectStore, importer, prefixConfig));
+                     makeS3PrefixPlannerBuilder(objectStore_, importer, prefixConfig));
     auto factory = SourcePlannerFactory::create({config_.phase3_plan_page_size(), cache::kMaxDatasetPathLength},
                                                 std::move(builders));
     RETURN_ON_ERROR(factory);
@@ -170,7 +171,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                                                            config_.phase3_job_page_size(),
                                                            config_.phase3_plan_page_size(),
                                                            activePinTtlMs);
-    auto coordinatorBackend = std::make_shared<MetaOrchestrationCoordinatorBackend>(metaClient_, std::move(service));
+    auto coordinatorBackend = std::make_shared<MetaOrchestrationCoordinatorBackend>(metaClient_, service);
     orchestration_ = std::make_unique<OrchestrationCoordinator>(
         std::move(coordinatorBackend),
         config_.phase3_job_page_size(),
@@ -191,6 +192,28 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                               const CancellationToken &cancellation) -> CoTryTask<JobRunnerPageResult> {
           co_return co_await runner->runNextPage(job, after, cancellation, true);
         });
+    if (config_.enable_phase4()) {
+      WritePublishControllerConfig uploadConfig;
+      uploadConfig.pageSize = config_.phase4_upload_page_size();
+      uploadConfig.globalConcurrency = config_.phase4_upload_global_concurrency();
+      uploadConfig.perOwnerConcurrency = config_.phase4_upload_per_owner_concurrency();
+      uploadConfig.perOriginConcurrency = config_.phase4_upload_per_origin_concurrency();
+      uploadConfig.cacheTableId = flat::ChainTableId{config_.phase4_cache_table_id()};
+      uploadConfig.cacheBlockSize = config_.phase4_cache_block_size();
+      uploadConfig.cacheStripeSize = config_.phase4_cache_stripe_size();
+      uploadConfig.uploader.partSize = config_.upload_part_size();
+      uploadConfig.uploader.maxRetries = config_.upload_retry_limit();
+      uploadConfig.finalizer.maxRetries = config_.upload_retry_limit();
+      RETURN_ON_ERROR(uploadConfig.valid());
+      auto uploadBackend = std::make_shared<RealWritePublishControllerBackend>(metaClient_,
+                                                                               storageClient_,
+                                                                               mgmtdClient_,
+                                                                               objectStore_,
+                                                                               service,
+                                                                               uploadConfig);
+      writePublishController_ =
+          std::make_unique<WritePublishController>(std::move(uploadBackend), std::move(uploadConfig));
+    }
   }
   auto noCleanup = [] {};
   StartupRecoveryCoordinator recovery({{
@@ -217,10 +240,12 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
       {StartupRecoveryStage::JOBS,
        [this]() -> CoTryTask<void> {
          if (orchestration_) CO_RETURN_ON_ERROR(co_await orchestration_->recover());
+         if (writePublishController_) CO_RETURN_ON_ERROR(co_await writePublishController_->recover());
          co_return Void{};
        },
        [this] {
          if (orchestration_) orchestration_->stop();
+         if (writePublishController_) writePublishController_->stop();
        }},
       {StartupRecoveryStage::RECONCILE,
        [this]() -> CoTryTask<void> {
@@ -251,6 +276,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     admissionReady_.store(false, std::memory_order_release);
     recoveryHealthy_.store(false, std::memory_order_release);
     if (orchestration_) orchestration_->stop();
+    if (writePublishController_) writePublishController_->stop();
     if (reconciler_) reconciler_->stop();
     if (accessFlushWorker_) accessFlushWorker_->stop();
   };
@@ -397,6 +423,19 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
       return makeError(StatusCode::kQueueConflict, "failed to start cache orchestration workers");
     }
   }
+  if (writePublishController_ && !scheduler->start(
+                                     "CacheManagerWritePublishController",
+                                     [this]() -> CoTask<void> {
+                                       auto result = co_await writePublishController_->runOnce();
+                                       if (result.hasError())
+                                         XLOGF(WARN, "Write publish controller iteration failed: {}", result.error());
+                                     },
+                                     [this] { return config_.phase4_upload_interval(); })) {
+    writePublishController_->stop();
+    folly::coro::blockingWait(scheduler->stopAll());
+    rollbackRecovered();
+    return makeError(StatusCode::kQueueConflict, "failed to start write publish controller");
+  }
   auto lock = std::unique_lock(mutex_);
   if (running_) {
     lock.unlock();
@@ -446,6 +485,7 @@ void CacheManagerOperator::stop() {
     stopHook = std::move(schedulerStopHook_);
   }
   if (orchestration_) orchestration_->stop();
+  if (writePublishController_) writePublishController_->stop();
   if (reconciler_) reconciler_->stop();
   if (scheduler) folly::coro::blockingWait(scheduler->stopAll());
   if (accessFlushWorker_) accessFlushWorker_->stop();

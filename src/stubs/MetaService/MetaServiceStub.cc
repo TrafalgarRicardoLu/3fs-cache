@@ -84,6 +84,7 @@ IMPL_META_STUB_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultip
 IMPL_META_STUB_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
 IMPL_META_STUB_METHOD(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
 IMPL_META_STUB_METHOD(publishOriginFileFromStaging, PublishOriginFileFromStagingReq, PublishOriginFileFromStagingRsp);
+IMPL_META_STUB_METHOD(listUploadJobs, ListUploadJobsReq, ListUploadJobsRsp);
 
 template class MetaServiceStub<serde::ClientContext>;
 template class MetaServiceStub<serde::ClientMockContext>;

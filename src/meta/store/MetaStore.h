@@ -143,6 +143,8 @@ class MetaStore {
 
   OpPtr<PublishOriginFileFromStagingRsp> publishOriginFileFromStaging(const PublishOriginFileFromStagingReq &req);
 
+  OpPtr<ListUploadJobsRsp> listUploadJobs(const ListUploadJobsReq &req);
+
   OpPtr<GetFileReadPlanRsp> getFileReadPlan(const GetFileReadPlanReq &req);
 
   OpPtr<EnqueueCacheBlocksRsp> enqueueCacheBlocks(const EnqueueCacheBlocksReq &req);

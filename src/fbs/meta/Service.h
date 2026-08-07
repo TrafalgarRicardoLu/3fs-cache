@@ -1017,6 +1017,29 @@ struct PublishOriginFileFromStagingRsp : RspBase {
   SERDE_STRUCT_FIELD(outcome, PublishOriginFileOutcome::PUBLISHED);
 };
 
+struct ListUploadJobsReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(ownerUid, std::optional<flat::Uid>{});
+  SERDE_STRUCT_FIELD(includeTerminal, true);
+  SERDE_STRUCT_FIELD(after, std::optional<cache::UploadJobId>{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{100});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (limit == 0 || limit > cache::kMaxPhase2BatchItems || (after && *after == cache::UploadJobId{})) {
+      return INVALID("invalid upload job page");
+    }
+    return VALID;
+  }
+};
+
+struct ListUploadJobsRsp : RspBase {
+  SERDE_STRUCT_FIELD(jobs, std::vector<cache::UploadJobRecord>{});
+  SERDE_STRUCT_FIELD(more, false);
+};
+
 struct ReadBlockPlan {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(fileRange, cache::ByteRange{});
@@ -2179,6 +2202,7 @@ SERDE_SERVICE(MetaSerde, 4) {
                       68,
                       PublishOriginFileFromStagingReq,
                       PublishOriginFileFromStagingRsp);
+  META_SERVICE_METHOD(listUploadJobs, 69, ListUploadJobsReq, ListUploadJobsRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

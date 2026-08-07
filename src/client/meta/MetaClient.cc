@@ -1027,6 +1027,7 @@ META_CACHE_CLIENT_METHOD(mutateMultipartUpload, MutateMultipartUploadReq, Mutate
 META_CACHE_CLIENT_METHOD(publishOriginFileFromStaging,
                          PublishOriginFileFromStagingReq,
                          PublishOriginFileFromStagingRsp);
+META_CACHE_CLIENT_METHOD(listUploadJobs, ListUploadJobsReq, ListUploadJobsRsp);
 #undef META_CACHE_CLIENT_METHOD
 
 }  // namespace hf3fs::meta::client

@@ -82,6 +82,7 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
   META_SERVICE_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
   META_SERVICE_METHOD(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
   META_SERVICE_METHOD(publishOriginFileFromStaging, PublishOriginFileFromStagingReq, PublishOriginFileFromStagingRsp);
+  META_SERVICE_METHOD(listUploadJobs, ListUploadJobsReq, ListUploadJobsRsp);
 #undef META_SERVICE_METHOD
 
  private:

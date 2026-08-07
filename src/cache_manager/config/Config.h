@@ -48,6 +48,11 @@ class Config : public ConfigBase<Config> {
     if (enable_phase4() && !enable_phase3()) {
       return makeError(StatusCode::kInvalidConfig, "cache phase four requires phase three");
     }
+    if (enable_phase4() &&
+        (upload_part_size() < 5_MB || phase4_upload_per_owner_concurrency() > phase4_upload_global_concurrency() ||
+         phase4_upload_per_origin_concurrency() > phase4_upload_global_concurrency())) {
+      return makeError(StatusCode::kInvalidConfig, "invalid cache phase four upload limits");
+    }
     if (phase3_active_pin_ttl() <= phase3_pin_renew_interval()) {
       return makeError(StatusCode::kInvalidConfig, "cache phase three active pin TTL must exceed its renew interval");
     }
@@ -118,6 +123,18 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(phase3_prefix_table_id, uint32_t{0});
   CONFIG_ITEM(phase3_prefix_block_size, uint32_t{4_MB}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(phase3_prefix_stripe_size, uint32_t{1}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(phase4_upload_interval, 100_ms, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(phase4_upload_page_size, uint32_t{100}, [](uint32_t value) {
+    return value > 0 && value <= cache::kMaxPhase2BatchItems;
+  });
+  CONFIG_ITEM(phase4_upload_global_concurrency, uint32_t{4}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(phase4_upload_per_owner_concurrency, uint32_t{2}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(phase4_upload_per_origin_concurrency, uint32_t{2}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(phase4_cache_table_id, uint32_t{2}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(phase4_cache_block_size, uint32_t{4_MB}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(phase4_cache_stripe_size, uint32_t{1}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(upload_part_size, uint64_t{16_MB}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(upload_retry_limit, uint32_t{8}, [](uint32_t value) { return value <= 100; });
   CONFIG_ITEM(admission_policy, std::string{"second_miss"});
   CONFIG_ITEM(eviction_policy, std::string{"lru"});
   CONFIG_ITEM(second_miss_window, 30_s, [](Duration value) { return value > 0_ns; });
