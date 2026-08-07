@@ -1,9 +1,103 @@
 #include "cache_manager/reconcile/CacheReconciler.h"
 
+#include <algorithm>
 #include <folly/ScopeGuard.h>
+#include <folly/logging/xlog.h>
+#include <limits>
 #include <set>
+#include <string_view>
+
+#include "cache/metrics/CacheMetrics.h"
 
 namespace hf3fs::cache_manager {
+namespace {
+
+uint64_t addSaturated(uint64_t left, uint64_t right) {
+  return left + std::min(right, std::numeric_limits<uint64_t>::max() - left);
+}
+
+std::string errorCategory(const Status &error) { return std::string(StatusCode::toString(error.code())); }
+
+void appendCategory(std::string &summary, std::string_view scope, const Status &error) {
+  if (!summary.empty()) summary += ',';
+  summary += scope;
+  summary += ':';
+  summary += errorCategory(error);
+}
+
+cache::ReconcileProgress summarize(const CacheReconcileRunResult &result,
+                                   cache::ReconcileRunId runId,
+                                   uint64_t startedAtMs,
+                                   uint64_t completedAtMs,
+                                   uint64_t lastSuccessAtMs) {
+  cache::ReconcileProgress progress;
+  progress.runId = runId;
+  progress.startedAtMs = startedAtMs;
+  progress.updatedAtMs = std::max(startedAtMs, completedAtMs);
+  progress.lastSuccessAtMs = lastSuccessAtMs;
+  if (result.metadataToStorage) {
+    progress.scanned = addSaturated(progress.scanned, result.metadataToStorage->scanned);
+    progress.repaired = addSaturated(progress.repaired, result.metadataToStorage->repaired);
+    progress.missing = addSaturated(progress.missing, result.metadataToStorage->missing);
+    progress.conflicts = addSaturated(progress.conflicts, result.metadataToStorage->conflicts);
+    progress.retryable = addSaturated(progress.retryable, result.metadataToStorage->retryable);
+  }
+  if (result.storageToMetadata) {
+    progress.scanned = addSaturated(progress.scanned, result.storageToMetadata->scanned);
+    progress.repaired = addSaturated(progress.repaired, result.storageToMetadata->retired);
+    progress.orphaned = addSaturated(progress.orphaned, result.storageToMetadata->orphans);
+    progress.conflicts = addSaturated(progress.conflicts, result.storageToMetadata->conflicts);
+    progress.retryable = addSaturated(progress.retryable, result.storageToMetadata->retryable);
+  }
+  progress.retryable = addSaturated(progress.retryable, result.targetFailures.size());
+  if (result.metadataError) {
+    progress.retryable = addSaturated(progress.retryable, 1);
+    appendCategory(progress.error, "metadata", *result.metadataError);
+  }
+  if (result.storageError) {
+    progress.retryable = addSaturated(progress.retryable, 1);
+    appendCategory(progress.error, "storage", *result.storageError);
+  }
+  if (!result.targetFailures.empty()) appendCategory(progress.error, "target", result.targetFailures.front().error);
+  auto deferred = result.metadataToStorage ? result.metadataToStorage->deferred : 0;
+  deferred = addSaturated(deferred, result.storageToMetadata ? result.storageToMetadata->deferred : 0);
+  if (result.stopped && progress.error.empty()) progress.error = "run:stopped";
+  auto degraded =
+      result.stopped || deferred != 0 || progress.conflicts != 0 || progress.retryable != 0 || !progress.error.empty();
+  progress.state = degraded ? cache::ReconcileRunState::DEGRADED : cache::ReconcileRunState::HEALTHY;
+  if (!degraded) progress.lastSuccessAtMs = progress.updatedAtMs;
+  return progress;
+}
+
+void recordMetrics(const cache::ReconcileProgress &progress) {
+  cache::metrics::Tags tags;
+  tags.reason = progress.state == cache::ReconcileRunState::HEALTHY ? "healthy" : "degraded";
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_RECONCILE_RUN, 1, tags);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_RECONCILE_SCANNED, progress.scanned);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_RECONCILE_ORPHAN, progress.orphaned);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_RECONCILE_MISSING, progress.missing);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_RECONCILE_CONFLICT, progress.conflicts);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_RECONCILE_REPAIRED, progress.repaired);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_RECONCILE_RETRYABLE, progress.retryable);
+  if (progress.lastSuccessAtMs != 0) {
+    cache::metrics::setGauge(cache::metrics::Event::MANAGER_RECONCILE_LAST_SUCCESS_MS, progress.lastSuccessAtMs);
+  }
+}
+
+}  // namespace
+
+CacheReconciler::CacheReconciler(std::shared_ptr<CacheManagerBackend> backend,
+                                 CacheCleanupWorker &cleanup,
+                                 CacheReconcilerConfig config,
+                                 ReconcileRunControl::Clock clock,
+                                 WallClock wallClock)
+    : backend_(std::move(backend)),
+      cleanup_(cleanup),
+      config_(config),
+      clock_(std::move(clock)),
+      wallClock_(std::move(wallClock)) {
+  progress_.state = cache::ReconcileRunState::NEVER_RUN;
+}
 
 Result<Void> CacheReconcilerConfig::valid() const {
   if (pageSize == 0 || pageSize > storage::kMaxCacheStorageBatchItems || maxTargetConcurrency == 0 ||
@@ -64,6 +158,12 @@ CoTryTask<CacheReconcileRunResult> CacheReconciler::run(std::span<const storage:
   if (stopping_.load(std::memory_order_acquire)) {
     co_return makeError(CacheCode::kUnavailable, "cache reconciler is stopped");
   }
+  std::set<storage::TargetId> uniqueTargets;
+  for (auto targetId : targetIds) {
+    if (targetId == storage::TargetId{} || !uniqueTargets.emplace(targetId).second) {
+      co_return makeError(StatusCode::kInvalidArg, "invalid or duplicate reconcile target");
+    }
+  }
   bool expected = false;
   if (!running_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
     co_return makeError(StatusCode::kQueueConflict, "cache reconciliation is already running");
@@ -74,12 +174,21 @@ CoTryTask<CacheReconcileRunResult> CacheReconciler::run(std::span<const storage:
     running_.store(false, std::memory_order_release);
   });
 
-  std::set<storage::TargetId> uniqueTargets;
-  for (auto targetId : targetIds) {
-    if (targetId == storage::TargetId{} || !uniqueTargets.emplace(targetId).second) {
-      co_return makeError(StatusCode::kInvalidArg, "invalid or duplicate reconcile target");
-    }
+  const auto runId = cache::ReconcileRunId{Uuid::random()};
+  auto startedAtMs = wallClock_();
+  {
+    std::scoped_lock lock(mutex_);
+    const auto lastSuccessAtMs = progress_.lastSuccessAtMs;
+    startedAtMs = std::max(startedAtMs, lastSuccessAtMs);
+    progress_ = {};
+    progress_.runId = runId;
+    progress_.state = cache::ReconcileRunState::RUNNING;
+    progress_.startedAtMs = startedAtMs;
+    progress_.updatedAtMs = startedAtMs;
+    progress_.lastSuccessAtMs = lastSuccessAtMs;
   }
+  cache::metrics::setGauge(cache::metrics::Event::MANAGER_RECONCILE_LAST_START_MS, startedAtMs);
+  XLOGF(INFO, "Cache reconcile started: run_id={}, targets={}, dry_run={}", runId, targetIds.size(), config_.dryRun);
   auto control =
       std::make_shared<ReconcileRunControl>(config_.maxMutations, config_.maxRuntime, config_.dryRun, clock_);
   {
@@ -99,10 +208,27 @@ CoTryTask<CacheReconcileRunResult> CacheReconciler::run(std::span<const storage:
   }
   result.mutations = control->mutations();
   result.stopped = control->shouldStop();
+  const auto completedAtMs = wallClock_();
+  cache::ReconcileProgress progress;
   {
     std::scoped_lock lock(mutex_);
+    progress = summarize(result, runId, startedAtMs, completedAtMs, progress_.lastSuccessAtMs);
+    progress_ = progress;
     lastResult_ = result;
   }
+  recordMetrics(progress);
+  XLOGF(INFO,
+        "Cache reconcile completed: run_id={}, state={}, scanned={}, orphan={}, missing={}, conflict={}, repaired={}, "
+        "retryable={}, error={}",
+        runId,
+        magic_enum::enum_name(progress.state),
+        progress.scanned,
+        progress.orphaned,
+        progress.missing,
+        progress.conflicts,
+        progress.repaired,
+        progress.retryable,
+        progress.error);
   co_return result;
 }
 
@@ -119,6 +245,11 @@ void CacheReconciler::stop() {
 std::optional<CacheReconcileRunResult> CacheReconciler::lastResult() const {
   std::scoped_lock lock(mutex_);
   return lastResult_;
+}
+
+cache::ReconcileProgress CacheReconciler::status() const {
+  std::scoped_lock lock(mutex_);
+  return progress_;
 }
 
 }  // namespace hf3fs::cache_manager

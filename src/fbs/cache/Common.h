@@ -147,6 +147,7 @@ enum class ReconcileRunState : uint8_t {
   HEALTHY = 2,
   DEGRADED = 3,
   FAILED = 4,
+  NEVER_RUN = 5,
 };
 
 enum class DatasetSourceType : uint8_t {
@@ -332,6 +333,8 @@ struct ReconcileProgress {
   SERDE_STRUCT_FIELD(missing, uint64_t{});
   SERDE_STRUCT_FIELD(conflicts, uint64_t{});
   SERDE_STRUCT_FIELD(error, std::string{});
+  SERDE_STRUCT_FIELD(retryable, uint64_t{});
+  SERDE_STRUCT_FIELD(lastSuccessAtMs, uint64_t{});
 
  public:
   Result<Void> valid() const;

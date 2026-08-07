@@ -175,12 +175,20 @@ Result<Void> UploadJobRecord::valid() const {
 }
 
 Result<Void> ReconcileProgress::valid() const {
+  if (state == ReconcileRunState::NEVER_RUN) {
+    if (runId != ReconcileRunId{} || startedAtMs != 0 || updatedAtMs != 0 || scanned != 0 || repaired != 0 ||
+        orphaned != 0 || missing != 0 || conflicts != 0 || retryable != 0 || lastSuccessAtMs != 0 || !error.empty()) {
+      return makeError(StatusCode::kInvalidArg, "invalid never-run cache reconcile progress");
+    }
+    return Void{};
+  }
   if (runId == ReconcileRunId{} || !magic_enum::enum_contains(state) || state == ReconcileRunState::INVALID ||
       startedAtMs == 0 || updatedAtMs < startedAtMs || repaired > scanned || orphaned > scanned || missing > scanned ||
-      conflicts > scanned || error.size() > kMaxUploadErrorBytes || error.find('\0') != std::string::npos) {
+      conflicts > scanned || lastSuccessAtMs > updatedAtMs || error.size() > kMaxUploadErrorBytes ||
+      error.find('\0') != std::string::npos) {
     return makeError(StatusCode::kInvalidArg, "invalid cache reconcile progress");
   }
-  if (state == ReconcileRunState::HEALTHY && (!error.empty() || conflicts != 0)) {
+  if (state == ReconcileRunState::HEALTHY && (!error.empty() || conflicts != 0 || retryable != 0)) {
     return makeError(StatusCode::kInvalidArg, "healthy reconcile run has unresolved errors");
   }
   return Void{};

@@ -140,6 +140,8 @@ TEST(ServiceContracts, Phase3StatusExtensionsAreBackwardCompatible) {
   EXPECT_FALSE(current.phase3Enabled);
   EXPECT_EQ(current.activeJobs, 0u);
   EXPECT_EQ(current.pinnedBytes, 0u);
+  EXPECT_FALSE(current.phase4Enabled);
+  EXPECT_EQ(current.reconcile.state, ReconcileRunState::INVALID);
 
   current.phase3Enabled = true;
   current.activeJobs = 2;
@@ -147,6 +149,33 @@ TEST(ServiceContracts, Phase3StatusExtensionsAreBackwardCompatible) {
   LegacyCacheManagerStatus oldReader;
   ASSERT_OK(serde::deserialize(oldReader, serde::serialize(current)));
   EXPECT_EQ(oldReader.ready, 7u);
+}
+
+TEST(ServiceContracts, ReconcileStatusExtensionsRoundTrip) {
+  cache_manager::GetCacheStatusRsp original;
+  original.phase4Enabled = true;
+  original.reconcile = {ReconcileRunId{Uuid::from(9, 10)},
+                        ReconcileRunState::DEGRADED,
+                        100,
+                        200,
+                        10,
+                        2,
+                        1,
+                        1,
+                        1,
+                        "target:Cache::Unavailable",
+                        3,
+                        90};
+  ASSERT_OK(original.reconcile.valid());
+
+  cache_manager::GetCacheStatusRsp decoded;
+  ASSERT_OK(serde::deserialize(decoded, serde::serialize(original)));
+  EXPECT_TRUE(decoded.phase4Enabled);
+  EXPECT_EQ(decoded.reconcile, original.reconcile);
+
+  cache::ReconcileProgress neverRun;
+  neverRun.state = ReconcileRunState::NEVER_RUN;
+  ASSERT_OK(neverRun.valid());
 }
 
 TEST(ServiceContracts, Phase3ContractsRoundTripAndBoundPages) {

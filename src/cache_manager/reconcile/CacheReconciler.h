@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <span>
 
@@ -39,19 +40,20 @@ struct CacheReconcileRunResult {
 
 class CacheReconciler {
  public:
-  CacheReconciler(std::shared_ptr<CacheManagerBackend> backend,
-                  CacheCleanupWorker &cleanup,
-                  CacheReconcilerConfig config,
-                  ReconcileRunControl::Clock clock = SteadyClock::now)
-      : backend_(std::move(backend)),
-        cleanup_(cleanup),
-        config_(config),
-        clock_(std::move(clock)) {}
+  using WallClock = std::function<uint64_t()>;
+
+  CacheReconciler(
+      std::shared_ptr<CacheManagerBackend> backend,
+      CacheCleanupWorker &cleanup,
+      CacheReconcilerConfig config,
+      ReconcileRunControl::Clock clock = SteadyClock::now,
+      WallClock wallClock = [] { return static_cast<uint64_t>(UtcClock::now().toMicroseconds()) / 1000; });
 
   CoTryTask<CacheReconcileRunResult> run(std::span<const storage::TargetId> targetIds);
   void stop();
   bool running() const { return running_.load(std::memory_order_acquire); }
   std::optional<CacheReconcileRunResult> lastResult() const;
+  cache::ReconcileProgress status() const;
 
  private:
   CoTask<void> runMetadata(const std::shared_ptr<ReconcileRunControl> &control, CacheReconcileRunResult &result);
@@ -63,12 +65,14 @@ class CacheReconciler {
   CacheCleanupWorker &cleanup_;
   CacheReconcilerConfig config_;
   ReconcileRunControl::Clock clock_;
+  WallClock wallClock_;
   std::atomic<bool> running_{false};
   std::atomic<bool> stopping_{false};
   std::atomic<uint64_t> rounds_{0};
   mutable std::mutex mutex_;
   std::shared_ptr<ReconcileRunControl> activeControl_;
   std::optional<CacheReconcileRunResult> lastResult_;
+  cache::ReconcileProgress progress_;
 };
 
 }  // namespace hf3fs::cache_manager

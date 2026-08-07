@@ -436,6 +436,12 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
   if (backend_) CO_RETURN_ON_ERROR(co_await backend_->authorizeAdmin(req.user, req.inode));
   GetCacheStatusRsp response;
   response.phase3Enabled = config_.enable_phase3();
+  response.phase4Enabled = config_.enable_phase4();
+  if (reconciler_) {
+    response.reconcile = reconciler_->status();
+  } else {
+    response.reconcile.state = cache::ReconcileRunState::NEVER_RUN;
+  }
   response.queued = hints_.size();
   response.exclusiveQueuedClaims = hints_.exclusiveJobClaims();
   if (capacityGate_) {

@@ -67,6 +67,13 @@ monitor::CountRecorder &countRecorder(Event event) {
     CACHE_COUNT_RECORDER(MANAGER_ORCHESTRATION_TICK, "cache.manager.orchestration_tick");
     CACHE_COUNT_RECORDER(MANAGER_JOB_QUOTA_WAIT, "cache.manager.job_quota_wait");
     CACHE_COUNT_RECORDER(MANAGER_JOB_CANCEL, "cache.manager.job_cancel");
+    CACHE_COUNT_RECORDER(MANAGER_RECONCILE_RUN, "cache.manager.reconcile.run");
+    CACHE_COUNT_RECORDER(MANAGER_RECONCILE_SCANNED, "cache.manager.reconcile.scanned");
+    CACHE_COUNT_RECORDER(MANAGER_RECONCILE_ORPHAN, "cache.manager.reconcile.orphan");
+    CACHE_COUNT_RECORDER(MANAGER_RECONCILE_MISSING, "cache.manager.reconcile.missing");
+    CACHE_COUNT_RECORDER(MANAGER_RECONCILE_CONFLICT, "cache.manager.reconcile.conflict");
+    CACHE_COUNT_RECORDER(MANAGER_RECONCILE_REPAIRED, "cache.manager.reconcile.repaired");
+    CACHE_COUNT_RECORDER(MANAGER_RECONCILE_RETRYABLE, "cache.manager.reconcile.retryable");
     CACHE_COUNT_RECORDER(STORAGE_PERMIT_RESULT, "cache.storage.permit_result");
     CACHE_COUNT_RECORDER(STORAGE_EVENT_PREPARED, "cache.storage.event_prepared");
     CACHE_COUNT_RECORDER(STORAGE_EVENT_DELIVERABLE, "cache.storage.event_deliverable");
@@ -116,6 +123,8 @@ monitor::ValueRecorder &gaugeRecorder(Event event) {
     CACHE_GAUGE_RECORDER(MANAGER_JOB_INFLIGHT, "cache.manager.job_inflight");
     CACHE_GAUGE_RECORDER(MANAGER_JOB_READY_BPS, "cache.manager.job_ready_bps");
     CACHE_GAUGE_RECORDER(MANAGER_PINNED_BYTES, "cache.manager.pinned_bytes");
+    CACHE_GAUGE_RECORDER(MANAGER_RECONCILE_LAST_START_MS, "cache.manager.reconcile.last_start_ms");
+    CACHE_GAUGE_RECORDER(MANAGER_RECONCILE_LAST_SUCCESS_MS, "cache.manager.reconcile.last_success_ms");
     CACHE_GAUGE_RECORDER(STORAGE_EVENT_BACKLOG, "cache.storage.event_backlog");
     default:
       static monitor::ValueRecorder invalid{"cache.invalid_gauge_event", std::nullopt, false};
