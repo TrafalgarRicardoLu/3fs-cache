@@ -35,6 +35,7 @@ static_assert(meta::MetaSerde<>::convertActiveJobPinsMethodId == 57);
 static_assert(storage::StorageSerde<>::listCacheInventoryMethodId == 28);
 static_assert(meta::MetaSerde<>::reconcileCacheBlocksMethodId == 58);
 static_assert(meta::MetaSerde<>::recoverExpiredCacheLoadsMethodId == 59);
+static_assert(meta::MetaSerde<>::publishOriginFileFromStagingMethodId == 68);
 
 struct LegacyPhase2DiskStatus {
   SERDE_STRUCT_FIELD(physicalDiskId, storage::PhysicalDiskId{});
@@ -96,6 +97,47 @@ TEST(ServiceContracts, RejectsOversizedMetadataBatch) {
   meta::EnqueueCacheBlocksReq enqueue;
   enqueue.items.resize(meta::kMaxCacheBatchItems + 1);
   EXPECT_TRUE(enqueue.valid().hasError());
+}
+
+TEST(ServiceContracts, StagedPublishContractRoundTripsAndValidatesFences) {
+  meta::PublishOriginFileFromStagingReq request;
+  request.service = {"cache-manager", "token"};
+  request.jobId = UploadJobId{Uuid::from(1, 2)};
+  request.expectedStateVersion = 7;
+  request.expectedStagingInode = meta::InodeId{42};
+  request.metadata.object = {OriginId{3}, "bucket", "objects/final", {VersionSelectorType::VERSION_ID, "version-1"}};
+  request.metadata.objectSize = 8192;
+  request.metadata.tableId = flat::ChainTableId{4};
+  request.metadata.blockSize = 4096;
+  request.metadata.stripeSize = 2;
+  request.metadata.permission = meta::Permission{0644};
+  request.cacheProtocolVersion = kCachePhase4ProtocolVersion;
+  ASSERT_OK(request.valid());
+
+  meta::PublishOriginFileFromStagingReq decoded;
+  ASSERT_OK(serde::deserialize(decoded, serde::serialize(request)));
+  EXPECT_EQ(decoded.jobId, request.jobId);
+  EXPECT_EQ(decoded.expectedStagingInode, request.expectedStagingInode);
+  EXPECT_EQ(decoded.metadata.object, request.metadata.object);
+  EXPECT_EQ(decoded.metadata.objectSize, request.metadata.objectSize);
+
+  auto invalid = request;
+  invalid.expectedStateVersion = 0;
+  EXPECT_TRUE(invalid.valid().hasError());
+  invalid = request;
+  invalid.metadata.object.version = {};
+  EXPECT_TRUE(invalid.valid().hasError());
+  invalid = request;
+  invalid.metadata.blockSize = 0;
+  EXPECT_TRUE(invalid.valid().hasError());
+
+  meta::PublishOriginFileFromStagingRsp response;
+  response.inode.id = meta::InodeId{99};
+  response.outcome = meta::PublishOriginFileOutcome::ALREADY_PUBLISHED;
+  meta::PublishOriginFileFromStagingRsp responseDecoded;
+  ASSERT_OK(serde::deserialize(responseDecoded, serde::serialize(response)));
+  EXPECT_EQ(responseDecoded.inode.id, response.inode.id);
+  EXPECT_EQ(responseDecoded.outcome, response.outcome);
 }
 
 TEST(ServiceContracts, RejectsOversizedStorageBatch) {

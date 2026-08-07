@@ -989,6 +989,34 @@ struct MutateMultipartUploadRsp : RspBase {
   SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
 };
 
+enum class PublishOriginFileOutcome : uint8_t {
+  PUBLISHED = 1,
+  ALREADY_PUBLISHED = 2,
+};
+
+struct PublishOriginFileFromStagingReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(expectedStateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(expectedStagingInode, InodeId{});
+  SERDE_STRUCT_FIELD(metadata, OriginFileMetadata{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || expectedStagingInode == InodeId{}) {
+      return INVALID("invalid staged publish fence");
+    }
+    return metadata.valid();
+  }
+};
+
+struct PublishOriginFileFromStagingRsp : RspBase {
+  SERDE_STRUCT_FIELD(inode, Inode{});
+  SERDE_STRUCT_FIELD(outcome, PublishOriginFileOutcome::PUBLISHED);
+};
+
 struct ReadBlockPlan {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(fileRange, cache::ByteRange{});
@@ -2147,6 +2175,10 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(beginMultipartUpload, 65, BeginMultipartUploadReq, BeginMultipartUploadRsp);
   META_SERVICE_METHOD(checkpointUploadPart, 66, CheckpointUploadPartReq, CheckpointUploadPartRsp);
   META_SERVICE_METHOD(mutateMultipartUpload, 67, MutateMultipartUploadReq, MutateMultipartUploadRsp);
+  META_SERVICE_METHOD(publishOriginFileFromStaging,
+                      68,
+                      PublishOriginFileFromStagingReq,
+                      PublishOriginFileFromStagingRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

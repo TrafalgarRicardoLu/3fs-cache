@@ -1024,6 +1024,9 @@ META_CACHE_CLIENT_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingR
 META_CACHE_CLIENT_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
 META_CACHE_CLIENT_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
 META_CACHE_CLIENT_METHOD(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
+META_CACHE_CLIENT_METHOD(publishOriginFileFromStaging,
+                         PublishOriginFileFromStagingReq,
+                         PublishOriginFileFromStagingRsp);
 #undef META_CACHE_CLIENT_METHOD
 
 }  // namespace hf3fs::meta::client

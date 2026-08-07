@@ -502,6 +502,15 @@ CoTryTask<MutateMultipartUploadRsp> MetaOperator::mutateMultipartUpload(MutateMu
   co_return co_await runOp(&MetaStore::mutateMultipartUpload, req);
 }
 
+CoTryTask<PublishOriginFileFromStagingRsp> MetaOperator::publishOriginFileFromStaging(
+    PublishOriginFileFromStagingReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  CO_RETURN_ON_ERROR(checkCacheTable(req.metadata.tableId));
+  co_return makeError(StatusCode::kNotImplemented, "staged publish transaction is not implemented");
+}
+
 CoTryTask<MkdirsRsp> MetaOperator::mkdirs(MkdirsReq req) {
   AUTHENTICATE(req.user);
   co_return co_await runOp(&MetaStore::mkdirs, req);

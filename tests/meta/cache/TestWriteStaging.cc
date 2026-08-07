@@ -456,5 +456,35 @@ TEST_F(TestWriteStaging, AbortsMultipartProgressIdempotently) {
   }());
 }
 
+TEST_F(TestWriteStaging, StagedPublishContractEnforcesServiceProtocolAndCacheLayout) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    enableWriteStaging(cluster);
+    PublishOriginFileFromStagingReq request;
+    request.service = {std::string{kServiceName}, "wrong-token"};
+    request.jobId = cache::UploadJobId{Uuid::from(37, 38)};
+    request.expectedStateVersion = 7;
+    request.expectedStagingInode = InodeId{42};
+    request.metadata.object = {cache::OriginId{1},
+                               "bucket",
+                               "objects/published",
+                               {cache::VersionSelectorType::VERSION_ID, "version-1"}};
+    request.metadata.objectSize = 4096;
+    request.metadata.tableId = flat::ChainTableId{2};
+    request.metadata.blockSize = 4096;
+    request.metadata.stripeSize = 1;
+    request.metadata.permission = p644;
+    request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto &meta = cluster.meta().getOperator();
+    CO_ASSERT_ERROR(co_await meta.publishOriginFileFromStaging(request), MetaCode::kNoPermission);
+
+    request.service.token = std::string{kServiceToken};
+    request.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+    CO_ASSERT_ERROR(co_await meta.publishOriginFileFromStaging(request), CacheCode::kUpgradeRequired);
+    request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    CO_ASSERT_ERROR(co_await meta.publishOriginFileFromStaging(request), MetaCode::kInvalidFileLayout);
+  }());
+}
+
 }  // namespace
 }  // namespace hf3fs::meta::server

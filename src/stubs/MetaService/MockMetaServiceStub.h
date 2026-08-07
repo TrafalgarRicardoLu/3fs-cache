@@ -95,6 +95,7 @@ class DummyMetaServiceStub : public IMetaServiceStub {
   NOT_IMPLEMENTED_FUNC(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
   NOT_IMPLEMENTED_FUNC(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
   NOT_IMPLEMENTED_FUNC(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
+  NOT_IMPLEMENTED_FUNC(publishOriginFileFromStaging, PublishOriginFileFromStagingReq, PublishOriginFileFromStagingRsp);
 
   virtual CoTryTask<AuthRsp> authenticate(const AuthReq &req) { co_return AuthRsp{req.user}; }
   CoTryTask<AuthRsp> authenticate(const AuthReq &req, const net::UserRequestOptions &, serde::Timestamp *) override {
@@ -228,6 +229,7 @@ class MetaServiceStub<hf3fs::stubs::StubMockContext<IMetaServiceStub>> : public 
   FORWARD_RPC_FUNC(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
   FORWARD_RPC_FUNC(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
   FORWARD_RPC_FUNC(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
+  FORWARD_RPC_FUNC(publishOriginFileFromStaging, PublishOriginFileFromStagingReq, PublishOriginFileFromStagingRsp);
 
 #undef FORWARD_RPC_FUNC
 
