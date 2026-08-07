@@ -45,6 +45,9 @@ class Config : public ConfigBase<Config> {
     if (enable_phase3() && !enable_phase2()) {
       return makeError(StatusCode::kInvalidConfig, "cache phase three requires phase two");
     }
+    if (enable_phase4() && !enable_phase3()) {
+      return makeError(StatusCode::kInvalidConfig, "cache phase four requires phase three");
+    }
     if (phase3_active_pin_ttl() <= phase3_pin_renew_interval()) {
       return makeError(StatusCode::kInvalidConfig, "cache phase three active pin TTL must exceed its renew interval");
     }
@@ -89,6 +92,7 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(service_name, std::string{"cache-manager"});
   CONFIG_ITEM(enable_phase2, false);
   CONFIG_ITEM(enable_phase3, false);
+  CONFIG_ITEM(enable_phase4, false);
   CONFIG_ITEM(service_token, std::string{});
   CONFIG_ITEM(global_concurrency, uint32_t{64}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(max_inflight_bytes, uint64_t{1_GB}, ConfigCheckers::checkPositive);
@@ -125,6 +129,10 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(evicting_scan_interval, 5_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(evicting_page_size, uint32_t{1000}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(storage_permit_ttl, 60_s, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(lease_recovery_interval, 5_s, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(lease_recovery_page_size, uint32_t{1000}, [](uint32_t value) {
+    return value > 0 && value <= cache::kMaxPhase2BatchItems;
+  });
   CONFIG_ITEM(access_flush_threshold, uint32_t{256}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(access_flush_batch_size, uint32_t{512}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(access_max_entries, uint32_t{65536}, ConfigCheckers::checkPositive);

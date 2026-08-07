@@ -158,6 +158,25 @@ CoTryTask<void> RealCacheManagerBackend::cancelQueuedAdmission(const cache::Cach
   co_return Void{};
 }
 
+CoTryTask<meta::CacheBlockMutationResult> RealCacheManagerBackend::recoverExpiredLoad(
+    const meta::RecoverExpiredCacheLoadItem &item) {
+  meta::RecoverExpiredCacheLoadsReq request;
+  request.service = service();
+  request.items.push_back(item);
+  request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto response = co_await metaClient_->recoverExpiredCacheLoads(std::move(request));
+  CO_RETURN_ON_ERROR(response);
+  if (response->results.size() != 1) {
+    co_return makeError(CacheCode::kInvalidResponse, "invalid expired loading recovery result count");
+  }
+  CO_RETURN_ON_ERROR(response->results.front());
+  if (response->results.front()->key != item.key ||
+      response->results.front()->state != cache::CacheBlockState::CLEANING) {
+    co_return makeError(CacheCode::kInvalidResponse, "invalid expired loading recovery result");
+  }
+  co_return *response->results.front();
+}
+
 CoTryTask<meta::UpdateCacheBlockAccessRsp> RealCacheManagerBackend::updateAccess(
     std::vector<meta::UpdateCacheBlockAccessItem> items) {
   meta::UpdateCacheBlockAccessReq request;

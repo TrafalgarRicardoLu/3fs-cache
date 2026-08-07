@@ -2,6 +2,9 @@
 
 #include <limits>
 
+#include "cache/metrics/CacheMetrics.h"
+#include "cache_manager/cleanup/CacheCleanupWorker.h"
+
 namespace hf3fs::cache_manager {
 namespace {
 
@@ -18,13 +21,17 @@ PermitRecovery::PermitRecovery(std::shared_ptr<CacheManagerBackend> backend,
                                Uuid managerEpoch,
                                Duration permitTtl,
                                uint32_t pageSize,
-                               WallClockNsFn wallClockNs)
+                               WallClockNsFn wallClockNs,
+                               CacheCleanupWorker *cleanupWorker,
+                               bool recoverLoading)
     : backend_(std::move(backend)),
       hints_(hints),
       managerEpoch_(managerEpoch),
       permitTtl_(permitTtl),
       pageSize_(pageSize),
-      wallClockNs_(std::move(wallClockNs)) {}
+      wallClockNs_(std::move(wallClockNs)),
+      cleanupWorker_(cleanupWorker),
+      recoverLoading_(recoverLoading) {}
 
 CoTryTask<void> PermitRecovery::attach(const meta::RecoverableCachePermit &item) {
   (void)hints_.enqueue(
@@ -38,15 +45,57 @@ CoTryTask<void> PermitRecovery::cancel(const meta::RecoverableCachePermit &item)
   co_return Void{};
 }
 
+CoTryTask<void> PermitRecovery::recoverLoading(const meta::RecoverableCachePermit &item, uint64_t nowNs) {
+  if (!cleanupWorker_ || item.leaseExpiresAt.isZero() || item.cacheGeneration == cache::CacheGeneration{} ||
+      !item.placement || *item.placement != item.permit.placement) {
+    co_return makeError(CacheCode::kInvalidResponse, "loading recovery item is missing its phase four fence");
+  }
+  auto leaseUs = item.leaseExpiresAt.toMicroseconds();
+  if (leaseUs <= 0 || static_cast<uint64_t>(leaseUs) > std::numeric_limits<uint64_t>::max() / 1000) {
+    co_return makeError(CacheCode::kInvalidResponse, "invalid loading recovery lease deadline");
+  }
+  if (static_cast<uint64_t>(leaseUs) * 1000 > nowNs) {
+    cache::metrics::recordCount(cache::metrics::Event::MANAGER_LEASE_RECOVERY, 1, {.reason = "deferred"});
+    co_return Void{};
+  }
+
+  meta::RecoverExpiredCacheLoadItem recovery;
+  recovery.key = item.key;
+  recovery.loaderId = item.loaderId;
+  recovery.loadEpoch = item.loadEpoch;
+  recovery.expectedLeaseExpiresAt = item.leaseExpiresAt;
+  recovery.expectedGeneration = item.cacheGeneration;
+  recovery.expectedPermit = item.permit;
+  recovery.expectedPlacement = *item.placement;
+  recovery.terminalState = cache::CleanupTerminalState::REENQUEUE;
+  auto recovered = co_await backend_->recoverExpiredLoad(recovery);
+  CO_RETURN_ON_ERROR(recovered);
+  if (recovered->key != item.key || recovered->state != cache::CacheBlockState::CLEANING) {
+    co_return makeError(CacheCode::kInvalidResponse, "expired loading recovery did not enter cleanup");
+  }
+  meta::BeginCleanCacheBlockItem cleanup;
+  cleanup.key = item.key;
+  cleanup.terminalState = cache::CleanupTerminalState::REENQUEUE;
+  CO_RETURN_ON_ERROR(co_await cleanupWorker_->clean(cleanup));
+  auto released = co_await backend_->releasePermit(item.permit);
+  if (released.hasError() && !missingPermit(released.error())) CO_RETURN_ERROR(released);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_LEASE_RECOVERY, 1, {.reason = "recovered"});
+  co_return Void{};
+}
+
 CoTryTask<void> PermitRecovery::recover(const meta::RecoverableCachePermit &item,
                                         uint64_t nowNs,
                                         uint64_t expiresAtNs) {
   CO_RETURN_ON_ERROR(item.valid());
   auto queried = co_await backend_->queryPermit(item.permit);
+  if (queried && queried->permit != item.permit) {
+    co_return makeError(CacheCode::kInvalidResponse, "queried cache permit identity changed");
+  }
   if (queried && queried->state == cache::CachePermitState::PINNED) {
     if (item.state == cache::CacheBlockState::QUEUED) {
       co_return makeError(CacheCode::kStateConflict, "queued cache permit is unexpectedly executing");
     }
+    if (recoverLoading_) co_return co_await recoverLoading(item, nowNs);
     co_return Void{};
   }
   if (queried && queried->state == cache::CachePermitState::RESERVED && queried->expiresAtNs > nowNs) {
@@ -56,10 +105,14 @@ CoTryTask<void> PermitRecovery::recover(const meta::RecoverableCachePermit &item
       co_return makeError(CacheCode::kPermitExpired, "recovered permit did not remain reserved");
     }
     if (item.state == cache::CacheBlockState::QUEUED) co_return co_await attach(item);
+    if (recoverLoading_) co_return co_await recoverLoading(item, nowNs);
     co_return Void{};
   }
   if (queried.hasError() && !missingPermit(queried.error())) co_return makeError(queried.error());
-  if (item.state == cache::CacheBlockState::LOADING) co_return Void{};
+  if (item.state == cache::CacheBlockState::LOADING) {
+    if (recoverLoading_) co_return co_await recoverLoading(item, nowNs);
+    co_return Void{};
+  }
 
   if (item.permit.permitGeneration == std::numeric_limits<uint64_t>::max()) {
     co_return co_await cancel(item);
@@ -127,7 +180,11 @@ CoTryTask<void> PermitRecovery::run() {
       if (ttlNs <= 0 || nowNs > std::numeric_limits<uint64_t>::max() - static_cast<uint64_t>(ttlNs)) {
         co_return makeError(CacheCode::kPermitExpired, "invalid cache permit recovery deadline");
       }
-      CO_RETURN_ON_ERROR(co_await recover(item, nowNs, nowNs + static_cast<uint64_t>(ttlNs)));
+      auto recovered = co_await recover(item, nowNs, nowNs + static_cast<uint64_t>(ttlNs));
+      if (recovered.hasError() && recoverLoading_ && item.state == cache::CacheBlockState::LOADING) {
+        cache::metrics::recordCount(cache::metrics::Event::MANAGER_LEASE_RECOVERY, 1, {.reason = "failed"});
+      }
+      CO_RETURN_ON_ERROR(recovered);
       cursor = item.key;
     }
     if (!page->more) break;

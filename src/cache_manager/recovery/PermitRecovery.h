@@ -8,6 +8,8 @@
 
 namespace hf3fs::cache_manager {
 
+class CacheCleanupWorker;
+
 class PermitRecovery {
  public:
   using WallClockNsFn = std::function<uint64_t()>;
@@ -17,7 +19,9 @@ class PermitRecovery {
                  Uuid managerEpoch,
                  Duration permitTtl,
                  uint32_t pageSize = 1000,
-                 WallClockNsFn wallClockNs = {});
+                 WallClockNsFn wallClockNs = {},
+                 CacheCleanupWorker *cleanupWorker = nullptr,
+                 bool recoverLoading = false);
 
   CoTryTask<void> run();
 
@@ -25,6 +29,7 @@ class PermitRecovery {
   CoTryTask<void> recover(const meta::RecoverableCachePermit &item, uint64_t nowNs, uint64_t expiresAtNs);
   CoTryTask<void> attach(const meta::RecoverableCachePermit &item);
   CoTryTask<void> cancel(const meta::RecoverableCachePermit &item);
+  CoTryTask<void> recoverLoading(const meta::RecoverableCachePermit &item, uint64_t nowNs);
 
   std::shared_ptr<CacheManagerBackend> backend_;
   HintCoalescer &hints_;
@@ -32,6 +37,8 @@ class PermitRecovery {
   Duration permitTtl_;
   uint32_t pageSize_;
   WallClockNsFn wallClockNs_;
+  CacheCleanupWorker *cleanupWorker_;
+  bool recoverLoading_;
 };
 
 }  // namespace hf3fs::cache_manager

@@ -63,6 +63,7 @@ monitor::CountRecorder &countRecorder(Event event) {
     CACHE_COUNT_RECORDER(MANAGER_SPACE_QUERY, "cache.manager.space_query");
     CACHE_COUNT_RECORDER(MANAGER_PREFLIGHT_RESULT, "cache.manager.preflight_result");
     CACHE_COUNT_RECORDER(MANAGER_EVICTION_RESULT, "cache.manager.eviction_result");
+    CACHE_COUNT_RECORDER(MANAGER_LEASE_RECOVERY, "cache.manager.lease_recovery");
     CACHE_COUNT_RECORDER(MANAGER_ORCHESTRATION_TICK, "cache.manager.orchestration_tick");
     CACHE_COUNT_RECORDER(MANAGER_JOB_QUOTA_WAIT, "cache.manager.job_quota_wait");
     CACHE_COUNT_RECORDER(MANAGER_JOB_CANCEL, "cache.manager.job_cancel");

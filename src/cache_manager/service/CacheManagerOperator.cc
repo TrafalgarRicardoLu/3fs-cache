@@ -68,7 +68,14 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     RETURN_ON_ERROR(admissionPolicy);
     admissionPolicy_ = std::move(*admissionPolicy);
     managerEpoch_ = Uuid::random();
-    permitRecovery_ = std::make_unique<PermitRecovery>(backend_, hints_, managerEpoch_, config_.storage_permit_ttl());
+    permitRecovery_ = std::make_unique<PermitRecovery>(backend_,
+                                                       hints_,
+                                                       managerEpoch_,
+                                                       config_.storage_permit_ttl(),
+                                                       config_.lease_recovery_page_size(),
+                                                       PermitRecovery::WallClockNsFn{},
+                                                       cleanupWorker_.get(),
+                                                       config_.enable_phase4());
     auto recovered = folly::coro::blockingWait(permitRecovery_->run());
     RETURN_ON_ERROR(recovered);
     AccessFlushWorker::Config accessConfig;
@@ -230,6 +237,18 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
       if (accessFlushWorker_) accessFlushWorker_->stop();
       return makeError(StatusCode::kQueueConflict, "failed to start EVICTING recovery worker");
     }
+  }
+  if (config_.enable_phase4() && !scheduler->start(
+                                     "CacheManagerLeaseRecovery",
+                                     [this]() -> CoTask<void> {
+                                       auto result = co_await permitRecovery_->run();
+                                       if (result.hasError())
+                                         XLOGF(WARN, "LOADING lease recovery iteration failed: {}", result.error());
+                                     },
+                                     [this] { return config_.lease_recovery_interval(); })) {
+    folly::coro::blockingWait(scheduler->stopAll());
+    if (accessFlushWorker_) accessFlushWorker_->stop();
+    return makeError(StatusCode::kQueueConflict, "failed to start LOADING lease recovery worker");
   }
   if (orchestration_) {
     auto startWorker = [&](String name, auto task, Duration interval) {
