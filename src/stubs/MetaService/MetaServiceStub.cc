@@ -82,6 +82,7 @@ IMPL_META_STUB_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp
 IMPL_META_STUB_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
 IMPL_META_STUB_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
 IMPL_META_STUB_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
+IMPL_META_STUB_METHOD(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
 
 template class MetaServiceStub<serde::ClientContext>;
 template class MetaServiceStub<serde::ClientMockContext>;

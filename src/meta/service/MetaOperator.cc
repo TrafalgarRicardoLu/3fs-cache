@@ -495,6 +495,13 @@ CoTryTask<CheckpointUploadPartRsp> MetaOperator::checkpointUploadPart(Checkpoint
   co_return co_await runOp(&MetaStore::checkpointUploadPart, req);
 }
 
+CoTryTask<MutateMultipartUploadRsp> MetaOperator::mutateMultipartUpload(MutateMultipartUploadReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::mutateMultipartUpload, req);
+}
+
 CoTryTask<MkdirsRsp> MetaOperator::mkdirs(MkdirsReq req) {
   AUTHENTICATE(req.user);
   co_return co_await runOp(&MetaStore::mkdirs, req);

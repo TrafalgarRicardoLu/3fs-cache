@@ -946,6 +946,49 @@ struct CheckpointUploadPartRsp : RspBase {
   SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
 };
 
+enum class MultipartUploadMutation : uint8_t {
+  INVALID = 0,
+  PREPARE_COMPLETE = 1,
+  SAVE_COMPLETED = 2,
+  BEGIN_ABORT = 3,
+  FINISH_ABORT = 4,
+};
+
+struct MutateMultipartUploadReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(expectedStateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(multipartId, std::string{});
+  SERDE_STRUCT_FIELD(mutation, MultipartUploadMutation::INVALID);
+  SERDE_STRUCT_FIELD(completedObject, std::optional<cache::ImmutableObjectIdentity>{});
+  SERDE_STRUCT_FIELD(error, std::string{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || multipartId.empty() ||
+        multipartId.size() > cache::kMaxMultipartUploadIdBytes || multipartId.find('\0') != std::string::npos ||
+        error.size() > cache::kMaxUploadErrorBytes || error.find('\0') != std::string::npos ||
+        mutation > MultipartUploadMutation::FINISH_ABORT) {
+      return INVALID("invalid multipart upload mutation fence");
+    }
+    if (mutation == MultipartUploadMutation::SAVE_COMPLETED) {
+      if (!completedObject || !error.empty()) return INVALID("completed upload mutation has invalid result");
+      return completedObject->valid();
+    }
+    if (completedObject || (mutation == MultipartUploadMutation::BEGIN_ABORT) != !error.empty() ||
+        mutation == MultipartUploadMutation::INVALID) {
+      return INVALID("multipart upload mutation has invalid fields");
+    }
+    return VALID;
+  }
+};
+
+struct MutateMultipartUploadRsp : RspBase {
+  SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
+};
+
 struct ReadBlockPlan {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(fileRange, cache::ByteRange{});
@@ -2103,6 +2146,7 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(recoverExpiredWriteStaging, 64, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
   META_SERVICE_METHOD(beginMultipartUpload, 65, BeginMultipartUploadReq, BeginMultipartUploadRsp);
   META_SERVICE_METHOD(checkpointUploadPart, 66, CheckpointUploadPartReq, CheckpointUploadPartRsp);
+  META_SERVICE_METHOD(mutateMultipartUpload, 67, MutateMultipartUploadReq, MutateMultipartUploadRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

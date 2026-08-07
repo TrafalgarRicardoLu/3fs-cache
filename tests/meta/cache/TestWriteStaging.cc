@@ -381,6 +381,78 @@ TEST_F(TestWriteStaging, BeginsAndCheckpointsMultipartProgressWithIdempotentFenc
     CO_ASSERT_OK(tail);
     CO_ASSERT_EQ(tail->job.parts.size(), 2);
     CO_ASSERT_EQ(tail->job.nextPartNumber, 3);
+
+    MutateMultipartUploadReq mutation;
+    mutation.service = begin.service;
+    mutation.jobId = tail->job.jobId;
+    mutation.expectedStateVersion = tail->job.stateVersion;
+    mutation.multipartId = tail->job.multipartId;
+    mutation.mutation = MultipartUploadMutation::PREPARE_COMPLETE;
+    mutation.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto completing = co_await meta.mutateMultipartUpload(mutation);
+    CO_ASSERT_OK(completing);
+    CO_ASSERT_EQ(completing->job.state, cache::UploadJobState::COMPLETING);
+    auto prepareRetry = co_await meta.mutateMultipartUpload(mutation);
+    CO_ASSERT_OK(prepareRetry);
+    CO_ASSERT_EQ(prepareRetry->job, completing->job);
+
+    mutation.expectedStateVersion = completing->job.stateVersion;
+    mutation.mutation = MultipartUploadMutation::SAVE_COMPLETED;
+    mutation.completedObject = cache::ImmutableObjectIdentity{cache::OriginId{1},
+                                                              "bucket",
+                                                              "objects/staged",
+                                                              {cache::VersionSelectorType::VERSION_ID, "version-1"}};
+    auto publishing = co_await meta.mutateMultipartUpload(mutation);
+    CO_ASSERT_OK(publishing);
+    CO_ASSERT_EQ(publishing->job.state, cache::UploadJobState::PUBLISHING);
+    CO_ASSERT_EQ(publishing->job.completedObject, mutation.completedObject);
+  }());
+}
+
+TEST_F(TestWriteStaging, AbortsMultipartProgressIdempotently) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    enableWriteStaging(cluster);
+    auto &meta = cluster.meta().getOperator();
+    auto created = co_await meta.createWriteStaging(stagingReq("/abort", cache::UploadJobId{Uuid::from(35, 36)}));
+    CO_ASSERT_OK(created);
+    CO_ASSERT_OK(co_await setStagingLength(this->kvEngine(), created->inode.id, VersionedLength{4096, 0}));
+    auto sealed = co_await meta.sealWriteStaging(sealReq(*created, VersionedLength{4096, 0}));
+    CO_ASSERT_OK(sealed);
+
+    BeginMultipartUploadReq begin;
+    begin.service = {std::string{kServiceName}, std::string{kServiceToken}};
+    begin.jobId = sealed->job.jobId;
+    begin.expectedStateVersion = sealed->job.stateVersion;
+    begin.multipartId = "upload-abort";
+    begin.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto begun = co_await meta.beginMultipartUpload(begin);
+    CO_ASSERT_OK(begun);
+
+    MutateMultipartUploadReq mutation;
+    mutation.service = begin.service;
+    mutation.jobId = begun->job.jobId;
+    mutation.expectedStateVersion = begun->job.stateVersion;
+    mutation.multipartId = begun->job.multipartId;
+    mutation.mutation = MultipartUploadMutation::BEGIN_ABORT;
+    mutation.error = "cancelled by test";
+    mutation.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto aborting = co_await meta.mutateMultipartUpload(mutation);
+    CO_ASSERT_OK(aborting);
+    CO_ASSERT_EQ(aborting->job.state, cache::UploadJobState::ABORTING);
+    auto abortRetry = co_await meta.mutateMultipartUpload(mutation);
+    CO_ASSERT_OK(abortRetry);
+    CO_ASSERT_EQ(abortRetry->job, aborting->job);
+
+    mutation.expectedStateVersion = aborting->job.stateVersion;
+    mutation.mutation = MultipartUploadMutation::FINISH_ABORT;
+    mutation.error.clear();
+    auto cancelled = co_await meta.mutateMultipartUpload(mutation);
+    CO_ASSERT_OK(cancelled);
+    CO_ASSERT_EQ(cancelled->job.state, cache::UploadJobState::CANCELLED);
+    auto finishRetry = co_await meta.mutateMultipartUpload(mutation);
+    CO_ASSERT_OK(finishRetry);
+    CO_ASSERT_EQ(finishRetry->job, cancelled->job);
   }());
 }
 

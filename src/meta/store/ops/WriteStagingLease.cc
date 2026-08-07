@@ -303,6 +303,101 @@ class CheckpointUploadPartOp : public Operation<CheckpointUploadPartRsp> {
   const CheckpointUploadPartReq &req_;
 };
 
+class MutateMultipartUploadOp : public Operation<MutateMultipartUploadRsp> {
+ public:
+  MutateMultipartUploadOp(MetaStore &meta, const MutateMultipartUploadReq &req)
+      : Operation<MutateMultipartUploadRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<MutateMultipartUploadRsp> run(IReadWriteTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto loaded = co_await UploadJobStore::load(txn, req_.jobId);
+    CO_RETURN_ON_ERROR(loaded);
+    if (!loaded->has_value()) co_return makeError(CacheCode::kNotFound, "upload job not found");
+    auto job = std::move(**loaded);
+    if (job.multipartId != req_.multipartId) {
+      co_return makeError(CacheCode::kStateConflict, "multipart upload identity changed");
+    }
+    if (job.stateVersion == req_.expectedStateVersion + 1 && retryMatches(job)) {
+      MutateMultipartUploadRsp response;
+      response.job = std::move(job);
+      co_return response;
+    }
+    if (job.stateVersion != req_.expectedStateVersion) {
+      co_return makeError(CacheCode::kStateConflict, "multipart upload mutation fence changed");
+    }
+    CO_RETURN_ON_ERROR(apply(job));
+    auto now = nowMs();
+    if (now == 0) co_return makeError(StatusCode::kDataCorruption, "invalid metadata clock");
+    auto expectedVersion = job.stateVersion;
+    job.stateVersion++;
+    job.updatedAtMs = std::max(job.updatedAtMs, now);
+    auto updated = co_await UploadJobStore::update(txn, expectedVersion, job);
+    CO_RETURN_ON_ERROR(updated);
+    MutateMultipartUploadRsp response;
+    response.job = std::move(*updated);
+    co_return response;
+  }
+
+ private:
+  bool retryMatches(const cache::UploadJobRecord &job) const {
+    switch (req_.mutation) {
+      case MultipartUploadMutation::PREPARE_COMPLETE:
+        return job.state == cache::UploadJobState::COMPLETING;
+      case MultipartUploadMutation::SAVE_COMPLETED:
+        return job.state == cache::UploadJobState::PUBLISHING && job.completedObject == req_.completedObject;
+      case MultipartUploadMutation::BEGIN_ABORT:
+        return job.state == cache::UploadJobState::ABORTING && job.error == req_.error;
+      case MultipartUploadMutation::FINISH_ABORT:
+        return job.state == cache::UploadJobState::CANCELLED;
+      default:
+        return false;
+    }
+  }
+
+  Result<Void> apply(cache::UploadJobRecord &job) const {
+    uint64_t uploaded = 0;
+    for (const auto &part : job.parts) uploaded += part.size;
+    switch (req_.mutation) {
+      case MultipartUploadMutation::PREPARE_COMPLETE:
+        if (job.state != cache::UploadJobState::UPLOADING || uploaded != job.stagingLength) {
+          return makeError(CacheCode::kStateConflict, "multipart upload is not fully checkpointed");
+        }
+        job.state = cache::UploadJobState::COMPLETING;
+        return Void{};
+      case MultipartUploadMutation::SAVE_COMPLETED:
+        if (job.state != cache::UploadJobState::COMPLETING || !req_.completedObject ||
+            req_.completedObject->originId != job.destination.originId ||
+            req_.completedObject->bucket != job.destination.bucket ||
+            req_.completedObject->key != job.destination.key || uploaded != job.stagingLength) {
+          return makeError(CacheCode::kStateConflict, "completed object does not match staged upload");
+        }
+        job.completedObject = req_.completedObject;
+        job.state = cache::UploadJobState::PUBLISHING;
+        return Void{};
+      case MultipartUploadMutation::BEGIN_ABORT:
+        if (job.state != cache::UploadJobState::UPLOADING && job.state != cache::UploadJobState::COMPLETING) {
+          return makeError(CacheCode::kStateConflict, "multipart upload cannot enter aborting");
+        }
+        job.error = req_.error;
+        job.state = cache::UploadJobState::ABORTING;
+        return Void{};
+      case MultipartUploadMutation::FINISH_ABORT:
+        if (job.state != cache::UploadJobState::ABORTING) {
+          return makeError(CacheCode::kStateConflict, "multipart upload is not aborting");
+        }
+        job.state = cache::UploadJobState::CANCELLED;
+        return Void{};
+      default:
+        return makeError(StatusCode::kInvalidArg, "invalid multipart upload mutation");
+    }
+  }
+
+  const MutateMultipartUploadReq &req_;
+};
+
 MetaStore::OpPtr<RenewWriteStagingLeaseRsp> MetaStore::renewWriteStagingLease(const RenewWriteStagingLeaseReq &req) {
   return std::make_unique<RenewWriteStagingLeaseOp>(*this, req);
 }
@@ -322,6 +417,10 @@ MetaStore::OpPtr<BeginMultipartUploadRsp> MetaStore::beginMultipartUpload(const 
 
 MetaStore::OpPtr<CheckpointUploadPartRsp> MetaStore::checkpointUploadPart(const CheckpointUploadPartReq &req) {
   return std::make_unique<CheckpointUploadPartOp>(*this, req);
+}
+
+MetaStore::OpPtr<MutateMultipartUploadRsp> MetaStore::mutateMultipartUpload(const MutateMultipartUploadReq &req) {
+  return std::make_unique<MutateMultipartUploadOp>(*this, req);
 }
 
 }  // namespace hf3fs::meta::server
