@@ -220,6 +220,89 @@ class RecoverExpiredWriteStagingOp : public Operation<RecoverExpiredWriteStaging
   const RecoverExpiredWriteStagingReq &req_;
 };
 
+class BeginMultipartUploadOp : public Operation<BeginMultipartUploadRsp> {
+ public:
+  BeginMultipartUploadOp(MetaStore &meta, const BeginMultipartUploadReq &req)
+      : Operation<BeginMultipartUploadRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<BeginMultipartUploadRsp> run(IReadWriteTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto loaded = co_await UploadJobStore::load(txn, req_.jobId);
+    CO_RETURN_ON_ERROR(loaded);
+    if (!loaded->has_value()) co_return makeError(CacheCode::kNotFound, "upload job not found");
+    auto job = std::move(**loaded);
+    if (job.state == cache::UploadJobState::UPLOADING && job.stateVersion == req_.expectedStateVersion + 1 &&
+        job.multipartId == req_.multipartId) {
+      BeginMultipartUploadRsp response;
+      response.job = std::move(job);
+      co_return response;
+    }
+    if (job.state != cache::UploadJobState::SEALED || job.stateVersion != req_.expectedStateVersion ||
+        !job.multipartId.empty() || !job.parts.empty() || job.nextPartNumber != 1) {
+      co_return makeError(CacheCode::kStateConflict, "upload job start fence changed");
+    }
+    auto now = nowMs();
+    if (now == 0) co_return makeError(StatusCode::kDataCorruption, "invalid metadata clock");
+    job.state = cache::UploadJobState::UPLOADING;
+    job.stateVersion++;
+    job.updatedAtMs = std::max(job.updatedAtMs, now);
+    job.multipartId = req_.multipartId;
+    auto updated = co_await UploadJobStore::update(txn, req_.expectedStateVersion, job);
+    CO_RETURN_ON_ERROR(updated);
+    BeginMultipartUploadRsp response;
+    response.job = std::move(*updated);
+    co_return response;
+  }
+
+ private:
+  const BeginMultipartUploadReq &req_;
+};
+
+class CheckpointUploadPartOp : public Operation<CheckpointUploadPartRsp> {
+ public:
+  CheckpointUploadPartOp(MetaStore &meta, const CheckpointUploadPartReq &req)
+      : Operation<CheckpointUploadPartRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<CheckpointUploadPartRsp> run(IReadWriteTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto loaded = co_await UploadJobStore::load(txn, req_.jobId);
+    CO_RETURN_ON_ERROR(loaded);
+    if (!loaded->has_value()) co_return makeError(CacheCode::kNotFound, "upload job not found");
+    auto job = std::move(**loaded);
+    if (job.state == cache::UploadJobState::UPLOADING && job.stateVersion == req_.expectedStateVersion + 1 &&
+        job.multipartId == req_.multipartId && req_.part.partNumber <= job.parts.size() &&
+        job.parts[req_.part.partNumber - 1] == req_.part) {
+      CheckpointUploadPartRsp response;
+      response.job = std::move(job);
+      co_return response;
+    }
+    if (job.state != cache::UploadJobState::UPLOADING || job.stateVersion != req_.expectedStateVersion ||
+        job.multipartId != req_.multipartId || req_.part.partNumber != job.nextPartNumber) {
+      co_return makeError(CacheCode::kStateConflict, "upload part checkpoint fence changed");
+    }
+    auto now = nowMs();
+    if (now == 0) co_return makeError(StatusCode::kDataCorruption, "invalid metadata clock");
+    job.parts.push_back(req_.part);
+    job.nextPartNumber++;
+    job.stateVersion++;
+    job.updatedAtMs = std::max(job.updatedAtMs, now);
+    auto updated = co_await UploadJobStore::update(txn, req_.expectedStateVersion, job);
+    CO_RETURN_ON_ERROR(updated);
+    CheckpointUploadPartRsp response;
+    response.job = std::move(*updated);
+    co_return response;
+  }
+
+ private:
+  const CheckpointUploadPartReq &req_;
+};
+
 MetaStore::OpPtr<RenewWriteStagingLeaseRsp> MetaStore::renewWriteStagingLease(const RenewWriteStagingLeaseReq &req) {
   return std::make_unique<RenewWriteStagingLeaseOp>(*this, req);
 }
@@ -231,6 +314,14 @@ MetaStore::OpPtr<SealWriteStagingRsp> MetaStore::sealWriteStaging(const SealWrit
 MetaStore::OpPtr<RecoverExpiredWriteStagingRsp> MetaStore::recoverExpiredWriteStaging(
     const RecoverExpiredWriteStagingReq &req) {
   return std::make_unique<RecoverExpiredWriteStagingOp>(*this, req);
+}
+
+MetaStore::OpPtr<BeginMultipartUploadRsp> MetaStore::beginMultipartUpload(const BeginMultipartUploadReq &req) {
+  return std::make_unique<BeginMultipartUploadOp>(*this, req);
+}
+
+MetaStore::OpPtr<CheckpointUploadPartRsp> MetaStore::checkpointUploadPart(const CheckpointUploadPartReq &req) {
+  return std::make_unique<CheckpointUploadPartOp>(*this, req);
 }
 
 }  // namespace hf3fs::meta::server

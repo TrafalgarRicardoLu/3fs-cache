@@ -80,6 +80,8 @@ class MetaServiceStub : public IMetaServiceStub {
   META_STUB_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   META_STUB_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
   META_STUB_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  META_STUB_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
+  META_STUB_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
 
 #undef META_STUB_METHOD
 

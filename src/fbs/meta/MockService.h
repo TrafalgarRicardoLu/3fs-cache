@@ -76,6 +76,8 @@ class MockMetaService : public serde::ServiceWrapper<MockMetaService, MetaSerde>
   META_MOCK_SERVICE_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   META_MOCK_SERVICE_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
   META_MOCK_SERVICE_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  META_MOCK_SERVICE_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
+  META_MOCK_SERVICE_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
   META_MOCK_SERVICE_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
   META_MOCK_SERVICE_METHOD(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
   META_MOCK_SERVICE_METHOD(listReconcileCacheBlocks, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);

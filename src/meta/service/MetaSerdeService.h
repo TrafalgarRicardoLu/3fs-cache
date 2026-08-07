@@ -78,6 +78,8 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
   META_SERVICE_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   META_SERVICE_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
   META_SERVICE_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  META_SERVICE_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
+  META_SERVICE_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
 #undef META_SERVICE_METHOD
 
  private:

@@ -785,6 +785,18 @@ struct RefreshOriginFileRsp : RspBase {
   SERDE_STRUCT_FIELD(cleanupJobId, Uuid::zero());
 };
 
+struct CacheServiceIdentity {
+  SERDE_STRUCT_FIELD(name, String{});
+  SERDE_STRUCT_FIELD(token, String{});
+
+ public:
+  Result<Void> valid() const {
+    if (name.empty() || token.empty()) return INVALID("invalid service identity");
+    return VALID;
+  }
+  std::string serdeToReadable() const { return std::string{name} + "@SECRET TOKEN"; }
+};
+
 enum class WriteStagingMode : uint8_t {
   INVALID = 0,
   SEQUENTIAL = 1,
@@ -889,6 +901,51 @@ struct RecoverExpiredWriteStagingRsp : RspBase {
   SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
 };
 
+struct BeginMultipartUploadReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(expectedStateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(multipartId, std::string{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || multipartId.empty() ||
+        multipartId.size() > cache::kMaxMultipartUploadIdBytes || multipartId.find('\0') != std::string::npos) {
+      return INVALID("invalid multipart upload start fence");
+    }
+    return VALID;
+  }
+};
+
+struct BeginMultipartUploadRsp : RspBase {
+  SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
+};
+
+struct CheckpointUploadPartReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(expectedStateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(multipartId, std::string{});
+  SERDE_STRUCT_FIELD(part, cache::CompletedUploadPart{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || multipartId.empty() ||
+        multipartId.size() > cache::kMaxMultipartUploadIdBytes || multipartId.find('\0') != std::string::npos) {
+      return INVALID("invalid multipart upload checkpoint fence");
+    }
+    return part.valid();
+  }
+};
+
+struct CheckpointUploadPartRsp : RspBase {
+  SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
+};
+
 struct ReadBlockPlan {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(fileRange, cache::ByteRange{});
@@ -921,18 +978,6 @@ struct GetFileReadPlanRsp : RspBase {
   SERDE_STRUCT_FIELD(inode, InodeId{});
   SERDE_STRUCT_FIELD(object, cache::ImmutableObjectIdentity{});
   SERDE_STRUCT_FIELD(blocks, std::vector<ReadBlockPlan>{});
-};
-
-struct CacheServiceIdentity {
-  SERDE_STRUCT_FIELD(name, String{});
-  SERDE_STRUCT_FIELD(token, String{});
-
- public:
-  Result<Void> valid() const {
-    if (name.empty() || token.empty()) return INVALID("invalid service identity");
-    return VALID;
-  }
-  std::string serdeToReadable() const { return std::string{name} + "@SECRET TOKEN"; }
 };
 
 struct CacheBlockRequestBase {
@@ -2056,6 +2101,8 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(renewWriteStagingLease, 62, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   META_SERVICE_METHOD(sealWriteStaging, 63, SealWriteStagingReq, SealWriteStagingRsp);
   META_SERVICE_METHOD(recoverExpiredWriteStaging, 64, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  META_SERVICE_METHOD(beginMultipartUpload, 65, BeginMultipartUploadReq, BeginMultipartUploadRsp);
+  META_SERVICE_METHOD(checkpointUploadPart, 66, CheckpointUploadPartReq, CheckpointUploadPartRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

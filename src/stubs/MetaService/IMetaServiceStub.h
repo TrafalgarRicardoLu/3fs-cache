@@ -83,6 +83,8 @@ class IMetaServiceStub {
   IMETA_STUB_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   IMETA_STUB_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
   IMETA_STUB_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  IMETA_STUB_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
+  IMETA_STUB_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
 
 #undef IMETA_STUB_METHOD
 };

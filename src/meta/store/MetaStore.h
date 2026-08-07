@@ -181,6 +181,8 @@ class MetaStore {
   OpPtr<RenewWriteStagingLeaseRsp> renewWriteStagingLease(const RenewWriteStagingLeaseReq &req);
   OpPtr<SealWriteStagingRsp> sealWriteStaging(const SealWriteStagingReq &req);
   OpPtr<RecoverExpiredWriteStagingRsp> recoverExpiredWriteStaging(const RecoverExpiredWriteStagingReq &req);
+  OpPtr<BeginMultipartUploadRsp> beginMultipartUpload(const BeginMultipartUploadReq &req);
+  OpPtr<CheckpointUploadPartRsp> checkpointUploadPart(const CheckpointUploadPartReq &req);
 
  private:
   template <typename>

@@ -92,6 +92,8 @@ class DummyMetaServiceStub : public IMetaServiceStub {
   NOT_IMPLEMENTED_FUNC(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   NOT_IMPLEMENTED_FUNC(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
   NOT_IMPLEMENTED_FUNC(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  NOT_IMPLEMENTED_FUNC(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
+  NOT_IMPLEMENTED_FUNC(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
 
   virtual CoTryTask<AuthRsp> authenticate(const AuthReq &req) { co_return AuthRsp{req.user}; }
   CoTryTask<AuthRsp> authenticate(const AuthReq &req, const net::UserRequestOptions &, serde::Timestamp *) override {
@@ -222,6 +224,8 @@ class MetaServiceStub<hf3fs::stubs::StubMockContext<IMetaServiceStub>> : public 
   FORWARD_RPC_FUNC(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   FORWARD_RPC_FUNC(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
   FORWARD_RPC_FUNC(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  FORWARD_RPC_FUNC(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
+  FORWARD_RPC_FUNC(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
 
 #undef FORWARD_RPC_FUNC
 

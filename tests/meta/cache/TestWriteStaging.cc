@@ -9,6 +9,9 @@
 namespace hf3fs::meta::server {
 namespace {
 
+constexpr std::string_view kServiceName = "cache-manager";
+constexpr std::string_view kServiceToken = "write-staging-test-token";
+
 class TestWriteStaging : public MetaTestBase<kv::mem::MemKV> {
  protected:
   MockCluster createCluster(bool cancelExpired = false) {
@@ -18,6 +21,8 @@ class TestWriteStaging : public MetaTestBase<kv::mem::MemKV> {
       value.mock_meta().set_enable_cache_phase2(true);
       value.mock_meta().set_enable_cache_phase3(true);
       value.mock_meta().set_enable_cache_phase4(true);
+      value.mock_meta().set_cache_service_name(std::string{kServiceName});
+      value.mock_meta().set_cache_service_token(std::string{kServiceToken});
       value.mock_meta().event_trace_log().set_enabled(false);
       return value;
     }();
@@ -322,6 +327,60 @@ TEST_F(TestWriteStaging, ExpiredLeaseRecoversOrCancelsWithExactFence) {
     CO_ASSERT_OK(cancelled);
     CO_ASSERT_EQ(cancelled->job.state, cache::UploadJobState::CANCELLED);
     CO_ASSERT_TRUE(cancelled->inode.acl.iflags & FS_IMMUTABLE_FL);
+  }());
+}
+
+TEST_F(TestWriteStaging, BeginsAndCheckpointsMultipartProgressWithIdempotentFences) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    enableWriteStaging(cluster);
+    auto &meta = cluster.meta().getOperator();
+    auto created = co_await meta.createWriteStaging(stagingReq("/multipart", cache::UploadJobId{Uuid::from(33, 34)}));
+    CO_ASSERT_OK(created);
+    CO_ASSERT_OK(co_await setStagingLength(this->kvEngine(), created->inode.id, VersionedLength{6144, 0}));
+    auto sealed = co_await meta.sealWriteStaging(sealReq(*created, VersionedLength{6144, 0}));
+    CO_ASSERT_OK(sealed);
+
+    BeginMultipartUploadReq begin;
+    begin.service = {std::string{kServiceName}, std::string{kServiceToken}};
+    begin.jobId = sealed->job.jobId;
+    begin.expectedStateVersion = sealed->job.stateVersion;
+    begin.multipartId = "upload-1";
+    begin.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto denied = begin;
+    denied.service.token = "wrong-token";
+    CO_ASSERT_ERROR(co_await meta.beginMultipartUpload(denied), MetaCode::kNoPermission);
+    auto begun = co_await meta.beginMultipartUpload(begin);
+    CO_ASSERT_OK(begun);
+    CO_ASSERT_EQ(begun->job.state, cache::UploadJobState::UPLOADING);
+    CO_ASSERT_EQ(begun->job.multipartId, begin.multipartId);
+    auto beginRetry = co_await meta.beginMultipartUpload(begin);
+    CO_ASSERT_OK(beginRetry);
+    CO_ASSERT_EQ(beginRetry->job, begun->job);
+
+    CheckpointUploadPartReq checkpoint;
+    checkpoint.service = begin.service;
+    checkpoint.jobId = begun->job.jobId;
+    checkpoint.expectedStateVersion = begun->job.stateVersion;
+    checkpoint.multipartId = begun->job.multipartId;
+    checkpoint.part = {1, 4096, "etag-1", "crc32c:00000001"};
+    checkpoint.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto first = co_await meta.checkpointUploadPart(checkpoint);
+    CO_ASSERT_OK(first);
+    CO_ASSERT_EQ(first->job.parts, std::vector<cache::CompletedUploadPart>{checkpoint.part});
+    CO_ASSERT_EQ(first->job.nextPartNumber, 2);
+    auto checkpointRetry = co_await meta.checkpointUploadPart(checkpoint);
+    CO_ASSERT_OK(checkpointRetry);
+    CO_ASSERT_EQ(checkpointRetry->job, first->job);
+
+    checkpoint.part.etag = "different";
+    CO_ASSERT_ERROR(co_await meta.checkpointUploadPart(checkpoint), CacheCode::kStateConflict);
+    checkpoint.expectedStateVersion = first->job.stateVersion;
+    checkpoint.part = {2, 2048, "etag-2", "crc32c:00000002"};
+    auto tail = co_await meta.checkpointUploadPart(checkpoint);
+    CO_ASSERT_OK(tail);
+    CO_ASSERT_EQ(tail->job.parts.size(), 2);
+    CO_ASSERT_EQ(tail->job.nextPartNumber, 3);
   }());
 }
 

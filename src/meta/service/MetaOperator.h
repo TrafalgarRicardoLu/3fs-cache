@@ -144,6 +144,8 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   CoTryTask<RenewWriteStagingLeaseRsp> renewWriteStagingLease(RenewWriteStagingLeaseReq req);
   CoTryTask<SealWriteStagingRsp> sealWriteStaging(SealWriteStagingReq req);
   CoTryTask<RecoverExpiredWriteStagingRsp> recoverExpiredWriteStaging(RecoverExpiredWriteStagingReq req);
+  CoTryTask<BeginMultipartUploadRsp> beginMultipartUpload(BeginMultipartUploadReq req);
+  CoTryTask<CheckpointUploadPartRsp> checkpointUploadPart(CheckpointUploadPartReq req);
   CoTryTask<UpsertCachePinsRsp> upsertCachePins(UpsertCachePinsReq req);
   CoTryTask<RemoveCachePinsRsp> removeCachePins(RemoveCachePinsReq req);
   CoTryTask<ListCachePinsByOwnerRsp> listCachePinsByOwner(ListCachePinsByOwnerReq req);

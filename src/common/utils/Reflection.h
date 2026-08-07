@@ -9,7 +9,7 @@
 
 namespace hf3fs::refl {
 
-template <size_t N = 64>
+template <size_t N = 128>
 struct Rank : Rank<N - 1> {};
 template <>
 struct Rank<0> {};

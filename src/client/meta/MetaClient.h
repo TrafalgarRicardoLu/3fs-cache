@@ -263,6 +263,8 @@ class MetaClient {
   CoTryTask<RenewWriteStagingLeaseRsp> renewWriteStagingLease(RenewWriteStagingLeaseReq req);
   CoTryTask<SealWriteStagingRsp> sealWriteStaging(SealWriteStagingReq req);
   CoTryTask<RecoverExpiredWriteStagingRsp> recoverExpiredWriteStaging(RecoverExpiredWriteStagingReq req);
+  CoTryTask<BeginMultipartUploadRsp> beginMultipartUpload(BeginMultipartUploadReq req);
+  CoTryTask<CheckpointUploadPartRsp> checkpointUploadPart(CheckpointUploadPartReq req);
 
   CoTryTask<Inode> extendStripe(const UserInfo &userInfo, InodeId inodeId, uint32_t stripe);
 
