@@ -11,6 +11,7 @@
 #include "common/utils/ConfigBase.h"
 #include "common/utils/LockManager.h"
 #include "common/utils/Path.h"
+#include "fbs/storage/Cache.h"
 #include "storage/aio/BatchReadJob.h"
 #include "storage/store/ChunkEngine.h"
 #include "storage/store/ChunkStore.h"
@@ -120,6 +121,7 @@ class StorageTarget : public enable_shared_from_this<StorageTarget> {
   Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(const ChunkId &chunkId);
   Result<std::optional<CacheChunkDescriptor>> queryCacheChunkDescriptor(const CacheChunkKey &key);
   Result<std::vector<LocalEvictionCandidate>> listActiveCacheChunks();
+  Result<std::vector<CacheInventoryEntry>> listCacheInventory();
   CoTryTask<bool> recordCacheAccess(const ChunkId &chunkId,
                                     cache::CacheGeneration generation,
                                     uint64_t observedAtNs,

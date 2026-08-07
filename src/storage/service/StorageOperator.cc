@@ -11,6 +11,7 @@
 #include "common/utils/Result.h"
 #include "common/utils/SemaphoreGuard.h"
 #include "storage/aio/BatchReadJob.h"
+#include "storage/cache/reconcile/CacheInventory.h"
 #include "storage/cache/retire/RetireCoordinator.h"
 #include "storage/service/CachePermitCoordinator.h"
 #include "storage/service/Components.h"
@@ -65,6 +66,9 @@ monitor::CountRecorder storageCacheRetireCount{"storage.cache.retire"};
 monitor::CountRecorder storageCacheTombstoneCount{"storage.cache.tombstone"};
 
 Result<Void> StorageOperator::init(uint32_t numberOfDisks) {
+  if (config_.enable_cache_phase4() && !config_.enable_cache_phase2()) {
+    return makeError(StatusCode::kInvalidConfig, "cache phase four requires phase two");
+  }
   if (config_.local_safety_low_watermark() <= 0.0 ||
       config_.local_safety_low_watermark() >= config_.local_safety_high_watermark() ||
       config_.local_safety_high_watermark() >= 1.0) {
@@ -1437,6 +1441,20 @@ CoTryTask<QueryCacheChunkGenerationsRsp> StorageOperator::queryCacheChunkGenerat
     response.results.push_back(std::move(result));
   }
   co_return response;
+}
+
+CoTryTask<ListCacheInventoryRsp> StorageOperator::listCacheInventory(const ListCacheInventoryReq &req) {
+  CO_RETURN_ON_ERROR(cache::checkPhase4Capability(req.cacheProtocolVersion, config_.enable_cache_phase4()));
+  CO_RETURN_ON_ERROR(req.valid());
+  auto target = components_.targetMap.getByTargetId(req.targetId);
+  CO_RETURN_ON_ERROR(target);
+  if (!(*target)->cacheData || (*target)->storageRole != StorageRole::CACHE_ONLY ||
+      (*target)->storageTarget == nullptr) {
+    co_return makeError(CacheCode::kRoleMismatch, "inventory target is not cache-only");
+  }
+  auto entries = (*target)->storageTarget->listCacheInventory();
+  CO_RETURN_ON_ERROR(entries);
+  co_return pageCacheInventory(std::move(*entries), req, inventoryInstanceEpoch_);
 }
 
 Result<std::vector<StorageOperator::LocalPermitDisk>> StorageOperator::resolveLocalPermitDisks(

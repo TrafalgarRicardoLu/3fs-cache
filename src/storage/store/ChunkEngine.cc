@@ -31,6 +31,40 @@ Result<std::vector<LocalEvictionCandidate>> ChunkEngine::listActiveCacheChunks(c
   }
   return result;
 }
+
+Result<std::vector<CacheInventoryEntry>> ChunkEngine::listCacheInventory(chunk_engine::Engine &engine,
+                                                                         TargetId targetId,
+                                                                         const PhysicalDiskId &physicalDiskId) {
+  std::string error;
+  auto chunks = engine.query_all_raw_chunks({}, error);
+  if (!error.empty()) return makeError(StorageCode::kChunkMetadataGetError, std::move(error));
+  std::vector<CacheInventoryEntry> result;
+  for (size_t i = 0; i < chunks->len(); ++i) {
+    auto rawId = chunks->chunk_id(i);
+    if (rawId.length() <= sizeof(ChainId)) continue;
+    auto tag = decodeCacheTag(chunks->chunk_etag(i));
+    if (!tag || tag->state != CacheChunkState::ACTIVE || !tag->descriptor || tag->descriptor->targetId != targetId ||
+        tag->descriptor->generation != tag->generation) {
+      continue;
+    }
+    ChainId chainId;
+    std::memcpy(&chainId, rawId.data(), sizeof(chainId));
+    if (chainId != tag->descriptor->placement.versionedChain.chainId) {
+      return makeError(CacheCode::kPlacementMismatch, "cache descriptor chain differs from physical chunk key");
+    }
+    auto chunkId = ChunkId(std::string_view{reinterpret_cast<const char *>(rawId.data()) + sizeof(chainId),
+                                            rawId.length() - sizeof(chainId)});
+    const auto &meta = chunks->chunk_meta(i);
+    CacheInventoryEntry entry{targetId,
+                              physicalDiskId,
+                              {tag->descriptor->placement.versionedChain, std::move(chunkId)},
+                              std::move(*tag->descriptor),
+                              {tag->generation, false, meta.len, ChecksumInfo{ChecksumType::CRC32C, ~meta.checksum}}};
+    RETURN_ON_ERROR(entry.valid());
+    result.push_back(std::move(entry));
+  }
+  return result;
+}
 namespace {
 
 monitor::OperationRecorder storageUpdateRecorder{"storage.engine_update"};

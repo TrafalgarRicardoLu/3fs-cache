@@ -476,6 +476,28 @@ Result<std::vector<LocalEvictionCandidate>> StorageTarget::listActiveCacheChunks
   return result;
 }
 
+Result<std::vector<CacheInventoryEntry>> StorageTarget::listCacheInventory() {
+  if (storageRole() != StorageRole::CACHE_ONLY)
+    return makeError(CacheCode::kRoleMismatch, "inventory target is not cache-only");
+  if (useChunkEngine()) return ChunkEngine::listCacheInventory(*engine_, targetId(), physicalDiskId());
+  std::unordered_map<ChunkId, ChunkMetadata> metas;
+  RETURN_ON_ERROR(getAllMetadataMap(metas));
+  std::vector<CacheInventoryEntry> result;
+  for (const auto &[chunkId, meta] : metas) {
+    if (meta.cacheState != CacheChunkState::ACTIVE) continue;
+    CHECK_RESULT(descriptor, queryCacheChunkDescriptor(chunkId));
+    if (!descriptor || descriptor->targetId != targetId() || descriptor->generation != meta.cacheGeneration) continue;
+    CacheInventoryEntry entry{targetId(),
+                              physicalDiskId(),
+                              {descriptor->placement.versionedChain, chunkId},
+                              std::move(*descriptor),
+                              {meta.cacheGeneration, false, meta.size, meta.checksum()}};
+    RETURN_ON_ERROR(entry.valid());
+    result.push_back(std::move(entry));
+  }
+  return result;
+}
+
 CoTryTask<bool> StorageTarget::recordCacheAccess(const ChunkId &chunkId,
                                                  cache::CacheGeneration generation,
                                                  uint64_t observedAtNs,

@@ -120,6 +120,9 @@ struct ChunkEngine {
                                              bool sync);
   static Result<std::vector<LocalEvictionCandidate>> listActiveCacheChunks(chunk_engine::Engine &engine,
                                                                            TargetId targetId);
+  static Result<std::vector<CacheInventoryEntry>> listCacheInventory(chunk_engine::Engine &engine,
+                                                                     TargetId targetId,
+                                                                     const PhysicalDiskId &physicalDiskId);
 
   static Result<ChunkMetadata> queryChunk(chunk_engine::Engine &engine, const ChunkId &chunkId, ChainId chainId) {
     std::string key;

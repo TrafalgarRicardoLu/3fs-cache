@@ -42,6 +42,7 @@ class StorageOperator {
     CONFIG_HOT_UPDATED_ITEM(max_concurrent_rdma_reads, 256U);
     CONFIG_HOT_UPDATED_ITEM(read_only, false);
     CONFIG_HOT_UPDATED_ITEM(enable_cache_phase2, false);
+    CONFIG_HOT_UPDATED_ITEM(enable_cache_phase4, false);
     CONFIG_HOT_UPDATED_ITEM(local_access_persist_interval, 30_s, [](Duration value) { return value > 0_ns; });
     CONFIG_ITEM(local_eviction_policy, std::string{"lru"});
     CONFIG_ITEM(local_safety_high_watermark, 0.96, [](double value) { return value > 0.0 && value < 1.0; });
@@ -117,6 +118,7 @@ class StorageOperator {
   CoTryTask<QueryCachePermitsRsp> queryCachePermits(const QueryCachePermitsReq &req);
   CoTryTask<RetireCacheReplicasRsp> retireCacheReplicas(const RetireCacheReplicasReq &req);
   CoTryTask<CoordinateCacheRetiresRsp> coordinateCacheRetires(const CoordinateCacheRetiresReq &req);
+  CoTryTask<ListCacheInventoryRsp> listCacheInventory(const ListCacheInventoryReq &req);
 
  protected:
   struct LocalPermitDisk {
@@ -238,6 +240,7 @@ class StorageOperator {
   std::atomic<uint64_t> totalReadIOs_{};
   std::unique_ptr<LocalEvictionPolicy> localEvictionPolicy_;
   std::unique_ptr<LocalSafetyEvictor> localSafetyEvictor_;
+  Uuid inventoryInstanceEpoch_{Uuid::random()};
 };
 
 }  // namespace hf3fs::storage

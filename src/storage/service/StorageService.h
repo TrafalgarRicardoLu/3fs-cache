@@ -130,9 +130,9 @@ class StorageService : public serde::ServiceWrapper<StorageService, storage::Sto
   PHASE2_STORAGE_SERVICE_METHOD(coordinateCacheRetires, CoordinateCacheRetiresReq, CoordinateCacheRetiresRsp);
 #undef PHASE2_STORAGE_SERVICE_METHOD
 
-  CoTryTask<ListCacheInventoryRsp> listCacheInventory(serde::CallContext &ctx, const ListCacheInventoryReq &) {
+  CoTryTask<ListCacheInventoryRsp> listCacheInventory(serde::CallContext &ctx, const ListCacheInventoryReq &req) {
     reportDefaultQueueLatency(ctx);
-    co_return makeError(CacheCode::kFeatureDisabled, "cache phase four is disabled");
+    return storageOperator_.listCacheInventory(req);
   }
 
  private:

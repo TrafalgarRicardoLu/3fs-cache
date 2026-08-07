@@ -256,5 +256,55 @@ TEST(TestCacheGeneration, Phase2ReplaceRejectsPlacementMismatch) {
   ASSERT_ERROR(invalidDescriptor.valid(), CacheCode::kPlacementMismatch);
 }
 
+TEST(TestCacheGeneration, InventoryUsesPersistentDescriptorAndFiltersRetired) {
+  for (bool chunkEngine : {false, true}) {
+    folly::test::TemporaryDirectory tmpPath;
+    CPUExecutorGroup executor(4, chunkEngine ? "cache-inventory-engine" : "cache-inventory-store");
+    StorageTargets::Config config;
+    config.set_target_num_per_path(1);
+    config.set_target_paths({tmpPath.path()});
+    config.set_disk_roles({StorageRole::CACHE_ONLY});
+    config.storage_target().file_store().set_preopen_chunk_size_list({128_KB});
+    config.set_allow_disk_without_uuid(true);
+    StorageTargets::CreateConfig createConfig;
+    createConfig.set_chunk_size_list({128_KB});
+    createConfig.set_physical_file_count(2);
+    createConfig.set_allow_disk_without_uuid(true);
+    createConfig.set_target_ids({TargetId{1}});
+    createConfig.set_only_chunk_engine(chunkEngine);
+    {
+      AtomicallyTargetMap targetMap;
+      StorageTargets targets(config, targetMap);
+      ASSERT_OK(targets.create(createConfig));
+    }
+
+    AtomicallyTargetMap targetMap;
+    StorageTargets targets(config, targetMap);
+    ASSERT_OK(targets.load(executor));
+    auto targetResult = targetMap.snapshot()->getTarget(TargetId{1});
+    ASSERT_OK(targetResult);
+    auto target = (*targetResult)->storageTarget;
+    folly::CPUThreadPoolExecutor background(2);
+    const ChunkId chunkId{0xCF, static_cast<uint64_t>(chunkEngine)};
+    auto item = replaceItem(chunkId, 4, Uuid::random(), "inventory-payload");
+    addPhase2Identity(item, 4);
+    ASSERT_OK(target->replaceCacheChunk(item, background));
+
+    auto active = target->listCacheInventory();
+    ASSERT_OK(active);
+    ASSERT_EQ(active->size(), 1);
+    EXPECT_EQ(active->front().key.vChainId, item.key.vChainId);
+    EXPECT_EQ(active->front().key.chunkId, item.key.chunkId);
+    EXPECT_EQ(active->front().descriptor, *item.descriptor);
+    EXPECT_EQ(active->front().generation.cacheGeneration, cache::CacheGeneration{4});
+    EXPECT_FALSE(active->front().generation.retired);
+
+    ASSERT_OK(target->retireCacheChunk(retireItem(chunkId, 4, Uuid::random())));
+    auto retired = target->listCacheInventory();
+    ASSERT_OK(retired);
+    EXPECT_TRUE(retired->empty());
+  }
+}
+
 }  // namespace
 }  // namespace hf3fs::storage::test
