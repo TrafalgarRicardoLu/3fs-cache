@@ -3,6 +3,7 @@
 #include "common/serde/Serde.h"
 #include "fbs/mgmtd/ChainTable.h"
 #include "fbs/mgmtd/RoutingInfo.h"
+#include "tests/GtestHelpers.h"
 
 namespace hf3fs::mgmtd::test {
 namespace {
@@ -42,6 +43,21 @@ TEST(CacheChainTable, ValidatesCacheProperties) {
   EXPECT_TRUE(table.valid().hasError());
 }
 
+TEST(CacheChainTable, WriteStagingIsDistinctFromUserAndCacheData) {
+  auto staging = flat::ChainTable::create(flat::ChainTableId{2},
+                                          flat::ChainTableVersion{1},
+                                          std::vector{flat::ChainId{2}},
+                                          "staging",
+                                          flat::ChainTableRole::WRITE_STAGING,
+                                          uint64_t{0},
+                                          flat::ChainTableChecksumType::NONE);
+  ASSERT_OK(staging.valid());
+  EXPECT_TRUE(staging.isWriteStaging());
+  EXPECT_FALSE(staging.isCacheData());
+  staging.logicalCapacity = 1;
+  ASSERT_ERROR(staging.valid(), StatusCode::kInvalidArg);
+}
+
 TEST(CacheChainTable, RequiresEveryActiveMetadataCapability) {
   flat::RoutingInfo routing;
   EXPECT_FALSE(routing.cacheFeatureEnabled(1, 1));
@@ -73,6 +89,17 @@ TEST(CacheChainTable, PersistsTargetStorageIdentity) {
   ASSERT_FALSE(serde::deserialize(decoded, serde::serialize(original)).hasError());
   EXPECT_EQ(decoded.physicalDiskId, original.physicalDiskId);
   EXPECT_EQ(decoded.storageRole, storage::StorageRole::CACHE_ONLY);
+}
+
+TEST(CacheChainTable, PersistsWriteStagingStorageIdentity) {
+  flat::TargetInfo original;
+  original.targetId = flat::TargetId{8};
+  original.physicalDiskId.uuid = Uuid::random();
+  original.storageRole = storage::StorageRole::WRITE_STAGING;
+
+  flat::TargetInfo decoded;
+  ASSERT_OK(serde::deserialize(decoded, serde::serialize(original)));
+  EXPECT_EQ(decoded.storageRole, storage::StorageRole::WRITE_STAGING);
 }
 
 }  // namespace

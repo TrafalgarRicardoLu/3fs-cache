@@ -31,7 +31,8 @@ inline Result<Void> validateTargetStorageRole(const RoutingInfo &routingInfo,
   if (!hasDiskId && !hasRole && !requireIdentity) return Void{};
   if (!hasDiskId || !hasRole ||
       (target->storageRole != storage::StorageRole::USER_DATA &&
-       target->storageRole != storage::StorageRole::CACHE_ONLY)) {
+       target->storageRole != storage::StorageRole::CACHE_ONLY &&
+       target->storageRole != storage::StorageRole::WRITE_STAGING)) {
     return makeError(CacheCode::kRoleMismatch, fmt::format("target {} has incomplete storage identity", targetId));
   }
   if (expectedRole && target->storageRole != *expectedRole) {
@@ -75,7 +76,9 @@ inline Result<Void> validateChainStorageRole(const RoutingInfo &routingInfo,
 inline Result<Void> validateChainTableStorageRoles(const RoutingInfo &routingInfo,
                                                    const flat::ChainTable &chainTable,
                                                    bool requireIdentity) {
-  auto expectedRole = chainTable.isCacheData() ? storage::StorageRole::CACHE_ONLY : storage::StorageRole::USER_DATA;
+  auto expectedRole = chainTable.isCacheData()      ? storage::StorageRole::CACHE_ONLY
+                      : chainTable.isWriteStaging() ? storage::StorageRole::WRITE_STAGING
+                                                    : storage::StorageRole::USER_DATA;
   for (auto chainId : chainTable.chains) {
     RETURN_ON_ERROR(validateChainStorageRole(routingInfo, chainId, expectedRole, requireIdentity));
   }
@@ -89,7 +92,9 @@ inline Result<std::optional<storage::StorageRole>> storageRoleForChain(const Rou
     if (versions.empty()) continue;
     const auto &table = versions.rbegin()->second;
     if (std::find(table.chains.begin(), table.chains.end(), chainId) == table.chains.end()) continue;
-    auto role = table.isCacheData() ? storage::StorageRole::CACHE_ONLY : storage::StorageRole::USER_DATA;
+    auto role = table.isCacheData()      ? storage::StorageRole::CACHE_ONLY
+                : table.isWriteStaging() ? storage::StorageRole::WRITE_STAGING
+                                         : storage::StorageRole::USER_DATA;
     if (result && *result != role) {
       return makeError(CacheCode::kRoleMismatch, fmt::format("chain {} belongs to conflicting table roles", chainId));
     }

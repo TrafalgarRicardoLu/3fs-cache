@@ -42,6 +42,7 @@ enum class NodeType : uint8_t { MGMTD = 0, META = 1, STORAGE = 2, CLIENT = 3, FU
 enum class ChainTableRole : uint8_t {
   USER_DATA = 0,
   CACHE_DATA = 1,
+  WRITE_STAGING = 2,
 };
 
 enum class ChainTableChecksumType : uint8_t {

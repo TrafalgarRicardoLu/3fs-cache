@@ -491,6 +491,8 @@ TEST_F(MgmtdOperatorTest, testStorageRoleIsolation) {
     cacheDisk.uuid = Uuid::random();
     storage::PhysicalDiskId userDisk;
     userDisk.uuid = Uuid::random();
+    storage::PhysicalDiskId stagingDisk;
+    stagingDisk.uuid = Uuid::random();
 
     // Missing identity and conflicting roles on one disk fail closed.
     flat::LocalTargetInfo missingIdentity;
@@ -510,7 +512,8 @@ TEST_F(MgmtdOperatorTest, testStorageRoleIsolation) {
 
     auto validTargets = std::vector{makeTarget(flat::TargetId{1}, cacheDisk, storage::StorageRole::CACHE_ONLY),
                                     makeTarget(flat::TargetId{2}, cacheDisk, storage::StorageRole::CACHE_ONLY),
-                                    makeTarget(flat::TargetId{3}, userDisk, storage::StorageRole::USER_DATA)};
+                                    makeTarget(flat::TargetId{3}, userDisk, storage::StorageRole::USER_DATA),
+                                    makeTarget(flat::TargetId{4}, stagingDisk, storage::StorageRole::WRITE_STAGING)};
     CO_AWAIT_ASSERT_OK(heartbeat(mgmtd, "clusterId", makeHeartbeat(flat::HeartbeatVersion{1}, validTargets), now_));
 
     auto chain = [](flat::ChainId chainId, flat::TargetId targetId) {
@@ -525,7 +528,8 @@ TEST_F(MgmtdOperatorTest, testStorageRoleIsolation) {
                                  "clusterId",
                                  {chain(flat::ChainId{1}, flat::TargetId{1}),
                                   chain(flat::ChainId{2}, flat::TargetId{2}),
-                                  chain(flat::ChainId{3}, flat::TargetId{3})}));
+                                  chain(flat::ChainId{3}, flat::TargetId{3}),
+                                  chain(flat::ChainId{4}, flat::TargetId{4})}));
 
     auto setTable = [&](flat::ChainTableId tableId,
                         flat::ChainId chainId,
@@ -542,6 +546,7 @@ TEST_F(MgmtdOperatorTest, testStorageRoleIsolation) {
     CO_AWAIT_ASSERT_ERROR(CacheCode::kRoleMismatch,
                           setTable(flat::ChainTableId{2}, flat::ChainId{2}, flat::ChainTableRole::USER_DATA));
     CO_AWAIT_ASSERT_OK(setTable(flat::ChainTableId{3}, flat::ChainId{3}, flat::ChainTableRole::USER_DATA));
+    CO_AWAIT_ASSERT_OK(setTable(flat::ChainTableId{4}, flat::ChainId{4}, flat::ChainTableRole::WRITE_STAGING));
 
     auto routing = co_await getRoutingInfo(mgmtd, "clusterId", flat::RoutingInfoVersion{0});
     CO_ASSERT_OK(routing);
@@ -552,12 +557,12 @@ TEST_F(MgmtdOperatorTest, testStorageRoleIsolation) {
 
     storage::PhysicalDiskId anotherUserDisk;
     anotherUserDisk.uuid = Uuid::random();
-    validTargets.push_back(makeTarget(flat::TargetId{4}, anotherUserDisk, storage::StorageRole::USER_DATA));
+    validTargets.push_back(makeTarget(flat::TargetId{5}, anotherUserDisk, storage::StorageRole::USER_DATA));
     CO_AWAIT_ASSERT_OK(heartbeat(mgmtd, "clusterId", makeHeartbeat(flat::HeartbeatVersion{2}, validTargets), now_));
     auto update = mgmtd::UpdateChainReq::create("clusterId",
                                                 flat::UserInfo{},
                                                 flat::ChainId{1},
-                                                flat::TargetId{4},
+                                                flat::TargetId{5},
                                                 mgmtd::UpdateChainReq::Mode::ADD);
     CO_AWAIT_ASSERT_ERROR(CacheCode::kRoleMismatch, mgmtd.updateChain(std::move(update), {}));
     routing = co_await getRoutingInfo(mgmtd, "clusterId", flat::RoutingInfoVersion{0});

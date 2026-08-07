@@ -23,7 +23,8 @@ Result<Void> validateStorageIdentities(core::ServiceOperation &ctx,
     if (!hasStorageIdentity(target)) return Void{};
     if (target.physicalDiskId == storage::PhysicalDiskId{} ||
         (target.storageRole != storage::StorageRole::USER_DATA &&
-         target.storageRole != storage::StorageRole::CACHE_ONLY)) {
+         target.storageRole != storage::StorageRole::CACHE_ONLY &&
+         target.storageRole != storage::StorageRole::WRITE_STAGING)) {
       RETURN_AND_LOG_OP_ERR(ctx,
                             CacheCode::kRoleMismatch,
                             "Target {} has incomplete storage identity",
@@ -51,7 +52,8 @@ Result<Void> validateStorageIdentities(core::ServiceOperation &ctx,
     if (!incomingKnown) continue;
     if (target.physicalDiskId == storage::PhysicalDiskId{} ||
         (target.storageRole != storage::StorageRole::USER_DATA &&
-         target.storageRole != storage::StorageRole::CACHE_ONLY)) {
+         target.storageRole != storage::StorageRole::CACHE_ONLY &&
+         target.storageRole != storage::StorageRole::WRITE_STAGING)) {
       RETURN_AND_LOG_OP_ERR(ctx,
                             CacheCode::kRoleMismatch,
                             "Target {} has incomplete storage identity",

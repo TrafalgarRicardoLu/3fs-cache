@@ -406,6 +406,15 @@ CoTryTask<CloseRsp> MetaOperator::close(CloseReq req) {
 CoTryTask<CreateRsp> MetaOperator::create(CreateReq req) {
   AUTHENTICATE(req.user);
   CO_RETURN_ON_ERROR(req.valid());
+  if (req.layout && req.layout->tableId && req.layout->tableVersion) {
+    auto routing = mgmtd_->getRoutingInfo();
+    auto table = routing && routing->raw()
+                     ? routing->raw()->getChainTable(req.layout->tableId, req.layout->tableVersion)
+                     : nullptr;
+    if (table && table->role != flat::ChainTableRole::USER_DATA) {
+      co_return makeError(MetaCode::kInvalidFileLayout, "normal create requires a USER_DATA chain table");
+    }
+  }
 
   XLOGF(DBG, "create {}", req);
 

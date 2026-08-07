@@ -17,11 +17,13 @@ struct ChainTable : public serde::SerdeHelper<ChainTable> {
 
  public:
   bool isCacheData() const { return role == ChainTableRole::CACHE_DATA; }
+  bool isWriteStaging() const { return role == ChainTableRole::WRITE_STAGING; }
   Result<Void> valid() const {
     switch (role) {
       case ChainTableRole::USER_DATA:
+      case ChainTableRole::WRITE_STAGING:
         if (logicalCapacity != 0 || checksumType != ChainTableChecksumType::NONE) {
-          return makeError(StatusCode::kInvalidArg, "USER_DATA table cannot set cache capacity or checksum");
+          return makeError(StatusCode::kInvalidArg, "non-cache table cannot set cache capacity or checksum");
         }
         break;
       case ChainTableRole::CACHE_DATA:

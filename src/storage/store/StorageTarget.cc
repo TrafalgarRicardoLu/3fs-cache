@@ -171,7 +171,8 @@ Result<Void> StorageTarget::load(const Path &path) {
   const bool hasDiskId = targetConfig_.physical_disk_id != PhysicalDiskId{};
   const bool hasStorageRole = targetConfig_.storage_role != StorageRole::INVALID;
   if (hasDiskId != hasStorageRole || (hasStorageRole && targetConfig_.storage_role != StorageRole::USER_DATA &&
-                                      targetConfig_.storage_role != StorageRole::CACHE_ONLY)) {
+                                      targetConfig_.storage_role != StorageRole::CACHE_ONLY &&
+                                      targetConfig_.storage_role != StorageRole::WRITE_STAGING)) {
     auto msg = fmt::format("target {} has invalid physical disk identity or storage role", path);
     XLOG(CRITICAL, msg);
     return makeError(CacheCode::kRoleMismatch, std::move(msg));

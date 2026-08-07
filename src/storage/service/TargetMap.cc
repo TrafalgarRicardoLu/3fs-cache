@@ -140,10 +140,12 @@ Result<Void> TargetMap::updateRouting(std::shared_ptr<hf3fs::client::RoutingInfo
   XLOGF(INFO, "routing info updated, {} -> {}", routingInfoVersion_, routingInfo->routingInfoVersion);
 
   robin_hood::unordered_set<ChainId> cacheDataChains;
+  robin_hood::unordered_set<ChainId> writeStagingChains;
   for (const auto &[_, versions] : routingInfo->chainTables) {
-    if (!versions.empty() && versions.rbegin()->second.isCacheData()) {
-      cacheDataChains.insert(versions.rbegin()->second.chains.begin(), versions.rbegin()->second.chains.end());
-    }
+    if (versions.empty()) continue;
+    const auto &table = versions.rbegin()->second;
+    auto *chains = table.isCacheData() ? &cacheDataChains : table.isWriteStaging() ? &writeStagingChains : nullptr;
+    if (chains) chains->insert(table.chains.begin(), table.chains.end());
   }
 
   // Validate disk roles before mutating the current routing snapshot. Legacy targets
@@ -159,7 +161,9 @@ Result<Void> TargetMap::updateRouting(std::shared_ptr<hf3fs::client::RoutingInfo
     if (target.storageRole == StorageRole::INVALID) {
       continue;
     }
-    auto expectedRole = cacheDataChains.contains(chain.chainId) ? StorageRole::CACHE_ONLY : StorageRole::USER_DATA;
+    auto expectedRole = cacheDataChains.contains(chain.chainId)      ? StorageRole::CACHE_ONLY
+                        : writeStagingChains.contains(chain.chainId) ? StorageRole::WRITE_STAGING
+                                                                     : StorageRole::USER_DATA;
     if (target.storageRole != expectedRole) {
       auto msg = fmt::format("reject routing chain {} target {}: disk role {}, expected {}",
                              chain.chainId,

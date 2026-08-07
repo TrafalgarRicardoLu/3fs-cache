@@ -53,7 +53,8 @@ Result<Void> writePhysicalDiskConfig(const Path &diskPath, const PhysicalDiskCon
 }
 
 Result<PhysicalDiskConfig> loadOrCreatePhysicalDiskConfig(const Path &diskPath, StorageRole expectedRole) {
-  if (expectedRole != StorageRole::USER_DATA && expectedRole != StorageRole::CACHE_ONLY) {
+  if (expectedRole != StorageRole::USER_DATA && expectedRole != StorageRole::CACHE_ONLY &&
+      expectedRole != StorageRole::WRITE_STAGING) {
     return makeError(CacheCode::kRoleMismatch, fmt::format("invalid configured storage role for {}", diskPath));
   }
 

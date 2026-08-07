@@ -33,10 +33,12 @@ CoTryTask<Dispatcher::OutputTable> handleUploadChainTable(IEnv &ienv,
   auto csvFilePath = parser.get<std::string>("csv-file-path");
   auto desc = parser.present<String>("--desc").value_or("");
   auto roleName = parser.get<std::string>("--role");
-  if (roleName != "USER_DATA" && roleName != "CACHE_DATA") {
-    co_return makeError(StatusCode::kInvalidArg, "role must be USER_DATA or CACHE_DATA");
+  if (roleName != "USER_DATA" && roleName != "CACHE_DATA" && roleName != "WRITE_STAGING") {
+    co_return makeError(StatusCode::kInvalidArg, "role must be USER_DATA, CACHE_DATA, or WRITE_STAGING");
   }
-  auto role = roleName == "CACHE_DATA" ? flat::ChainTableRole::CACHE_DATA : flat::ChainTableRole::USER_DATA;
+  auto role = roleName == "CACHE_DATA"      ? flat::ChainTableRole::CACHE_DATA
+              : roleName == "WRITE_STAGING" ? flat::ChainTableRole::WRITE_STAGING
+                                            : flat::ChainTableRole::USER_DATA;
   auto logicalCapacity = parser.get<uint64_t>("--logical-capacity");
   auto checksumName = parser.get<std::string>("--checksum");
   if (checksumName != "NONE" && checksumName != "CRC32C" && checksumName != "CRC32") {

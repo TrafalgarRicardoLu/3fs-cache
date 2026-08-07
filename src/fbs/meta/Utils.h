@@ -357,7 +357,8 @@ struct RoutingInfoChecker {
             XLOGF(WARN, "File {}, chain table {} version {}, not found in RoutingInfo", inode.id, table, tableVer);
             return false;
           }
-          if (chainTable->isCacheData() != inode.isOriginFile()) {
+          if ((inode.isOriginFile() && !chainTable->isCacheData()) ||
+              (inode.isFile() && chainTable->role != flat::ChainTableRole::USER_DATA)) {
             XLOGF(WARN, "File {} type and chain table {} role do not match", inode.id, table);
             return false;
           }
@@ -373,8 +374,8 @@ struct RoutingInfoChecker {
             XLOGF(WARN, "OriginFile {} requires a CACHE_DATA chain table", inode.id);
             return false;
           }
-          if (inode.isFile() && chainTable && chainTable->isCacheData()) {
-            XLOGF(WARN, "File {} cannot use a CACHE_DATA chain table", inode.id);
+          if (inode.isFile() && chainTable && chainTable->role != flat::ChainTableRole::USER_DATA) {
+            XLOGF(WARN, "File {} cannot use a non-USER_DATA chain table", inode.id);
             return false;
           }
           break;

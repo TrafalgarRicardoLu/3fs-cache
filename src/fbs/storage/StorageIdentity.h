@@ -22,6 +22,7 @@ enum class StorageRole : uint8_t {
   INVALID = 0,
   USER_DATA = 1,
   CACHE_ONLY = 2,
+  WRITE_STAGING = 3,
 };
 
 }  // namespace hf3fs::storage

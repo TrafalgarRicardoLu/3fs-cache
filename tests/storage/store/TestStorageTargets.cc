@@ -242,6 +242,28 @@ TEST(TestStorageTargets, RejectPersistedRoleChange) {
   ASSERT_ERROR(targets.load(executor), CacheCode::kRoleMismatch);
 }
 
+TEST(TestStorageTargets, PersistsWriteStagingWithoutCacheInfrastructure) {
+  folly::test::TemporaryDirectory tmpPath;
+  StorageTargets::Config config;
+  config.set_target_num_per_path(1);
+  config.set_target_paths({tmpPath.path()});
+  config.set_disk_roles({StorageRole::WRITE_STAGING});
+  config.set_allow_disk_without_uuid(true);
+
+  AtomicallyTargetMap targetMap;
+  StorageTargets targets(config, targetMap);
+  ASSERT_OK(targets.create(createConfig({1})));
+  auto target = targetMap.snapshot()->getTarget(TargetId{1});
+  ASSERT_OK(target);
+  EXPECT_EQ((*target)->storageRole, StorageRole::WRITE_STAGING);
+  EXPECT_EQ(targets.cacheSpaceGate((*target)->physicalDiskId), nullptr);
+  EXPECT_EQ(targets.cacheEventJournal((*target)->physicalDiskId), nullptr);
+  ASSERT_OK(targetMap.updateRouting(routingInfo(TargetId{1}, ChainId{1}, flat::ChainTableRole::WRITE_STAGING)));
+  target = targetMap.snapshot()->getTarget(TargetId{1});
+  ASSERT_OK(target);
+  EXPECT_FALSE((*target)->cacheData);
+}
+
 TEST(TestStorageTargets, RejectRoutingRoleMismatch) {
   auto verify = [](StorageRole diskRole, flat::ChainTableRole tableRole) {
     folly::test::TemporaryDirectory tmpPath;
@@ -263,6 +285,9 @@ TEST(TestStorageTargets, RejectRoutingRoleMismatch) {
 
   verify(StorageRole::USER_DATA, flat::ChainTableRole::CACHE_DATA);
   verify(StorageRole::CACHE_ONLY, flat::ChainTableRole::USER_DATA);
+  verify(StorageRole::USER_DATA, flat::ChainTableRole::WRITE_STAGING);
+  verify(StorageRole::WRITE_STAGING, flat::ChainTableRole::USER_DATA);
+  verify(StorageRole::WRITE_STAGING, flat::ChainTableRole::CACHE_DATA);
 }
 
 TEST(TestStorageTargets, CalculatesCachePhysicalCapacityFromAllocationModel) {

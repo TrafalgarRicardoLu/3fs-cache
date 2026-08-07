@@ -38,6 +38,11 @@ TEST(CacheFeatureGate, EnforcesChainTableRole) {
   routing.chainTables[flat::ChainTableId{1}][flat::ChainTableVersion{1}] = makeTable(flat::ChainTableRole::CACHE_DATA);
   EXPECT_FALSE(RoutingInfoChecker::checkRoutingInfo(makeInode(false), routing));
   EXPECT_TRUE(RoutingInfoChecker::checkRoutingInfo(makeInode(true), routing));
+
+  routing.chainTables[flat::ChainTableId{1}][flat::ChainTableVersion{1}] =
+      makeTable(flat::ChainTableRole::WRITE_STAGING);
+  EXPECT_FALSE(RoutingInfoChecker::checkRoutingInfo(makeInode(false), routing));
+  EXPECT_FALSE(RoutingInfoChecker::checkRoutingInfo(makeInode(true), routing));
 }
 
 }  // namespace
