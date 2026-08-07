@@ -74,6 +74,7 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
   META_SERVICE_METHOD(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
   META_SERVICE_METHOD(listReconcileCacheBlocks, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);
   META_SERVICE_METHOD(recoverExpiredCacheLoads, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
+  META_SERVICE_METHOD(createWriteStaging, CreateWriteStagingReq, CreateWriteStagingRsp);
 #undef META_SERVICE_METHOD
 
  private:

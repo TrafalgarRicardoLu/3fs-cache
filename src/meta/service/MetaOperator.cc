@@ -341,6 +341,16 @@ Result<Void> MetaOperator::checkCacheTable(flat::ChainTableId tableId) const {
   return Void{};
 }
 
+Result<Void> MetaOperator::checkWriteStagingTable(flat::ChainTableId tableId) const {
+  auto routing = mgmtd_->getRoutingInfo();
+  auto table = routing && routing->raw() ? routing->raw()->getChainTable(tableId) : nullptr;
+  if (table == nullptr || !table->isWriteStaging()) {
+    return makeError(MetaCode::kInvalidFileLayout, "write staging requires a WRITE_STAGING chain table");
+  }
+  RETURN_ON_ERROR(table->valid());
+  return Void{};
+}
+
 CoTryTask<AuthRsp> MetaOperator::authenticate(AuthReq req) {
   AUTHENTICATE(req.user);
   co_return AuthRsp(std::move(req.user));
@@ -440,6 +450,14 @@ CoTryTask<CreateRsp> MetaOperator::create(CreateReq req) {
   } else {
     co_return co_await forward_->forward<CreateReq, CreateRsp>(node, std::move(req));
   }
+}
+
+CoTryTask<CreateWriteStagingRsp> MetaOperator::createWriteStaging(CreateWriteStagingReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  CO_RETURN_ON_ERROR(checkWriteStagingTable(req.tableId));
+  co_return co_await runOp(&MetaStore::createWriteStaging, req);
 }
 
 CoTryTask<MkdirsRsp> MetaOperator::mkdirs(MkdirsReq req) {

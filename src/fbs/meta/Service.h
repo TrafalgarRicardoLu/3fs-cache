@@ -785,6 +785,44 @@ struct RefreshOriginFileRsp : RspBase {
   SERDE_STRUCT_FIELD(cleanupJobId, Uuid::zero());
 };
 
+enum class WriteStagingMode : uint8_t {
+  INVALID = 0,
+  SEQUENTIAL = 1,
+};
+
+struct CreateWriteStagingReq : ReqBase {
+  SERDE_STRUCT_FIELD(path, PathAt{});
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(destination, cache::ObjectRef{});
+  SERDE_STRUCT_FIELD(tableId, flat::ChainTableId{});
+  SERDE_STRUCT_FIELD(chunkSize, uint32_t{});
+  SERDE_STRUCT_FIELD(stripeSize, uint32_t{});
+  SERDE_STRUCT_FIELD(permission, Permission{});
+  SERDE_STRUCT_FIELD(session, SessionInfo{});
+  SERDE_STRUCT_FIELD(writerLeaseId, Uuid::zero());
+  SERDE_STRUCT_FIELD(writerLeaseExpiresAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(mode, WriteStagingMode::INVALID);
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(path.validForCreate());
+    RETURN_ON_ERROR(destination.valid());
+    if (!path.path || !path.path->is_absolute()) return INVALID("write staging path must be absolute");
+    if (jobId == cache::UploadJobId{} || !tableId || chunkSize == 0 || stripeSize == 0 || !session.valid() ||
+        writerLeaseId == Uuid::zero() || writerLeaseExpiresAtMs == 0 || mode != WriteStagingMode::SEQUENTIAL) {
+      return INVALID("invalid write staging identity, layout, writer, or mode");
+    }
+    return VALID;
+  }
+};
+
+struct CreateWriteStagingRsp : RspBase {
+  SERDE_STRUCT_FIELD(inode, Inode{});
+  SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
+  SERDE_STRUCT_FIELD(created, false);
+};
+
 struct ReadBlockPlan {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(fileRange, cache::ByteRange{});
@@ -1948,6 +1986,7 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(reconcileCacheBlocks, 58, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
   META_SERVICE_METHOD(recoverExpiredCacheLoads, 59, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
   META_SERVICE_METHOD(listReconcileCacheBlocks, 60, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);
+  META_SERVICE_METHOD(createWriteStaging, 61, CreateWriteStagingReq, CreateWriteStagingRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

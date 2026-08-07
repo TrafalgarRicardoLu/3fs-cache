@@ -140,6 +140,7 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   CoTryTask<TrackPrefetchReadyRsp> trackPrefetchReady(TrackPrefetchReadyReq req);
   CoTryTask<AdvancePrefetchJobStateRsp> advancePrefetchJobState(AdvancePrefetchJobStateReq req);
   CoTryTask<CancelPrefetchJobRsp> cancelPrefetchJob(CancelPrefetchJobReq req);
+  CoTryTask<CreateWriteStagingRsp> createWriteStaging(CreateWriteStagingReq req);
   CoTryTask<UpsertCachePinsRsp> upsertCachePins(UpsertCachePinsReq req);
   CoTryTask<RemoveCachePinsRsp> removeCachePins(RemoveCachePinsReq req);
   CoTryTask<ListCachePinsByOwnerRsp> listCachePinsByOwner(ListCachePinsByOwnerReq req);
@@ -237,6 +238,7 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   Result<Void> checkCachePhase3(uint32_t protocolVersion) const;
   Result<Void> checkCachePhase4(uint32_t protocolVersion) const;
   Result<Void> checkCacheTable(flat::ChainTableId tableId) const;
+  Result<Void> checkWriteStagingTable(flat::ChainTableId tableId) const;
 
   const Config &config_;
   flat::NodeId nodeId_;

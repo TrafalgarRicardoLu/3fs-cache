@@ -177,6 +177,7 @@ class MetaStore {
   OpPtr<ListCachePinsByOwnerRsp> listCachePinsByOwner(const ListCachePinsByOwnerReq &req);
   OpPtr<QueryCachePinsRsp> queryCachePins(const QueryCachePinsReq &req);
   OpPtr<ConvertActiveJobPinsRsp> convertActiveJobPins(const ConvertActiveJobPinsReq &req);
+  OpPtr<CreateWriteStagingRsp> createWriteStaging(const CreateWriteStagingReq &req);
 
  private:
   template <typename>
