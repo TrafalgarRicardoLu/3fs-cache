@@ -57,7 +57,14 @@ class CleanupBackend : public CacheManagerBackend {
     if (staleBegin) co_return makeError(CacheCode::kStateConflict);
     auto generation = item.observedGeneration.value_or(cache::CacheGeneration{1});
     auto epoch = changeEpochOnUpdate && begins > 1 ? cache::CleanupEpoch{4} : cache::CleanupEpoch{3};
-    co_return meta::BeginCleanCacheBlockResult{item.key, epoch, generation};
+    std::optional<storage::PlacementIdentity> placement;
+    if (withPlacement) {
+      placement = storage::PlacementIdentity{{flat::ChainId{2}, flat::ChainVersion{3}},
+                                             {flat::TargetId{1}},
+                                             flat::TargetId{1},
+                                             Uuid::from(8, 1)};
+    }
+    co_return meta::BeginCleanCacheBlockResult{item.key, epoch, generation, placement};
   }
   CoTryTask<storage::CacheChunkGenerationInfo> retire(const meta::Inode &,
                                                       cache::CacheBlockIndex,
@@ -72,6 +79,21 @@ class CleanupBackend : public CacheManagerBackend {
     ++queries;
     co_return storage::CacheChunkGenerationInfo{cache::CacheGeneration{2}, false, 4096, {}};
   }
+  CoTryTask<storage::CacheChunkGenerationInfo> retirePlaced(const meta::Inode &inode,
+                                                            cache::CacheBlockIndex block,
+                                                            cache::CacheGeneration generation,
+                                                            const storage::PlacementIdentity &placement) final {
+    ++placedRetires;
+    observedPlacement = placement;
+    co_return co_await retire(inode, block, generation);
+  }
+  CoTryTask<storage::CacheChunkGenerationInfo> queryPlaced(const meta::Inode &inode,
+                                                           cache::CacheBlockIndex block,
+                                                           const storage::PlacementIdentity &placement) final {
+    ++placedQueries;
+    observedPlacement = placement;
+    co_return co_await query(inode, block);
+  }
   CoTryTask<void> finishClean(const meta::FinishCleanCacheBlockItem &item) final {
     ++finishes;
     finished = item;
@@ -82,12 +104,16 @@ class CleanupBackend : public CacheManagerBackend {
   bool changeEpochOnUpdate{false};
   bool staleBegin{false};
   bool denyAdmin{false};
+  bool withPlacement{false};
   int validated{0};
   int authorized{0};
   int begins{0};
   int retires{0};
   int queries{0};
   int finishes{0};
+  int placedRetires{0};
+  int placedQueries{0};
+  std::optional<storage::PlacementIdentity> observedPlacement;
   meta::FinishCleanCacheBlockItem finished;
 };
 
@@ -116,6 +142,19 @@ TEST(TestCacheCleanupWorker, RejectsChangedCleanupEpoch) {
   ASSERT_ERROR(folly::coro::blockingWait(worker.clean(cleanupItem())), CacheCode::kStateConflict);
   ASSERT_EQ(backend->begins, 2);
   ASSERT_EQ(backend->finishes, 0);
+}
+
+TEST(TestCacheCleanupWorker, UsesPersistedPlacementAcrossGenerationAdvance) {
+  auto backend = std::make_shared<CleanupBackend>();
+  backend->withPlacement = true;
+  backend->advanceOnce = true;
+  CacheCleanupWorker worker(backend);
+  ASSERT_OK(folly::coro::blockingWait(worker.clean(cleanupItem())));
+  ASSERT_EQ(backend->placedRetires, 2);
+  ASSERT_EQ(backend->placedQueries, 1);
+  ASSERT_TRUE(backend->observedPlacement.has_value());
+  EXPECT_EQ(backend->observedPlacement->versionedChain,
+            (storage::VersionedChainId{flat::ChainId{2}, flat::ChainVersion{3}}));
 }
 
 TEST(TestReportCacheBlockInvalid, StaleReadyIsNoOp) {

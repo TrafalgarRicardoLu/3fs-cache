@@ -47,6 +47,44 @@ CoTryTask<storage::ListCacheInventoryRsp> RealCacheManagerBackend::listCacheInve
   co_return co_await storageClient_->listCacheInventory(request, config_.reconcile_request_timeout());
 }
 
+CoTryTask<meta::ListReconcileCacheBlocksRsp> RealCacheManagerBackend::listReconcileCacheBlocks(
+    std::optional<cache::CacheBlockKey> after,
+    uint32_t limit) {
+  meta::ListReconcileCacheBlocksReq request;
+  request.service = service();
+  request.after = after;
+  request.limit = limit;
+  request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  co_return co_await metaClient_->listReconcileCacheBlocks(std::move(request));
+}
+
+CoTryTask<CacheReplicaObservation> RealCacheManagerBackend::queryReconcile(
+    const meta::ReconcileCacheBlockStatus &status) {
+  CO_RETURN_ON_ERROR(status.valid());
+  if (status.state != cache::CacheBlockState::READY || !status.placement) {
+    co_return makeError(StatusCode::kInvalidArg, "cache reconcile query requires READY placement");
+  }
+  auto inode = co_await stat(meta::InodeId{status.key.inode});
+  CO_RETURN_ON_ERROR(inode);
+  if (!inode->isOriginFile()) co_return makeError(MetaCode::kNotFile);
+  auto key = storageKey(*inode, status.key.block);
+  CO_RETURN_ON_ERROR(key);
+  key->vChainId = status.placement->versionedChain;
+  storage::QueryCacheChunkGenerationsReq request;
+  request.userInfo = flat::UserInfo{};
+  request.keys.push_back(*key);
+  auto response = co_await storageClient_->queryCacheChunkGenerations(request);
+  CO_RETURN_ON_ERROR(response);
+  if (response->results.size() != 1 || response->descriptors.size() != 1) {
+    co_return makeError(CacheCode::kInvalidResponse, "invalid cache reconcile query result count");
+  }
+  CO_RETURN_ON_ERROR(response->results.front());
+  if (!response->descriptors.front()) {
+    co_return makeError(CacheCode::kPlacementMismatch, "cache reconcile query has no descriptor");
+  }
+  co_return CacheReplicaObservation{*response->results.front(), *response->descriptors.front()};
+}
+
 CoTryTask<storage::PermitIdentity> RealCacheManagerBackend::makePermit(const meta::Inode &inode,
                                                                        cache::CacheBlockIndex block,
                                                                        uint64_t blockLength,
@@ -458,6 +496,25 @@ CoTryTask<storage::CacheChunkGenerationInfo> RealCacheManagerBackend::retire(con
   co_return *result->results.front();
 }
 
+CoTryTask<storage::CacheChunkGenerationInfo> RealCacheManagerBackend::retirePlaced(
+    const meta::Inode &inode,
+    cache::CacheBlockIndex block,
+    cache::CacheGeneration generation,
+    const storage::PlacementIdentity &placement) {
+  CO_RETURN_ON_ERROR(placement.valid());
+  auto key = storageKey(inode, block);
+  CO_RETURN_ON_ERROR(key);
+  key->vChainId = placement.versionedChain;
+  storage::RetireCacheChunkGenerationsReq request;
+  request.userInfo = flat::UserInfo{};
+  request.items.push_back({*key, generation, Uuid::random()});
+  auto response = co_await storageClient_->retireCacheChunkGenerations(request);
+  CO_RETURN_ON_ERROR(response);
+  if (response->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid retire result");
+  CO_RETURN_ON_ERROR(response->results.front());
+  co_return *response->results.front();
+}
+
 CoTryTask<storage::CacheChunkGenerationInfo> RealCacheManagerBackend::query(const meta::Inode &inode,
                                                                             cache::CacheBlockIndex block) {
   auto key = storageKey(inode, block);
@@ -470,6 +527,24 @@ CoTryTask<storage::CacheChunkGenerationInfo> RealCacheManagerBackend::query(cons
   if (result->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid query result");
   CO_RETURN_ON_ERROR(result->results.front());
   co_return *result->results.front();
+}
+
+CoTryTask<storage::CacheChunkGenerationInfo> RealCacheManagerBackend::queryPlaced(
+    const meta::Inode &inode,
+    cache::CacheBlockIndex block,
+    const storage::PlacementIdentity &placement) {
+  CO_RETURN_ON_ERROR(placement.valid());
+  auto key = storageKey(inode, block);
+  CO_RETURN_ON_ERROR(key);
+  key->vChainId = placement.versionedChain;
+  storage::QueryCacheChunkGenerationsReq request;
+  request.userInfo = flat::UserInfo{};
+  request.keys.push_back(*key);
+  auto response = co_await storageClient_->queryCacheChunkGenerations(request);
+  CO_RETURN_ON_ERROR(response);
+  if (response->results.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid query result");
+  CO_RETURN_ON_ERROR(response->results.front());
+  co_return *response->results.front();
 }
 
 CoTryTask<void> RealCacheManagerBackend::finishClean(const meta::FinishCleanCacheBlockItem &item) {

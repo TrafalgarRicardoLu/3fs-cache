@@ -242,6 +242,7 @@ class MetaClient {
   CoTryTask<ReportCacheStorageEventsRsp> reportCacheStorageEvents(ReportCacheStorageEventsReq req);
   CoTryTask<ListCacheEventDeadLettersRsp> listCacheEventDeadLetters(ListCacheEventDeadLettersReq req);
   CoTryTask<ReconcileCacheBlocksRsp> reconcileCacheBlocks(ReconcileCacheBlocksReq req);
+  CoTryTask<ListReconcileCacheBlocksRsp> listReconcileCacheBlocks(ListReconcileCacheBlocksReq req);
   CoTryTask<RecoverExpiredCacheLoadsRsp> recoverExpiredCacheLoads(RecoverExpiredCacheLoadsReq req);
   CoTryTask<CreatePrefetchJobRsp> createPrefetchJob(CreatePrefetchJobReq req);
   CoTryTask<GetPrefetchJobRsp> getPrefetchJob(GetPrefetchJobReq req);

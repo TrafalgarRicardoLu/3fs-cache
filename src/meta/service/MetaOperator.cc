@@ -598,6 +598,13 @@ CoTryTask<ReconcileCacheBlocksRsp> MetaOperator::reconcileCacheBlocks(ReconcileC
   co_return co_await runOp(&MetaStore::reconcileCacheBlocks, req);
 }
 
+CoTryTask<ListReconcileCacheBlocksRsp> MetaOperator::listReconcileCacheBlocks(ListReconcileCacheBlocksReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::listReconcileCacheBlocks, req);
+}
+
 CoTryTask<RecoverExpiredCacheLoadsRsp> MetaOperator::recoverExpiredCacheLoads(RecoverExpiredCacheLoadsReq req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkCacheService(req.service));

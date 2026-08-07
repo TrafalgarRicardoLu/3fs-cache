@@ -1725,6 +1725,12 @@ struct ReconcileCacheBlockStatus {
   SERDE_STRUCT_FIELD(ready, std::optional<cache::ReadyIdentity>{});
   SERDE_STRUCT_FIELD(placement, std::optional<storage::PlacementIdentity>{});
   SERDE_STRUCT_FIELD(permit, std::optional<storage::PermitIdentity>{});
+  SERDE_STRUCT_FIELD(cleanupEpoch, cache::CleanupEpoch{});
+  SERDE_STRUCT_FIELD(terminalState, cache::CleanupTerminalState::NONE);
+  SERDE_STRUCT_FIELD(deleteGeneration, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(evictionEpoch, cache::EvictionEpoch{});
+  SERDE_STRUCT_FIELD(retireOperationId, Uuid::zero());
+  SERDE_STRUCT_FIELD(evictionReason, cache::EvictionReason::INVALID);
 
  public:
   Result<Void> valid() const {
@@ -1733,7 +1739,10 @@ struct ReconcileCacheBlockStatus {
       return makeError(StatusCode::kInvalidArg, "invalid reconcile cache block state");
     }
     if (state == cache::CacheBlockState::NONE) {
-      if (blockLength != 0 || ready || placement || permit)
+      if (blockLength != 0 || ready || placement || permit || cleanupEpoch != cache::CleanupEpoch{} ||
+          terminalState != cache::CleanupTerminalState::NONE || deleteGeneration != cache::CacheGeneration{} ||
+          evictionEpoch != cache::EvictionEpoch{} || retireOperationId != Uuid::zero() ||
+          evictionReason != cache::EvictionReason::INVALID)
         return makeError(StatusCode::kInvalidArg, "empty reconcile state has cache ownership");
       return VALID;
     }
@@ -1743,6 +1752,17 @@ struct ReconcileCacheBlockStatus {
     if (permit) RETURN_ON_ERROR(permit->valid());
     if (state == cache::CacheBlockState::READY && (!ready || !placement || !permit)) {
       return makeError(CacheCode::kPlacementMismatch, "READY reconcile state is missing immutable placement");
+    }
+    if (state == cache::CacheBlockState::CLEANING &&
+        (!placement || cleanupEpoch == cache::CleanupEpoch{} ||
+         (terminalState != cache::CleanupTerminalState::NONE && terminalState != cache::CleanupTerminalState::FAILED &&
+          terminalState != cache::CleanupTerminalState::REENQUEUE))) {
+      return makeError(CacheCode::kPlacementMismatch, "CLEANING reconcile state is missing cleanup identity");
+    }
+    if (state == cache::CacheBlockState::EVICTING &&
+        (!ready || !placement || !permit || evictionEpoch == cache::EvictionEpoch{} ||
+         retireOperationId == Uuid::zero() || evictionReason == cache::EvictionReason::INVALID)) {
+      return makeError(CacheCode::kPlacementMismatch, "EVICTING reconcile state is missing eviction identity");
     }
     return VALID;
   }
@@ -1772,6 +1792,27 @@ struct ReconcileCacheBlocksReq : ReqBase {
 
 struct ReconcileCacheBlocksRsp : RspBase {
   SERDE_STRUCT_FIELD(results, std::vector<Result<ReconcileCacheBlockStatus>>{});
+};
+
+struct ListReconcileCacheBlocksReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(after, std::optional<cache::CacheBlockKey>{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{1000});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (after) RETURN_ON_ERROR(after->valid());
+    if (limit == 0) return makeError(StatusCode::kInvalidArg, "limit is zero");
+    if (limit > kMaxCacheBatchItems) return makeError(CacheCode::kRequestTooLarge, "limit too large");
+    return VALID;
+  }
+};
+
+struct ListReconcileCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(items, std::vector<ReconcileCacheBlockStatus>{});
+  SERDE_STRUCT_FIELD(more, false);
 };
 
 struct RecoverExpiredCacheLoadItem {
@@ -1899,6 +1940,7 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(convertActiveJobPins, 57, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
   META_SERVICE_METHOD(reconcileCacheBlocks, 58, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
   META_SERVICE_METHOD(recoverExpiredCacheLoads, 59, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
+  META_SERVICE_METHOD(listReconcileCacheBlocks, 60, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

@@ -15,6 +15,11 @@
 
 namespace hf3fs::cache_manager {
 
+struct CacheReplicaObservation {
+  storage::CacheChunkGenerationInfo generation;
+  storage::CacheChunkDescriptor descriptor;
+};
+
 class CacheManagerBackend {
  public:
   virtual ~CacheManagerBackend() = default;
@@ -45,8 +50,19 @@ class CacheManagerBackend {
                                                               cache::CacheGeneration) {
     co_return makeError(StatusCode::kNotImplemented);
   }
+  virtual CoTryTask<storage::CacheChunkGenerationInfo> retirePlaced(const meta::Inode &inode,
+                                                                    cache::CacheBlockIndex block,
+                                                                    cache::CacheGeneration generation,
+                                                                    const storage::PlacementIdentity &) {
+    co_return co_await retire(inode, block, generation);
+  }
   virtual CoTryTask<storage::CacheChunkGenerationInfo> query(const meta::Inode &, cache::CacheBlockIndex) {
     co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<storage::CacheChunkGenerationInfo> queryPlaced(const meta::Inode &inode,
+                                                                   cache::CacheBlockIndex block,
+                                                                   const storage::PlacementIdentity &) {
+    co_return co_await query(inode, block);
   }
   virtual CoTryTask<void> finishClean(const meta::FinishCleanCacheBlockItem &) {
     co_return makeError(StatusCode::kNotImplemented);
@@ -107,6 +123,13 @@ class CacheManagerBackend {
   virtual CoTryTask<storage::ListCacheInventoryRsp> listCacheInventory(storage::ListCacheInventoryReq) {
     co_return makeError(StatusCode::kNotImplemented);
   }
+  virtual CoTryTask<meta::ListReconcileCacheBlocksRsp> listReconcileCacheBlocks(std::optional<cache::CacheBlockKey>,
+                                                                                uint32_t) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<CacheReplicaObservation> queryReconcile(const meta::ReconcileCacheBlockStatus &) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
 };
 
 class RealCacheManagerBackend final : public CacheManagerBackend {
@@ -137,7 +160,14 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
   CoTryTask<storage::CacheChunkGenerationInfo> retire(const meta::Inode &inode,
                                                       cache::CacheBlockIndex block,
                                                       cache::CacheGeneration generation) final;
+  CoTryTask<storage::CacheChunkGenerationInfo> retirePlaced(const meta::Inode &inode,
+                                                            cache::CacheBlockIndex block,
+                                                            cache::CacheGeneration generation,
+                                                            const storage::PlacementIdentity &placement) final;
   CoTryTask<storage::CacheChunkGenerationInfo> query(const meta::Inode &inode, cache::CacheBlockIndex block) final;
+  CoTryTask<storage::CacheChunkGenerationInfo> queryPlaced(const meta::Inode &inode,
+                                                           cache::CacheBlockIndex block,
+                                                           const storage::PlacementIdentity &placement) final;
   CoTryTask<void> finishClean(const meta::FinishCleanCacheBlockItem &item) final;
   std::shared_ptr<client::RoutingInfo> routingInfo() final;
   CoTryTask<void> refreshRouting() final;
@@ -167,6 +197,9 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
                                                            uint32_t limit) final;
   CoTryTask<bool> coordinateRetire(const meta::CacheEvictionIdentity &identity) final;
   CoTryTask<storage::ListCacheInventoryRsp> listCacheInventory(storage::ListCacheInventoryReq request) final;
+  CoTryTask<meta::ListReconcileCacheBlocksRsp> listReconcileCacheBlocks(std::optional<cache::CacheBlockKey> after,
+                                                                        uint32_t limit) final;
+  CoTryTask<CacheReplicaObservation> queryReconcile(const meta::ReconcileCacheBlockStatus &status) final;
 
  private:
   meta::CacheServiceIdentity service() const;

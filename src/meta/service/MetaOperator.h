@@ -116,6 +116,7 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   CoTryTask<CommitCacheBlocksRsp> commitCacheBlocks(CommitCacheBlocksReq req);
   CoTryTask<FailCacheBlocksRsp> failCacheBlocks(FailCacheBlocksReq req);
   CoTryTask<ReconcileCacheBlocksRsp> reconcileCacheBlocks(ReconcileCacheBlocksReq req);
+  CoTryTask<ListReconcileCacheBlocksRsp> listReconcileCacheBlocks(ListReconcileCacheBlocksReq req);
   CoTryTask<RecoverExpiredCacheLoadsRsp> recoverExpiredCacheLoads(RecoverExpiredCacheLoadsReq req);
   CoTryTask<BeginCleanCacheBlocksRsp> beginCleanCacheBlocks(BeginCleanCacheBlocksReq req);
   CoTryTask<FinishCleanCacheBlocksRsp> finishCleanCacheBlocks(FinishCleanCacheBlocksReq req);

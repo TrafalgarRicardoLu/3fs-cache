@@ -19,6 +19,12 @@ Result<ReconcileCacheBlockStatus> reconcileStatus(const cache::CacheBlockKey &ke
   status.ready = record->ready;
   status.placement = record->placement;
   status.permit = record->permit ? record->permit : record->committedPermit;
+  status.cleanupEpoch = record->cleanupEpoch;
+  status.terminalState = record->terminalState;
+  status.deleteGeneration = record->deleteGeneration;
+  status.evictionEpoch = record->evictionEpoch;
+  status.retireOperationId = record->retireOperationId;
+  status.evictionReason = record->evictionReason;
   auto valid = status.valid();
   if (valid.hasError()) return makeError(StatusCode::kDataCorruption, valid.error().message());
   return status;
@@ -51,10 +57,42 @@ class ReconcileCacheBlocksOp : public ReadOnlyOperation<ReconcileCacheBlocksRsp>
   const ReconcileCacheBlocksReq &req_;
 };
 
+class ListReconcileCacheBlocksOp : public ReadOnlyOperation<ListReconcileCacheBlocksRsp> {
+ public:
+  ListReconcileCacheBlocksOp(MetaStore &meta, const ListReconcileCacheBlocksReq &req)
+      : ReadOnlyOperation<ListReconcileCacheBlocksRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<ListReconcileCacheBlocksRsp> run(IReadOnlyTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto page = co_await CacheBlockStore::snapshotListReconcile(txn, req_.after, req_.limit);
+    CO_RETURN_ON_ERROR(page);
+    ListReconcileCacheBlocksRsp response;
+    response.more = page->more;
+    response.items.reserve(page->records.size());
+    for (const auto &record : page->records) {
+      auto status = reconcileStatus(record.key, record);
+      CO_RETURN_ON_ERROR(status);
+      response.items.push_back(std::move(*status));
+    }
+    co_return response;
+  }
+
+ private:
+  const ListReconcileCacheBlocksReq &req_;
+};
+
 }  // namespace
 
 MetaStore::OpPtr<ReconcileCacheBlocksRsp> MetaStore::reconcileCacheBlocks(const ReconcileCacheBlocksReq &req) {
   return std::make_unique<ReconcileCacheBlocksOp>(*this, req);
+}
+
+MetaStore::OpPtr<ListReconcileCacheBlocksRsp> MetaStore::listReconcileCacheBlocks(
+    const ListReconcileCacheBlocksReq &req) {
+  return std::make_unique<ListReconcileCacheBlocksOp>(*this, req);
 }
 
 }  // namespace hf3fs::meta::server

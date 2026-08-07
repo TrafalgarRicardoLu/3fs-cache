@@ -22,7 +22,10 @@ CoTryTask<void> CacheCleanupWorker::clean(meta::BeginCleanCacheBlockItem item) {
 
   std::optional<cache::CacheGeneration> retired;
   for (size_t attempt = 0; begun->deleteGeneration != cache::CacheGeneration{} && attempt < 8; ++attempt) {
-    auto result = co_await backend_->retire(*inode, item.key.block, begun->deleteGeneration);
+    auto result =
+        begun->placement
+            ? co_await backend_->retirePlaced(*inode, item.key.block, begun->deleteGeneration, *begun->placement)
+            : co_await backend_->retire(*inode, item.key.block, begun->deleteGeneration);
     if (result.hasValue()) {
       if (!result->retired || result->cacheGeneration < begun->deleteGeneration || result->length != 0) {
         co_return makeError(CacheCode::kInvalidResponse, "Storage did not confirm a cache tombstone");
@@ -31,7 +34,8 @@ CoTryTask<void> CacheCleanupWorker::clean(meta::BeginCleanCacheBlockItem item) {
       break;
     }
     if (result.error().code() != CacheCode::kGenerationAdvanced) CO_RETURN_ERROR(result);
-    auto current = co_await backend_->query(*inode, item.key.block);
+    auto current = begun->placement ? co_await backend_->queryPlaced(*inode, item.key.block, *begun->placement)
+                                    : co_await backend_->query(*inode, item.key.block);
     CO_RETURN_ON_ERROR(current);
     if (current->cacheGeneration <= begun->deleteGeneration) {
       co_return makeError(CacheCode::kInvalidResponse, "Storage generation advanced without a newer generation");

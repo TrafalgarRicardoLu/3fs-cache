@@ -74,6 +74,7 @@ IMPL_META_STUB_METHOD(advancePrefetchJobState, AdvancePrefetchJobStateReq, Advan
 IMPL_META_STUB_METHOD(cancelPrefetchJob, CancelPrefetchJobReq, CancelPrefetchJobRsp);
 IMPL_META_STUB_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
 IMPL_META_STUB_METHOD(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
+IMPL_META_STUB_METHOD(listReconcileCacheBlocks, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);
 IMPL_META_STUB_METHOD(recoverExpiredCacheLoads, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
 
 template class MetaServiceStub<serde::ClientContext>;

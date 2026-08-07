@@ -646,6 +646,12 @@ TEST_F(TestCacheStateMachine, ReconcileReturnsSnapshotOfEveryStateAndExplicitNon
       CO_ASSERT_EQ(response->results[index]->placement, records[index].placement);
       auto expectedPermit = records[index].permit ? records[index].permit : records[index].committedPermit;
       CO_ASSERT_EQ(response->results[index]->permit, expectedPermit);
+      CO_ASSERT_EQ(response->results[index]->cleanupEpoch, records[index].cleanupEpoch);
+      CO_ASSERT_EQ(response->results[index]->terminalState, records[index].terminalState);
+      CO_ASSERT_EQ(response->results[index]->deleteGeneration, records[index].deleteGeneration);
+      CO_ASSERT_EQ(response->results[index]->evictionEpoch, records[index].evictionEpoch);
+      CO_ASSERT_EQ(response->results[index]->retireOperationId, records[index].retireOperationId);
+      CO_ASSERT_EQ(response->results[index]->evictionReason, records[index].evictionReason);
       CO_ASSERT_OK(response->results[index]->valid());
     }
     CO_ASSERT_OK(response->results.back());
@@ -662,6 +668,23 @@ TEST_F(TestCacheStateMachine, ReconcileReturnsSnapshotOfEveryStateAndExplicitNon
     auto duplicate = request;
     duplicate.keys.push_back(duplicate.keys.front());
     CO_ASSERT_ERROR(co_await cluster.meta().getOperator().reconcileCacheBlocks(duplicate), StatusCode::kInvalidArg);
+
+    ListReconcileCacheBlocksReq list;
+    list.service = service();
+    list.limit = 2;
+    list.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto first = co_await cluster.meta().getOperator().listReconcileCacheBlocks(list);
+    CO_ASSERT_OK(first);
+    CO_ASSERT_EQ(first->items.size(), 2);
+    CO_ASSERT_TRUE(first->more);
+    CO_ASSERT_EQ(first->items[0].state, cache::CacheBlockState::READY);
+    CO_ASSERT_EQ(first->items[1].state, cache::CacheBlockState::CLEANING);
+    list.after = first->items.back().key;
+    auto second = co_await cluster.meta().getOperator().listReconcileCacheBlocks(list);
+    CO_ASSERT_OK(second);
+    CO_ASSERT_EQ(second->items.size(), 1);
+    CO_ASSERT_FALSE(second->more);
+    CO_ASSERT_EQ(second->items[0].state, cache::CacheBlockState::EVICTING);
   }());
 }
 

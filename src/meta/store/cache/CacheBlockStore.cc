@@ -139,6 +139,43 @@ CoTryTask<CacheBlockPage> CacheBlockStore::snapshotListRecoverable(kv::IReadOnly
   co_return page;
 }
 
+CoTryTask<CacheBlockPage> CacheBlockStore::snapshotListReconcile(kv::IReadOnlyTransaction &txn,
+                                                                 std::optional<cache::CacheBlockKey> after,
+                                                                 uint32_t limit) {
+  if (limit == 0 || limit > cache::kMaxPhase2BatchItems) {
+    co_return makeError(StatusCode::kInvalidArg, "invalid cache reconcile page limit");
+  }
+  if (after) CO_RETURN_ON_ERROR(after->valid());
+  const auto prefix = Serializer::serRawArgs(kv::KeyPrefix::CacheBlock, uint8_t{0});
+  const auto endKey = kv::TransactionHelper::prefixListEndKey(prefix);
+  auto beginKey = after ? recordKey(*after) : prefix;
+  bool inclusive = !after.has_value();
+  CacheBlockPage page;
+  while (page.records.size() <= limit) {
+    auto result = co_await txn.snapshotGetRange({beginKey, inclusive}, {endKey, false}, kRecoverableScanBatch);
+    CO_RETURN_ON_ERROR(result);
+    if (result->kvs.empty()) {
+      if (result->hasMore) co_return makeError(CacheCode::kInvalidResponse, "empty cache reconcile scan has more data");
+      break;
+    }
+    for (const auto &value : result->kvs) {
+      auto record = decodeRecord(value);
+      CO_RETURN_ON_ERROR(record);
+      if (record->state == cache::CacheBlockState::READY || record->state == cache::CacheBlockState::EVICTING ||
+          record->state == cache::CacheBlockState::CLEANING) {
+        page.records.push_back(std::move(*record));
+        if (page.records.size() > limit) break;
+      }
+    }
+    if (page.records.size() > limit || !result->hasMore) break;
+    beginKey = result->kvs.back().key;
+    inclusive = false;
+  }
+  page.more = page.records.size() > limit;
+  if (page.more) page.records.resize(limit);
+  co_return page;
+}
+
 CoTryTask<std::vector<CacheBlockRecord>> CacheBlockStore::snapshotListAll(kv::IReadOnlyTransaction &txn,
                                                                           std::optional<uint64_t> inode) {
   auto prefix = inode ? Serializer::serRawArgs(kv::KeyPrefix::CacheBlock, uint8_t{0}, *inode)
