@@ -78,6 +78,15 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                                                        config_.enable_phase4());
     auto recovered = folly::coro::blockingWait(permitRecovery_->run());
     RETURN_ON_ERROR(recovered);
+    if (config_.enable_phase4()) {
+      CacheReconcilerConfig reconcileConfig;
+      reconcileConfig.pageSize = config_.reconcile_page_size();
+      reconcileConfig.maxTargetConcurrency = config_.reconcile_max_concurrency();
+      reconcileConfig.maxMutations = config_.reconcile_max_mutations();
+      reconcileConfig.maxRuntime = config_.reconcile_max_run_time();
+      reconcileConfig.dryRun = config_.reconcile_dry_run();
+      reconciler_ = std::make_unique<CacheReconciler>(backend_, *cleanupWorker_, reconcileConfig);
+    }
     AccessFlushWorker::Config accessConfig;
     accessConfig.flushThreshold = config_.access_flush_threshold();
     accessConfig.batchSize = config_.access_flush_batch_size();
@@ -250,6 +259,26 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     if (accessFlushWorker_) accessFlushWorker_->stop();
     return makeError(StatusCode::kQueueConflict, "failed to start LOADING lease recovery worker");
   }
+  if (reconciler_ && !scheduler->start(
+                         "CacheManagerReconciler",
+                         [this]() -> CoTask<void> {
+                           auto routing = backend_->routingInfo();
+                           if (!routing || !routing->raw()) co_return;
+                           std::vector<storage::TargetId> targets;
+                           for (const auto &[targetId, target] : routing->raw()->targets) {
+                             if (target.storageRole == storage::StorageRole::CACHE_ONLY) targets.push_back(targetId);
+                           }
+                           auto result = co_await reconciler_->run(targets);
+                           if (result.hasError()) {
+                             XLOGF(WARN, "Cache reconcile iteration failed: {}", result.error());
+                           }
+                         },
+                         [this] { return config_.reconcile_interval(); })) {
+    reconciler_->stop();
+    folly::coro::blockingWait(scheduler->stopAll());
+    if (accessFlushWorker_) accessFlushWorker_->stop();
+    return makeError(StatusCode::kQueueConflict, "failed to start cache reconciler");
+  }
   if (orchestration_) {
     auto startWorker = [&](String name, auto task, Duration interval) {
       return scheduler->start(
@@ -335,6 +364,7 @@ void CacheManagerOperator::stop() {
     stopHook = std::move(schedulerStopHook_);
   }
   if (orchestration_) orchestration_->stop();
+  if (reconciler_) reconciler_->stop();
   if (scheduler) folly::coro::blockingWait(scheduler->stopAll());
   if (accessFlushWorker_) accessFlushWorker_->stop();
   if (stopHook) stopHook();

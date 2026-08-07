@@ -11,7 +11,17 @@ bool StorageToMetadataChecker::forwardOwned(cache::CacheBlockState state) {
 
 CoTask<void> StorageToMetadataChecker::retire(const storage::CacheInventoryEntry &entry,
                                               StorageToMetadataResult &result) {
-  if (dryRun_) co_return;
+  if (control_) {
+    auto decision = control_->requestMutation();
+    if (decision != ReconcileMutationDecision::ALLOW) {
+      ++result.deferred;
+      if (decision == ReconcileMutationDecision::STOP) result.stopped = true;
+      co_return;
+    }
+  } else if (dryRun_) {
+    ++result.deferred;
+    co_return;
+  }
   storage::RetireCacheReplicaItem item;
   item.key = entry.key;
   item.targetId = entry.targetId;
@@ -66,6 +76,10 @@ CoTryTask<StorageToMetadataResult> StorageToMetadataChecker::run(std::span<const
 
   StorageToMetadataResult result;
   for (size_t begin = 0; begin < entries.size();) {
+    if (control_ && control_->shouldStop()) {
+      result.stopped = true;
+      break;
+    }
     std::vector<cache::CacheBlockKey> keys;
     size_t end = begin;
     while (end < entries.size() && keys.size() < batchSize_) {
@@ -79,6 +93,10 @@ CoTryTask<StorageToMetadataResult> StorageToMetadataChecker::run(std::span<const
       co_return makeError(CacheCode::kInvalidResponse, "cache reconcile result count mismatch");
     }
     for (size_t index = begin; index < end; ++index) {
+      if (control_ && control_->shouldStop()) {
+        result.stopped = true;
+        break;
+      }
       const auto &entry = *entries[index];
       ++result.scanned;
       auto statusIndex = std::find(keys.begin(), keys.end(), entry.descriptor.logicalKey) - keys.begin();
@@ -109,6 +127,7 @@ CoTryTask<StorageToMetadataResult> StorageToMetadataChecker::run(std::span<const
         ++result.conflicts;
       }
     }
+    if (result.stopped) break;
     begin = end;
   }
   co_return result;

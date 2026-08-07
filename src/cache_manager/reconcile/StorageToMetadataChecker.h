@@ -2,6 +2,7 @@
 
 #include <span>
 
+#include "cache_manager/reconcile/ReconcileControl.h"
 #include "cache_manager/reconcile/StorageInventory.h"
 
 namespace hf3fs::cache_manager {
@@ -15,14 +16,20 @@ struct StorageToMetadataResult {
   uint64_t retired{0};
   uint64_t conflicts{0};
   uint64_t retryable{0};
+  uint64_t deferred{0};
+  bool stopped{false};
 };
 
 class StorageToMetadataChecker {
  public:
-  StorageToMetadataChecker(std::shared_ptr<CacheManagerBackend> backend, uint32_t batchSize, bool dryRun = false)
+  StorageToMetadataChecker(std::shared_ptr<CacheManagerBackend> backend,
+                           uint32_t batchSize,
+                           bool dryRun = false,
+                           std::shared_ptr<ReconcileRunControl> control = nullptr)
       : backend_(std::move(backend)),
         batchSize_(batchSize),
-        dryRun_(dryRun) {}
+        dryRun_(dryRun),
+        control_(std::move(control)) {}
 
   CoTryTask<StorageToMetadataResult> run(std::span<const TargetCacheInventory> inventories);
 
@@ -33,6 +40,7 @@ class StorageToMetadataChecker {
   std::shared_ptr<CacheManagerBackend> backend_;
   uint32_t batchSize_;
   bool dryRun_;
+  std::shared_ptr<ReconcileRunControl> control_;
 };
 
 }  // namespace hf3fs::cache_manager

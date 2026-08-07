@@ -31,6 +31,14 @@ bool MetadataToStorageChecker::definitelyMismatched(const Status &error) {
 CoTask<void> MetadataToStorageChecker::repair(const meta::ReconcileCacheBlockStatus &status,
                                               std::optional<cache::CacheGeneration> observedGeneration,
                                               MetadataToStorageResult &result) {
+  if (control_) {
+    auto decision = control_->requestMutation();
+    if (decision != ReconcileMutationDecision::ALLOW) {
+      ++result.deferred;
+      if (decision == ReconcileMutationDecision::STOP) result.stopped = true;
+      co_return;
+    }
+  }
   meta::BeginCleanCacheBlockItem item{status.key,
                                       status.ready,
                                       observedGeneration,
@@ -52,6 +60,14 @@ CoTask<void> MetadataToStorageChecker::repair(const meta::ReconcileCacheBlockSta
 
 CoTask<void> MetadataToStorageChecker::replay(const meta::ReconcileCacheBlockStatus &status,
                                               MetadataToStorageResult &result) {
+  if (control_) {
+    auto decision = control_->requestMutation();
+    if (decision != ReconcileMutationDecision::ALLOW) {
+      ++result.deferred;
+      if (decision == ReconcileMutationDecision::STOP) result.stopped = true;
+      co_return;
+    }
+  }
   if (status.state == cache::CacheBlockState::EVICTING) {
     meta::CacheEvictionIdentity identity{status.key,
                                          *status.ready,
@@ -95,12 +111,20 @@ CoTryTask<MetadataToStorageResult> MetadataToStorageChecker::run() {
   std::optional<cache::CacheBlockKey> after;
   bool more = true;
   while (more) {
+    if (control_ && control_->shouldStop()) {
+      result.stopped = true;
+      break;
+    }
     auto page = co_await backend_->listReconcileCacheBlocks(after, pageSize_);
     CO_RETURN_ON_ERROR(page);
     if (page->more && page->items.empty()) {
       co_return makeError(CacheCode::kInvalidResponse, "empty cache reconcile page has continuation");
     }
     for (const auto &status : page->items) {
+      if (control_ && control_->shouldStop()) {
+        result.stopped = true;
+        break;
+      }
       auto valid = status.valid();
       if (valid.hasError()) co_return makeError(CacheCode::kInvalidResponse, valid.error().message());
       ++result.scanned;
@@ -132,6 +156,7 @@ CoTryTask<MetadataToStorageResult> MetadataToStorageChecker::run() {
       co_await repair(status, observation->generation.cacheGeneration, result);
     }
     more = page->more;
+    if (result.stopped) break;
     if (more) after = page->items.back().key;
   }
   co_return result;

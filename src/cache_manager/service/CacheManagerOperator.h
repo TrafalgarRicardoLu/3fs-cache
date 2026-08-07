@@ -21,6 +21,7 @@
 #include "cache_manager/job/MetaJobRunnerBackend.h"
 #include "cache_manager/job/OrchestrationCoordinator.h"
 #include "cache_manager/loader/CacheLoader.h"
+#include "cache_manager/reconcile/CacheReconciler.h"
 #include "cache_manager/recovery/PermitRecovery.h"
 #include "cache_manager/scheduler/LoaderScheduler.h"
 #include "cache_manager/service/AdminCleanupCacheBlocks.h"
@@ -90,6 +91,7 @@ class CacheManagerOperator {
   std::unique_ptr<EvictionController> evictionController_;
   std::unique_ptr<EvictingWorker> evictingWorker_;
   std::unique_ptr<PermitRecovery> permitRecovery_;
+  std::unique_ptr<CacheReconciler> reconciler_;
   std::unique_ptr<AccessFlushWorker> accessFlushWorker_;
   std::unique_ptr<JobQuota> jobQuota_;
   std::shared_ptr<JobPlanner> jobPlanner_;

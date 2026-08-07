@@ -19,6 +19,9 @@ CoTryTask<TargetCacheInventory> StorageInventoryReader::readTarget(storage::Targ
   std::set<std::string> cursors;
   std::string previousKey;
   while (true) {
+    if (shouldStop_ && shouldStop_()) {
+      co_return makeError(CacheCode::kUnavailable, "cache inventory scan stopped");
+    }
     storage::ListCacheInventoryReq request;
     request.targetId = targetId;
     request.cursor = cursor;
@@ -65,6 +68,7 @@ CoTask<std::vector<Result<TargetCacheInventory>>> StorageInventoryReader::readTa
     co_return results;
   }
   for (size_t begin = 0; begin < targetIds.size(); begin += maxConcurrency_) {
+    if (shouldStop_ && shouldStop_()) break;
     auto end = std::min(targetIds.size(), begin + maxConcurrency_);
     std::vector<CoTryTask<TargetCacheInventory>> tasks;
     tasks.reserve(end - begin);

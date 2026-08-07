@@ -57,7 +57,7 @@ class Config : public ConfigBase<Config> {
       return makeError(StatusCode::kInvalidConfig, "cache eviction batch configuration exceeds protocol limit");
     }
     if (reconcile_page_size() == 0 || reconcile_page_size() > storage::kMaxCacheStorageBatchItems ||
-        reconcile_max_concurrency() == 0) {
+        reconcile_max_concurrency() == 0 || reconcile_max_mutations() == 0 || reconcile_max_run_time() <= 0_ns) {
       return makeError(StatusCode::kInvalidConfig, "cache reconcile configuration exceeds protocol limit");
     }
     std::set<uint32_t> ids;
@@ -141,6 +141,10 @@ class Config : public ConfigBase<Config> {
     return value > 0 && value <= storage::kMaxCacheStorageBatchItems;
   });
   CONFIG_ITEM(reconcile_max_concurrency, uint32_t{8}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(reconcile_interval, 10_min, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(reconcile_max_mutations, uint64_t{1000}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(reconcile_max_run_time, 5_min, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(reconcile_dry_run, false);
   CONFIG_ITEM(reconcile_request_timeout, 30_s, [](Duration value) { return value > 0_ns; });
   CONFIG_ITEM(access_flush_threshold, uint32_t{256}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(access_flush_batch_size, uint32_t{512}, ConfigCheckers::checkPositive);
