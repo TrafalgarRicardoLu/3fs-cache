@@ -1017,6 +1017,10 @@ META_CACHE_CLIENT_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertA
 META_CACHE_CLIENT_METHOD(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
 META_CACHE_CLIENT_METHOD(listReconcileCacheBlocks, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);
 META_CACHE_CLIENT_METHOD(recoverExpiredCacheLoads, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
+META_CACHE_CLIENT_METHOD(createWriteStaging, CreateWriteStagingReq, CreateWriteStagingRsp);
+META_CACHE_CLIENT_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
+META_CACHE_CLIENT_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
+META_CACHE_CLIENT_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
 #undef META_CACHE_CLIENT_METHOD
 
 }  // namespace hf3fs::meta::client

@@ -88,6 +88,10 @@ class DummyMetaServiceStub : public IMetaServiceStub {
   NOT_IMPLEMENTED_FUNC(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
   NOT_IMPLEMENTED_FUNC(listReconcileCacheBlocks, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);
   NOT_IMPLEMENTED_FUNC(recoverExpiredCacheLoads, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
+  NOT_IMPLEMENTED_FUNC(createWriteStaging, CreateWriteStagingReq, CreateWriteStagingRsp);
+  NOT_IMPLEMENTED_FUNC(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
+  NOT_IMPLEMENTED_FUNC(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
+  NOT_IMPLEMENTED_FUNC(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
 
   virtual CoTryTask<AuthRsp> authenticate(const AuthReq &req) { co_return AuthRsp{req.user}; }
   CoTryTask<AuthRsp> authenticate(const AuthReq &req, const net::UserRequestOptions &, serde::Timestamp *) override {
@@ -214,6 +218,10 @@ class MetaServiceStub<hf3fs::stubs::StubMockContext<IMetaServiceStub>> : public 
   FORWARD_RPC_FUNC(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
   FORWARD_RPC_FUNC(listReconcileCacheBlocks, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);
   FORWARD_RPC_FUNC(recoverExpiredCacheLoads, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
+  FORWARD_RPC_FUNC(createWriteStaging, CreateWriteStagingReq, CreateWriteStagingRsp);
+  FORWARD_RPC_FUNC(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
+  FORWARD_RPC_FUNC(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
+  FORWARD_RPC_FUNC(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
 
 #undef FORWARD_RPC_FUNC
 

@@ -76,6 +76,10 @@ class MetaServiceStub : public IMetaServiceStub {
   META_STUB_METHOD(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
   META_STUB_METHOD(listReconcileCacheBlocks, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);
   META_STUB_METHOD(recoverExpiredCacheLoads, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
+  META_STUB_METHOD(createWriteStaging, CreateWriteStagingReq, CreateWriteStagingRsp);
+  META_STUB_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
+  META_STUB_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
+  META_STUB_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
 
 #undef META_STUB_METHOD
 

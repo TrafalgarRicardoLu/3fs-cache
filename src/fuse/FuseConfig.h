@@ -37,6 +37,17 @@ struct FuseConfig : public ConfigBase<FuseConfig> {
     CONFIG_OBJ_ARRAY(origins, CacheOrigin, 64, [](auto &) { return 0; });
   };
 
+  struct WriteThrough : public ConfigBase<WriteThrough> {
+    CONFIG_ITEM(enabled, false);
+    CONFIG_ITEM(origin_id, uint32_t{0});
+    CONFIG_ITEM(bucket, std::string{});
+    CONFIG_ITEM(key_prefix, std::string{"write-through"});
+    CONFIG_ITEM(staging_table_id, uint32_t{0});
+    CONFIG_ITEM(chunk_size, uint32_t{4_MB}, ConfigCheckers::checkPositive);
+    CONFIG_ITEM(stripe_size, uint32_t{1}, ConfigCheckers::checkPositive);
+    CONFIG_ITEM(writer_lease, 1_min, [](Duration value) { return value > 0_ns; });
+  };
+
 #ifdef ENABLE_FUSE_APPLICATION
   CONFIG_OBJ(common, ApplicationBase::Config);
 #else
@@ -95,6 +106,7 @@ struct FuseConfig : public ConfigBase<FuseConfig> {
 
   CONFIG_OBJ(storage_io, storage::client::IoOptions);
   CONFIG_OBJ(read_cache, ReadCache);
+  CONFIG_OBJ(write_through, WriteThrough);
 
   CONFIG_HOT_UPDATED_ITEM(submit_wait_jitter, 1_ms);
   CONFIG_HOT_UPDATED_ITEM(max_jobs_per_ioring, 32);

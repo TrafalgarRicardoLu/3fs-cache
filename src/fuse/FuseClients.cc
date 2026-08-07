@@ -138,6 +138,17 @@ Result<Void> FuseClients::init(const flat::AppInfo &appInfo,
                                                  true /* dynStripe */);
   metaClient->start(client->tpg().bgThreadPool());
 
+  if (fuseConfig.write_through().enabled()) {
+    const auto &writeThrough = fuseConfig.write_through();
+    if (writeThrough.origin_id() == 0 || writeThrough.bucket().empty() || writeThrough.staging_table_id() == 0) {
+      return makeError(StatusCode::kInvalidConfig,
+                       "write-through requires a nonzero origin id, bucket, and staging table id");
+    }
+    auto testKey = writeStagingObjectKey(writeThrough.key_prefix(), Path("/config-validation"), Uuid::random());
+    RETURN_ON_ERROR(
+        (cache::ObjectRef{cache::OriginId{writeThrough.origin_id()}, writeThrough.bucket(), testKey}.valid()));
+  }
+
   if (fuseConfig.read_cache().enabled()) {
     if (!fuseConfig.read_cache().cache_manager_address() || fuseConfig.read_cache().origins_length() == 0) {
       return makeError(StatusCode::kInvalidConfig,

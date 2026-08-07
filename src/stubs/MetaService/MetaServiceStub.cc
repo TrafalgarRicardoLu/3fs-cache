@@ -76,6 +76,10 @@ IMPL_META_STUB_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActi
 IMPL_META_STUB_METHOD(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
 IMPL_META_STUB_METHOD(listReconcileCacheBlocks, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);
 IMPL_META_STUB_METHOD(recoverExpiredCacheLoads, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
+IMPL_META_STUB_METHOD(createWriteStaging, CreateWriteStagingReq, CreateWriteStagingRsp);
+IMPL_META_STUB_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
+IMPL_META_STUB_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
+IMPL_META_STUB_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
 
 template class MetaServiceStub<serde::ClientContext>;
 template class MetaServiceStub<serde::ClientMockContext>;

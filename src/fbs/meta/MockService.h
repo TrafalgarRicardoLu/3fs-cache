@@ -52,7 +52,12 @@ class MockMetaService : public serde::ServiceWrapper<MockMetaService, MetaSerde>
   META_MOCK_SERVICE_METHOD(listCacheBlocks, ListCacheBlocksReq, ListCacheBlocksRsp);
   META_MOCK_SERVICE_METHOD(listRecoverableCachePermits, ListRecoverableCachePermitsReq, ListRecoverableCachePermitsRsp);
   META_MOCK_SERVICE_METHOD(cancelQueuedAdmissions, CancelQueuedAdmissionsReq, CancelQueuedAdmissionsRsp);
+  META_MOCK_SERVICE_METHOD(updateCacheBlockAccess, UpdateCacheBlockAccessReq, UpdateCacheBlockAccessRsp);
+  META_MOCK_SERVICE_METHOD(beginEvictCacheBlocks, BeginEvictCacheBlocksReq, BeginEvictCacheBlocksRsp);
+  META_MOCK_SERVICE_METHOD(listEvictingCacheBlocks, ListEvictingCacheBlocksReq, ListEvictingCacheBlocksRsp);
   META_MOCK_SERVICE_METHOD(listReadyCacheBlocks, ListReadyCacheBlocksReq, ListReadyCacheBlocksRsp);
+  META_MOCK_SERVICE_METHOD(reportCacheStorageEvents, ReportCacheStorageEventsReq, ReportCacheStorageEventsRsp);
+  META_MOCK_SERVICE_METHOD(listCacheEventDeadLetters, ListCacheEventDeadLettersReq, ListCacheEventDeadLettersRsp);
   META_MOCK_SERVICE_METHOD(createPrefetchJob, CreatePrefetchJobReq, CreatePrefetchJobRsp);
   META_MOCK_SERVICE_METHOD(getPrefetchJob, GetPrefetchJobReq, GetPrefetchJobRsp);
   META_MOCK_SERVICE_METHOD(listPrefetchJobs, ListPrefetchJobsReq, ListPrefetchJobsRsp);

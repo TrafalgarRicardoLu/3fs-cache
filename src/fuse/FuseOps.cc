@@ -594,7 +594,8 @@ bool flushAndSync(fuse_req_t req,
                   int flushOnly,
                   SyncType syncType,
                   struct fuse_file_info *fi,
-                  struct fuse_entry_param *e = nullptr) {
+                  struct fuse_entry_param *e = nullptr,
+                  Inode *syncedInode = nullptr) {
   auto ino = real_ino(fino);
 
   struct fuse_file_info fi2 {};
@@ -633,10 +634,49 @@ bool flushAndSync(fuse_req_t req,
     handle_error(req, res);
     return false;
   } else {
+    if (res->has_value() && syncedInode) {
+      *syncedInode = **res;
+    }
     if (res->has_value() && e) {
       fillLinuxStat(e->attr, **res);
     }
   }
+  return true;
+}
+
+bool sealWriteStaging(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
+  auto handle = fi && fi->fh ? (FileHandle *)fi->fh : nullptr;
+  if (!handle || !handle->writeStaging) return true;
+
+  auto staging = handle->writeStaging;
+  std::lock_guard lock(staging->mutex);
+  if (staging->sealed) return true;
+
+  Inode synced;
+  if (!flushAndSync(req, fino, false, SyncType::ForceFsync, fi, nullptr, &synced)) return false;
+  if (!synced.isFile()) {
+    fuse_reply_err(req, EIO);
+    return false;
+  }
+
+  auto userInfo = UserInfo(flat::Uid(fuse_req_ctx(req)->uid), flat::Gid(fuse_req_ctx(req)->gid), d.fuseToken);
+  meta::SealWriteStagingReq request;
+  request.user = userInfo;
+  request.jobId = staging->job.jobId;
+  request.expectedStateVersion = staging->job.stateVersion;
+  request.stagingInode = synced.id;
+  request.writerLeaseId = staging->job.writerLeaseId;
+  request.finalLength = synced.asFile().getVersionedLength();
+  request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto result = withRequestInfo(req, d.metaClient->sealWriteStaging(std::move(request)));
+  if (result.hasError()) {
+    handle_error(req, result);
+    return false;
+  }
+
+  staging->job = result->job;
+  staging->sealed = true;
+  handle->inodeSnapshot = result->inode;
   return true;
 }
 
@@ -849,6 +889,10 @@ void hf3fs_setattr(fuse_req_t req, fuse_ino_t fino, struct stat *attr, int to_se
     }
   }
   if (to_set & FUSE_SET_ATTR_SIZE) {
+    if (pi && isWriteStagingInode(pi->inode, flat::ChainTableId{d.config->write_through().staging_table_id()})) {
+      fuse_reply_err(req, EOPNOTSUPP);
+      return;
+    }
     {
       std::lock_guard lock(pi->wbMtx);
       auto wb = pi->writeBuf;
@@ -1441,6 +1485,11 @@ void hf3fs_open(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
     fuse_reply_err(req, EROFS);
     return;
   }
+  if (isWriteStagingInode(ptr->inode, flat::ChainTableId{d.config->write_through().staging_table_id()}) &&
+      (fi->flags & O_ACCMODE) != O_RDONLY) {
+    fuse_reply_err(req, EOPNOTSUPP);
+    return;
+  }
   if (ptr->inode.isOriginFile() && !d.cacheReadPipeline) {
     fuse_reply_err(req, StatusCode::toErrno(CacheCode::kFeatureDisabled));
     return;
@@ -1480,7 +1529,7 @@ void hf3fs_open(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
     std::lock_guard lock(d.originReadSessionsMutex);
     d.originReadSessions.emplace(session, std::make_shared<RcInode>(inodeSnapshot));
   }
-  fi->fh = (uintptr_t)(new FileHandle{ptr, std::move(inodeSnapshot), (bool)(fi->flags & O_DIRECT), session});
+  fi->fh = (uintptr_t)(new FileHandle{ptr, std::move(inodeSnapshot), (bool)(fi->flags & O_DIRECT), session, nullptr});
   fuse_reply_open(req, fi);
 }
 
@@ -1616,7 +1665,40 @@ void hf3fs_write(fuse_req_t req, fuse_ino_t fino, const char *buf, size_t size, 
         fuse_req_ctx(req)->pid);
   record("write", fuse_req_ctx(req)->uid);
 
-  auto odir = ((FileHandle *)fi->fh)->oDirect;
+  auto handle = (FileHandle *)fi->fh;
+  auto staging = handle->writeStaging;
+  std::unique_lock<std::mutex> stagingLock;
+  if (staging) {
+    stagingLock = std::unique_lock(staging->mutex);
+    if (staging->sealed) {
+      fuse_reply_err(req, EPERM);
+      return;
+    }
+    auto sequential = checkSequentialWrite(staging->nextOffset, off, size);
+    if (sequential.hasError()) {
+      handle_error(req, sequential);
+      return;
+    }
+
+    auto nowMs = static_cast<uint64_t>(UtcClock::now().toMicroseconds() / 1000);
+    auto leaseMs = static_cast<uint64_t>(d.config->write_through().writer_lease().asMs().count());
+    auto expiresAtMs = std::max(nowMs + leaseMs, staging->job.writerLeaseExpiresAtMs + 1);
+    meta::RenewWriteStagingLeaseReq renew;
+    renew.user = userInfo;
+    renew.jobId = staging->job.jobId;
+    renew.expectedStateVersion = staging->job.stateVersion;
+    renew.writerLeaseId = staging->job.writerLeaseId;
+    renew.writerLeaseExpiresAtMs = expiresAtMs;
+    renew.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto renewed = withRequestInfo(req, d.metaClient->renewWriteStagingLease(std::move(renew)));
+    if (renewed.hasError()) {
+      handle_error(req, renewed);
+      return;
+    }
+    staging->job = std::move(renewed->job);
+  }
+
+  auto odir = handle->oDirect;
   auto pi = inodeOf(*fi, ino);
   //  auto &inode = pi->inode;
 
@@ -1657,6 +1739,7 @@ void hf3fs_write(fuse_req_t req, fuse_ino_t fino, const char *buf, size_t size, 
     writeLatency.addSample(SteadyClock::now() - start, monitor::TagSet{{"uid", uids}});
 
     if (ret >= 0) {
+      if (staging) staging->nextOffset += static_cast<uint64_t>(ret);
       fuse_reply_write(req, ret);
     }
     return;
@@ -1718,6 +1801,7 @@ void hf3fs_write(fuse_req_t req, fuse_ino_t fino, const char *buf, size_t size, 
   }
 
   writeLatency.addSample(SteadyClock::now() - start, monitor::TagSet{{"uid", uids}});
+  if (staging) staging->nextOffset += size;
   fuse_reply_write(req, size);
 }
 
@@ -1729,7 +1813,9 @@ void hf3fs_fsync(fuse_req_t req, fuse_ino_t fino, int datasync, struct fuse_file
   } else {
     record("fsync", fuse_req_ctx(req)->uid);
   }
-  if (flushAndSync(req, fino, datasync && !d.config->fdatasync_update_length(), SyncType::Fsync, fi)) {
+  if (sealWriteStaging(req, fino, fi) &&
+      (((FileHandle *)fi->fh)->writeStaging ||
+       flushAndSync(req, fino, datasync && !d.config->fdatasync_update_length(), SyncType::Fsync, fi))) {
     fuse_reply_err(req, 0);
   }
 }
@@ -1796,7 +1882,9 @@ void hf3fs_release(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
   }
 
   auto userInfo = UserInfo(flat::Uid(fuse_req_ctx(req)->uid), flat::Gid(fuse_req_ctx(req)->gid), d.fuseToken);
-  if (handle->inodeSnapshot.isOriginFile()) {
+  if (handle->writeStaging) {
+    if (!sealWriteStaging(req, fino, fi)) return;
+  } else if (handle->inodeSnapshot.isOriginFile()) {
     {
       std::lock_guard lock(d.originReadSessionsMutex);
       d.originReadSessions.erase(sessionId);
@@ -1925,6 +2013,58 @@ void hf3fs_create(fuse_req_t req, fuse_ino_t fparent, const char *name, mode_t m
     return;
   }
 
+  if (d.config->write_through().enabled() && S_ISREG(mode)) {
+    if ((fi->flags & O_APPEND) || (fi->flags & O_NONBLOCK)) {
+      fuse_reply_err(req, EOPNOTSUPP);
+      return;
+    }
+
+    auto parentPath = withRequestInfo(req, d.metaClient->getRealPath(userInfo, parent, std::nullopt, true));
+    if (parentPath.hasError()) {
+      handle_error(req, parentPath);
+      return;
+    }
+
+    auto session = meta::client::SessionId::random();
+    auto jobId = cache::UploadJobId{Uuid::random()};
+    auto writerLeaseId = Uuid::random();
+    auto path = (*parentPath / Path(name)).lexically_normal();
+    const auto &config = d.config->write_through();
+    meta::CreateWriteStagingReq request;
+    request.user = userInfo;
+    request.path = meta::PathAt(path);
+    request.jobId = jobId;
+    request.destination = {cache::OriginId{config.origin_id()},
+                           config.bucket(),
+                           writeStagingObjectKey(config.key_prefix(), path, jobId.toUnderType())};
+    request.tableId = flat::ChainTableId{config.staging_table_id()};
+    request.chunkSize = config.chunk_size();
+    request.stripeSize = config.stripe_size();
+    request.permission = meta::Permission(mode & ALLPERMS);
+    request.session = meta::SessionInfo{d.clientId, session};
+    request.writerLeaseId = writerLeaseId;
+    request.writerLeaseExpiresAtMs = static_cast<uint64_t>(UtcClock::now().toMicroseconds() / 1000) +
+                                     static_cast<uint64_t>(config.writer_lease().asMs().count());
+    request.mode = meta::WriteStagingMode::SEQUENTIAL;
+    request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto result = withRequestInfo(req, d.metaClient->createWriteStaging(std::move(request)));
+    if (result.hasError()) {
+      handle_error(req, result);
+      return;
+    }
+
+    struct fuse_entry_param e;
+    init_entry(&e, d.userConfig.getConfig(userInfo).attr_timeout(), d.userConfig.getConfig(userInfo).entry_timeout());
+    add_entry(result->inode, &e);
+    auto ptr = inodeOf(*fi, result->inode.id);
+    auto staging = std::make_shared<FileHandle::WriteStaging>();
+    staging->job = std::move(result->job);
+    fi->direct_io = 1;
+    fi->fh = (uintptr_t)(new FileHandle{ptr, ptr->inode, true, session, std::move(staging)});
+    fuse_reply_create(req, &e, fi);
+    return;
+  }
+
   auto session = meta::client::SessionId::random();
   auto res = withRequestInfo(
       req,
@@ -1940,7 +2080,7 @@ void hf3fs_create(fuse_req_t req, fuse_ino_t fparent, const char *name, mode_t m
 
     fi->direct_io = (!d.userConfig.getConfig(userInfo).enable_read_cache() || fi->flags & O_DIRECT) ? 1 : 0;
     // fi->direct_io = 1;  // newly created file, has to write, or read from remote
-    fi->fh = (uintptr_t)(new FileHandle{ptr, ptr->inode, (bool)(fi->flags & O_DIRECT), session});
+    fi->fh = (uintptr_t)(new FileHandle{ptr, ptr->inode, (bool)(fi->flags & O_DIRECT), session, nullptr});
     XLOGF(DBG, "{}created in o direct mode", fi->flags & O_DIRECT ? "" : "not ");
     fuse_reply_create(req, &e, fi);
   }

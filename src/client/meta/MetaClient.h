@@ -259,6 +259,10 @@ class MetaClient {
   CoTryTask<ListCachePinsByOwnerRsp> listCachePinsByOwner(ListCachePinsByOwnerReq req);
   CoTryTask<QueryCachePinsRsp> queryCachePins(QueryCachePinsReq req);
   CoTryTask<ConvertActiveJobPinsRsp> convertActiveJobPins(ConvertActiveJobPinsReq req);
+  CoTryTask<CreateWriteStagingRsp> createWriteStaging(CreateWriteStagingReq req);
+  CoTryTask<RenewWriteStagingLeaseRsp> renewWriteStagingLease(RenewWriteStagingLeaseReq req);
+  CoTryTask<SealWriteStagingRsp> sealWriteStaging(SealWriteStagingReq req);
+  CoTryTask<RecoverExpiredWriteStagingRsp> recoverExpiredWriteStaging(RecoverExpiredWriteStagingReq req);
 
   CoTryTask<Inode> extendStripe(const UserInfo &userInfo, InodeId inodeId, uint32_t stripe);
 

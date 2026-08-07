@@ -38,6 +38,7 @@
 #include "IovTable.h"
 #include "PioV.h"
 #include "UserConfig.h"
+#include "WriteStaging.h"
 #include "cache/origin/RoutedObjectStore.h"
 #include "client/cache/CacheAccessReporter.h"
 #include "client/cache/CacheReadPipeline.h"
@@ -148,10 +149,18 @@ struct RcInode {
 };
 
 struct FileHandle {
+  struct WriteStaging {
+    cache::UploadJobRecord job;
+    uint64_t nextOffset{0};
+    bool sealed{false};
+    std::mutex mutex;
+  };
+
   std::shared_ptr<RcInode> rcinode;
   Inode inodeSnapshot;
   bool oDirect;
   Uuid sessionId;
+  std::shared_ptr<WriteStaging> writeStaging;
 };
 
 struct DirHandle {

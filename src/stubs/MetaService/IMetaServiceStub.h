@@ -79,6 +79,10 @@ class IMetaServiceStub {
   IMETA_STUB_METHOD(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
   IMETA_STUB_METHOD(listReconcileCacheBlocks, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);
   IMETA_STUB_METHOD(recoverExpiredCacheLoads, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
+  IMETA_STUB_METHOD(createWriteStaging, CreateWriteStagingReq, CreateWriteStagingRsp);
+  IMETA_STUB_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
+  IMETA_STUB_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
+  IMETA_STUB_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
 
 #undef IMETA_STUB_METHOD
 };
