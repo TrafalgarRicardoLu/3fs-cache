@@ -23,7 +23,7 @@ class PermitRecovery {
                  CacheCleanupWorker *cleanupWorker = nullptr,
                  bool recoverLoading = false);
 
-  CoTryTask<void> run();
+  CoTryTask<void> run(bool refreshRouting = true);
 
  private:
   CoTryTask<void> recover(const meta::RecoverableCachePermit &item, uint64_t nowNs, uint64_t expiresAtNs);

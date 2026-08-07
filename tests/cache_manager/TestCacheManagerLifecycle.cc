@@ -1,7 +1,11 @@
+#include <array>
 #include <folly/experimental/coro/BlockingWait.h>
 #include <gtest/gtest.h>
+#include <string>
+#include <vector>
 
 #include "cache_manager/config/Config.h"
+#include "cache_manager/recovery/StartupRecoveryCoordinator.h"
 #include "cache_manager/service/CacheManagerOperator.h"
 #include "common/utils/Toml.hpp"
 #include "tests/GtestHelpers.h"
@@ -83,11 +87,13 @@ TEST(TestCacheManagerLifecycle, StartStopAndRepeatedStop) {
   int stops = 0;
   ASSERT_OK(operator_.startForTest(
       [&]() -> Result<Void> {
+        EXPECT_FALSE(operator_.admissionReady());
         ++starts;
         return Void{};
       },
       [&] { ++stops; }));
   ASSERT_TRUE(operator_.running());
+  ASSERT_TRUE(operator_.admissionReady());
   ASSERT_OK(operator_.startForTest([&]() -> Result<Void> {
     ++starts;
     return Void{};
@@ -96,6 +102,7 @@ TEST(TestCacheManagerLifecycle, StartStopAndRepeatedStop) {
   operator_.stop();
   operator_.stop();
   ASSERT_FALSE(operator_.running());
+  ASSERT_FALSE(operator_.admissionReady());
   ASSERT_EQ(stops, 1);
 }
 
@@ -108,9 +115,97 @@ TEST(TestCacheManagerLifecycle, FailedDependencyIsRolledBack) {
       [&] { ++rollbacks; });
   ASSERT_ERROR(result, StatusCode::kInvalidConfig);
   ASSERT_FALSE(operator_.running());
+  ASSERT_FALSE(operator_.admissionReady());
   ASSERT_EQ(rollbacks, 1);
   operator_.stop();
   ASSERT_EQ(rollbacks, 1);
+}
+
+TEST(TestCacheManagerLifecycle, StartupRecoveryRollsBackEveryFailureBoundaryAndRetries) {
+  constexpr std::array stages{StartupRecoveryStage::ROUTING,
+                              StartupRecoveryStage::PERMIT_AND_LOADING,
+                              StartupRecoveryStage::EVICTION_AND_CLEANUP,
+                              StartupRecoveryStage::JOBS,
+                              StartupRecoveryStage::RECONCILE};
+  for (size_t failed = 0; failed < stages.size(); ++failed) {
+    std::vector<std::string> events;
+    bool injectFailure = true;
+    std::array<StartupRecoveryCoordinator::Step, stages.size()> steps;
+    for (size_t index = 0; index < stages.size(); ++index) {
+      steps[index] = {
+          stages[index],
+          [&, index]() -> CoTryTask<void> {
+            events.push_back("start:" + std::to_string(index));
+            if (injectFailure && index == failed) {
+              co_return makeError(CacheCode::kUnavailable, "injected startup failure");
+            }
+            co_return Void{};
+          },
+          [&, index] { events.push_back("stop:" + std::to_string(index)); },
+      };
+    }
+    StartupRecoveryCoordinator coordinator(std::move(steps));
+    ASSERT_ERROR(folly::coro::blockingWait(coordinator.run()), CacheCode::kUnavailable);
+    std::vector<std::string> expected;
+    for (size_t index = 0; index <= failed; ++index) expected.push_back("start:" + std::to_string(index));
+    for (size_t count = failed + 1; count > 0; --count) expected.push_back("stop:" + std::to_string(count - 1));
+    EXPECT_EQ(events, expected);
+    EXPECT_FALSE(coordinator.running());
+
+    events.clear();
+    injectFailure = false;
+    ASSERT_OK(folly::coro::blockingWait(coordinator.run()));
+    expected.clear();
+    for (size_t index = 0; index < stages.size(); ++index) expected.push_back("start:" + std::to_string(index));
+    EXPECT_EQ(events, expected);
+    EXPECT_FALSE(coordinator.running());
+  }
+}
+
+TEST(TestCacheManagerLifecycle, StartupRecoveryRejectsOutOfOrderStepsWithoutStartingWorkers) {
+  constexpr std::array stages{StartupRecoveryStage::PERMIT_AND_LOADING,
+                              StartupRecoveryStage::ROUTING,
+                              StartupRecoveryStage::EVICTION_AND_CLEANUP,
+                              StartupRecoveryStage::JOBS,
+                              StartupRecoveryStage::RECONCILE};
+  uint64_t starts = 0;
+  uint64_t stops = 0;
+  std::array<StartupRecoveryCoordinator::Step, stages.size()> steps;
+  for (size_t index = 0; index < stages.size(); ++index) {
+    steps[index] = {stages[index],
+                    [&]() -> CoTryTask<void> {
+                      ++starts;
+                      co_return Void{};
+                    },
+                    [&] { ++stops; }};
+  }
+  StartupRecoveryCoordinator coordinator(std::move(steps));
+  ASSERT_ERROR(folly::coro::blockingWait(coordinator.run()), StatusCode::kInvalidConfig);
+  EXPECT_EQ(starts, 0);
+  EXPECT_EQ(stops, 0);
+}
+
+TEST(TestCacheManagerLifecycle, PhaseFourAdmissionRemainsClosedUntilStartupCompletes) {
+  auto config = makeConfig();
+  config.set_enable_phase2(true);
+  config.set_enable_phase3(true);
+  config.set_enable_phase4(true);
+  CacheManagerOperator operator_(config, nullptr, nullptr);
+  EnsureCachedReq request;
+  request.service = {"cache-manager", "test-token"};
+  request.inode = meta::InodeId{1};
+  request.blockCount = 1;
+  request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+
+  auto blocked = folly::coro::blockingWait(operator_.ensureCached(request));
+  ASSERT_OK(blocked);
+  EXPECT_EQ(blocked->status, EnsureCachedStatus::BYPASSED);
+  EXPECT_EQ(blocked->bypassReason, BypassReason::UNAVAILABLE);
+
+  ASSERT_OK(operator_.startForTest([] { return Result<Void>{Void{}}; }));
+  auto enabled = folly::coro::blockingWait(operator_.ensureCached(request));
+  ASSERT_OK(enabled);
+  EXPECT_EQ(enabled->bypassReason, BypassReason::FEATURE_DISABLED);
 }
 
 TEST(TestCacheManagerService, ValidatesIdentityAndProtocol) {

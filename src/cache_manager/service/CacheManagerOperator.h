@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -48,6 +49,7 @@ class CacheManagerOperator {
   Result<Void> startForTest(SchedulerStartHook startHook, SchedulerStopHook stopHook = {});
   void stop();
   bool running() const;
+  bool admissionReady() const { return admissionReady_.load(std::memory_order_acquire); }
 
   CoTryTask<EnsureCachedRsp> ensureCached(const EnsureCachedReq &req);
   CoTryTask<ReportCacheBlockInvalidRsp> reportCacheBlockInvalid(const ReportCacheBlockInvalidReq &req);
@@ -105,6 +107,7 @@ class CacheManagerOperator {
   SchedulerStopHook schedulerStopHook_;
   mutable std::mutex mutex_;
   bool running_ = false;
+  std::atomic<bool> admissionReady_{false};
 };
 
 }  // namespace hf3fs::cache_manager

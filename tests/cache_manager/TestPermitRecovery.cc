@@ -180,6 +180,14 @@ TEST(TestPermitRecovery, RenewsQueuedPermitAndReattachesHint) {
   ASSERT_EQ(hint->key(), backend->records.front().key);
 }
 
+TEST(TestPermitRecovery, AllowsStartupCoordinatorToOwnRoutingRefresh) {
+  auto backend = std::make_shared<RecoveryBackend>();
+  HintCoalescer hints;
+  PermitRecovery recovery(backend, hints, Uuid::from(9, 1), 1_s, 1, [] { return uint64_t{1000}; });
+  ASSERT_OK(folly::coro::blockingWait(recovery.run(false)));
+  EXPECT_EQ(backend->routingRefreshes, 0);
+}
+
 TEST(TestPermitRecovery, ReplacesExpiredPermitWithNewEpoch) {
   auto backend = std::make_shared<RecoveryBackend>();
   backend->records.push_back(recoveryItem());

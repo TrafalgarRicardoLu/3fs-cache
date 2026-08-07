@@ -10,6 +10,7 @@
 #include "cache_manager/planner/ManifestPlanner.h"
 #include "cache_manager/planner/NamespaceDatasetPlanner.h"
 #include "cache_manager/planner/S3PrefixPlanner.h"
+#include "cache_manager/recovery/StartupRecoveryCoordinator.h"
 
 namespace hf3fs::cache_manager {
 
@@ -36,6 +37,11 @@ CacheManagerOperator::~CacheManagerOperator() { stop(); }
 Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
   RETURN_ON_ERROR(config_.validateRuntime());
   if (!backend_) return makeError(StatusCode::kInvalidConfig, "cache manager backend is not configured");
+  {
+    auto lock = std::unique_lock(mutex_);
+    if (running_) return Void{};
+  }
+  admissionReady_.store(false, std::memory_order_release);
   std::map<cache::OriginId, CapacityGate::Limit> originLimits;
   for (size_t i = 0; i < config_.origins_length(); ++i) {
     const auto &origin = config_.origins(i);
@@ -76,8 +82,6 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                                                        PermitRecovery::WallClockNsFn{},
                                                        cleanupWorker_.get(),
                                                        config_.enable_phase4());
-    auto recovered = folly::coro::blockingWait(permitRecovery_->run());
-    RETURN_ON_ERROR(recovered);
     if (config_.enable_phase4()) {
       CacheReconcilerConfig reconcileConfig;
       reconcileConfig.pageSize = config_.reconcile_page_size();
@@ -93,7 +97,6 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     accessConfig.maxEntries = config_.access_max_entries();
     accessConfig.flushInterval = config_.access_flush_interval();
     accessFlushWorker_ = std::make_unique<AccessFlushWorker>(backend_, accessConfig);
-    RETURN_ON_ERROR(accessFlushWorker_->start());
     evictionPressure_ = std::make_unique<EvictionPressureState>();
     physicalPreflight_ = std::make_unique<PhysicalPreflight>(*physicalTopology_,
                                                              config_.space_snapshot_max_age(),
@@ -111,6 +114,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                                                                *evictionPolicy_,
                                                                *evictionPressure_,
                                                                evictionConfig);
+    evictingWorker_ = std::make_unique<EvictingWorker>(backend_, config_.evicting_page_size());
     ensureCached_ = std::make_unique<EnsureCached>(backend_,
                                                    hints_,
                                                    cleanupWorker_.get(),
@@ -181,11 +185,72 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
           CO_RETURN_ON_ERROR(co_await tracker->run(job, cancellation));
           co_return Void{};
         });
-    auto recovered = folly::coro::blockingWait(orchestration_->recover());
-    if (recovered.hasError()) {
-      orchestration_.reset();
-      if (accessFlushWorker_) accessFlushWorker_->stop();
-      return makeError(recovered.error());
+  }
+  auto noCleanup = [] {};
+  StartupRecoveryCoordinator recovery({{
+      {StartupRecoveryStage::ROUTING,
+       [this]() -> CoTryTask<void> { co_return co_await backend_->refreshRouting(); },
+       noCleanup},
+      {StartupRecoveryStage::PERMIT_AND_LOADING,
+       [this]() -> CoTryTask<void> {
+         if (permitRecovery_) co_return co_await permitRecovery_->run(false);
+         co_return Void{};
+       },
+       noCleanup},
+      {StartupRecoveryStage::EVICTION_AND_CLEANUP,
+       [this]() -> CoTryTask<void> {
+         if (!evictingWorker_) co_return Void{};
+         auto recovered = co_await evictingWorker_->runOnce();
+         CO_RETURN_ON_ERROR(recovered);
+         if (recovered->failed != 0) {
+           co_return makeError(CacheCode::kUnavailable, "startup EVICTING recovery has failed items");
+         }
+         co_return Void{};
+       },
+       noCleanup},
+      {StartupRecoveryStage::JOBS,
+       [this]() -> CoTryTask<void> {
+         if (orchestration_) CO_RETURN_ON_ERROR(co_await orchestration_->recover());
+         co_return Void{};
+       },
+       [this] {
+         if (orchestration_) orchestration_->stop();
+       }},
+      {StartupRecoveryStage::RECONCILE,
+       [this]() -> CoTryTask<void> {
+         if (!reconciler_) co_return Void{};
+         auto routing = backend_->routingInfo();
+         if (!routing || !routing->raw()) {
+           co_return makeError(CacheCode::kUnavailable, "routing is missing after startup refresh");
+         }
+         std::vector<storage::TargetId> targets;
+         for (const auto &[targetId, target] : routing->raw()->targets) {
+           if (target.storageRole == storage::StorageRole::CACHE_ONLY) targets.push_back(targetId);
+         }
+         CO_RETURN_ON_ERROR(co_await reconciler_->run(targets));
+         auto status = reconciler_->status();
+         if (status.state != cache::ReconcileRunState::HEALTHY) {
+           co_return makeError(CacheCode::kUnavailable, "startup cache reconciliation is degraded: " + status.error);
+         }
+         co_return Void{};
+       },
+       [this] {
+         if (reconciler_) reconciler_->stop();
+       }},
+  }});
+  auto recovered = folly::coro::blockingWait(recovery.run());
+  RETURN_ON_ERROR(recovered);
+  auto rollbackRecovered = [this] {
+    admissionReady_.store(false, std::memory_order_release);
+    if (orchestration_) orchestration_->stop();
+    if (reconciler_) reconciler_->stop();
+    if (accessFlushWorker_) accessFlushWorker_->stop();
+  };
+  if (accessFlushWorker_) {
+    auto started = accessFlushWorker_->start();
+    if (started.hasError()) {
+      rollbackRecovered();
+      return makeError(started.error());
     }
   }
   auto scheduler = std::make_unique<BackgroundRunner>(executor);
@@ -193,7 +258,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
           "CacheManagerScheduler",
           [this]() -> CoTask<void> { co_await loaderScheduler_->runOne(); },
           [this] { return config_.scheduler_interval(); })) {
-    if (accessFlushWorker_) accessFlushWorker_->stop();
+    rollbackRecovered();
     return makeError(StatusCode::kQueueConflict, "failed to start cache manager scheduler");
   }
   if (spacePoller_ && !scheduler->start(
@@ -217,7 +282,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                           },
                           [this] { return config_.space_poll_interval(); })) {
     folly::coro::blockingWait(scheduler->stopAll());
-    if (accessFlushWorker_) accessFlushWorker_->stop();
+    rollbackRecovered();
     return makeError(StatusCode::kQueueConflict, "failed to start cache manager space poller");
   }
   if (evictionController_ && !scheduler->start(
@@ -230,11 +295,10 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                                  },
                                  [this] { return config_.eviction_interval(); })) {
     folly::coro::blockingWait(scheduler->stopAll());
-    if (accessFlushWorker_) accessFlushWorker_->stop();
+    rollbackRecovered();
     return makeError(StatusCode::kQueueConflict, "failed to start cache eviction controller");
   }
   if (config_.enable_phase2()) {
-    evictingWorker_ = std::make_unique<EvictingWorker>(backend_, config_.evicting_page_size());
     if (!scheduler->start(
             "CacheManagerEvictingWorker",
             [this]() -> CoTask<void> {
@@ -243,7 +307,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
             },
             [this] { return config_.evicting_scan_interval(); })) {
       folly::coro::blockingWait(scheduler->stopAll());
-      if (accessFlushWorker_) accessFlushWorker_->stop();
+      rollbackRecovered();
       return makeError(StatusCode::kQueueConflict, "failed to start EVICTING recovery worker");
     }
   }
@@ -256,7 +320,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                                      },
                                      [this] { return config_.lease_recovery_interval(); })) {
     folly::coro::blockingWait(scheduler->stopAll());
-    if (accessFlushWorker_) accessFlushWorker_->stop();
+    rollbackRecovered();
     return makeError(StatusCode::kQueueConflict, "failed to start LOADING lease recovery worker");
   }
   if (reconciler_ && !scheduler->start(
@@ -276,7 +340,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                          [this] { return config_.reconcile_interval(); })) {
     reconciler_->stop();
     folly::coro::blockingWait(scheduler->stopAll());
-    if (accessFlushWorker_) accessFlushWorker_->stop();
+    rollbackRecovered();
     return makeError(StatusCode::kQueueConflict, "failed to start cache reconciler");
   }
   if (orchestration_) {
@@ -320,7 +384,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     if (!started) {
       orchestration_->stop();
       folly::coro::blockingWait(scheduler->stopAll());
-      if (accessFlushWorker_) accessFlushWorker_->stop();
+      rollbackRecovered();
       return makeError(StatusCode::kQueueConflict, "failed to start cache orchestration workers");
     }
   }
@@ -328,11 +392,12 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
   if (running_) {
     lock.unlock();
     folly::coro::blockingWait(scheduler->stopAll());
-    if (accessFlushWorker_) accessFlushWorker_->stop();
+    rollbackRecovered();
     return Void{};
   }
   scheduler_ = std::move(scheduler);
   running_ = true;
+  admissionReady_.store(true, std::memory_order_release);
   return Void{};
 }
 
@@ -342,14 +407,17 @@ Result<Void> CacheManagerOperator::startForTest(SchedulerStartHook startHook, Sc
     auto lock = std::unique_lock(mutex_);
     if (running_) return Void{};
   }
+  admissionReady_.store(false, std::memory_order_release);
   auto result = startHook ? startHook() : Result<Void>{Void{}};
   if (!result) {
     if (stopHook) stopHook();
+    admissionReady_.store(false, std::memory_order_release);
     return result;
   }
   auto lock = std::unique_lock(mutex_);
   schedulerStopHook_ = std::move(stopHook);
   running_ = true;
+  admissionReady_.store(true, std::memory_order_release);
   return Void{};
 }
 
@@ -360,6 +428,7 @@ void CacheManagerOperator::stop() {
     auto lock = std::unique_lock(mutex_);
     if (!running_ && !scheduler_ && !schedulerStopHook_) return;
     running_ = false;
+    admissionReady_.store(false, std::memory_order_release);
     scheduler = std::move(scheduler_);
     stopHook = std::move(schedulerStopHook_);
   }
@@ -410,6 +479,9 @@ CoTryTask<EnsureCachedRsp> CacheManagerOperator::ensureCached(const EnsureCached
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkProtocol(req.cacheProtocolVersion));
   CO_RETURN_ON_ERROR(checkService(req.service));
+  if (config_.enable_phase4() && !admissionReady_.load(std::memory_order_acquire)) {
+    co_return EnsureCachedRsp{EnsureCachedStatus::BYPASSED, BypassReason::UNAVAILABLE};
+  }
   if (!ensureCached_) co_return EnsureCachedRsp{EnsureCachedStatus::BYPASSED, BypassReason::FEATURE_DISABLED};
   co_return co_await ensureCached_->run(req);
 }

@@ -162,11 +162,11 @@ CoTryTask<void> PermitRecovery::recover(const meta::RecoverableCachePermit &item
   co_return co_await attach(item);
 }
 
-CoTryTask<void> PermitRecovery::run() {
+CoTryTask<void> PermitRecovery::run(bool refreshRouting) {
   if (!backend_ || managerEpoch_ == Uuid::zero() || permitTtl_ <= 0_ns || pageSize_ == 0) {
     co_return makeError(StatusCode::kInvalidConfig, "invalid cache permit recovery configuration");
   }
-  CO_RETURN_ON_ERROR(co_await backend_->refreshRouting());
+  if (refreshRouting) CO_RETURN_ON_ERROR(co_await backend_->refreshRouting());
   std::optional<cache::CacheBlockKey> cursor;
   while (true) {
     auto page = co_await backend_->listRecoverablePermits(cursor, pageSize_);
