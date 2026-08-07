@@ -1722,6 +1722,7 @@ struct ReconcileCacheBlockStatus {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(state, cache::CacheBlockState::NONE);
   SERDE_STRUCT_FIELD(blockLength, uint64_t{});
+  SERDE_STRUCT_FIELD(cacheGeneration, cache::CacheGeneration{});
   SERDE_STRUCT_FIELD(ready, std::optional<cache::ReadyIdentity>{});
   SERDE_STRUCT_FIELD(placement, std::optional<storage::PlacementIdentity>{});
   SERDE_STRUCT_FIELD(permit, std::optional<storage::PermitIdentity>{});
@@ -1739,15 +1740,21 @@ struct ReconcileCacheBlockStatus {
       return makeError(StatusCode::kInvalidArg, "invalid reconcile cache block state");
     }
     if (state == cache::CacheBlockState::NONE) {
-      if (blockLength != 0 || ready || placement || permit || cleanupEpoch != cache::CleanupEpoch{} ||
-          terminalState != cache::CleanupTerminalState::NONE || deleteGeneration != cache::CacheGeneration{} ||
-          evictionEpoch != cache::EvictionEpoch{} || retireOperationId != Uuid::zero() ||
-          evictionReason != cache::EvictionReason::INVALID)
+      if (blockLength != 0 || cacheGeneration != cache::CacheGeneration{} || ready || placement || permit ||
+          cleanupEpoch != cache::CleanupEpoch{} || terminalState != cache::CleanupTerminalState::NONE ||
+          deleteGeneration != cache::CacheGeneration{} || evictionEpoch != cache::EvictionEpoch{} ||
+          retireOperationId != Uuid::zero() || evictionReason != cache::EvictionReason::INVALID)
         return makeError(StatusCode::kInvalidArg, "empty reconcile state has cache ownership");
       return VALID;
     }
     if (blockLength == 0) return makeError(StatusCode::kInvalidArg, "reconcile cache block length not set");
+    if (state == cache::CacheBlockState::LOADING && cacheGeneration == cache::CacheGeneration{}) {
+      return makeError(StatusCode::kInvalidArg, "LOADING reconcile state has no generation");
+    }
     if (ready) RETURN_ON_ERROR(ready->valid());
+    if (ready && ready->cacheGeneration != cacheGeneration) {
+      return makeError(StatusCode::kInvalidArg, "reconcile READY identity has another generation");
+    }
     if (placement) RETURN_ON_ERROR(placement->valid());
     if (permit) RETURN_ON_ERROR(permit->valid());
     if (state == cache::CacheBlockState::READY && (!ready || !placement || !permit)) {

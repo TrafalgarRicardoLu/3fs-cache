@@ -16,6 +16,7 @@ Result<ReconcileCacheBlockStatus> reconcileStatus(const cache::CacheBlockKey &ke
   status.key = key;
   status.state = record->state;
   status.blockLength = record->blockLength;
+  status.cacheGeneration = record->cacheGeneration;
   status.ready = record->ready;
   status.placement = record->placement;
   status.permit = record->permit ? record->permit : record->committedPermit;

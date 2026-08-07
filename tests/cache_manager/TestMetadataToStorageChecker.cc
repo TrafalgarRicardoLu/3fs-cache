@@ -22,6 +22,7 @@ meta::ReconcileCacheBlockStatus readyStatus(uint32_t block) {
   status.key = {7, cache::CacheBlockIndex{block}};
   status.state = cache::CacheBlockState::READY;
   status.blockLength = 4096;
+  status.cacheGeneration = ready.cacheGeneration;
   status.ready = ready;
   status.placement = placement();
   status.permit = permit;

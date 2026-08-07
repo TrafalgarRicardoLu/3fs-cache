@@ -127,6 +127,12 @@ class CacheManagerBackend {
                                                                                 uint32_t) {
     co_return makeError(StatusCode::kNotImplemented);
   }
+  virtual CoTryTask<meta::ReconcileCacheBlocksRsp> reconcileCacheBlocks(std::vector<cache::CacheBlockKey>) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
+  virtual CoTryTask<storage::RetireCacheReplicasRsp> retireCacheReplicas(std::vector<storage::RetireCacheReplicaItem>) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
   virtual CoTryTask<CacheReplicaObservation> queryReconcile(const meta::ReconcileCacheBlockStatus &) {
     co_return makeError(StatusCode::kNotImplemented);
   }
@@ -199,6 +205,9 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
   CoTryTask<storage::ListCacheInventoryRsp> listCacheInventory(storage::ListCacheInventoryReq request) final;
   CoTryTask<meta::ListReconcileCacheBlocksRsp> listReconcileCacheBlocks(std::optional<cache::CacheBlockKey> after,
                                                                         uint32_t limit) final;
+  CoTryTask<meta::ReconcileCacheBlocksRsp> reconcileCacheBlocks(std::vector<cache::CacheBlockKey> keys) final;
+  CoTryTask<storage::RetireCacheReplicasRsp> retireCacheReplicas(
+      std::vector<storage::RetireCacheReplicaItem> items) final;
   CoTryTask<CacheReplicaObservation> queryReconcile(const meta::ReconcileCacheBlockStatus &status) final;
 
  private:

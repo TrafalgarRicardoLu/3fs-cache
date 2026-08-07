@@ -58,6 +58,24 @@ CoTryTask<meta::ListReconcileCacheBlocksRsp> RealCacheManagerBackend::listReconc
   co_return co_await metaClient_->listReconcileCacheBlocks(std::move(request));
 }
 
+CoTryTask<meta::ReconcileCacheBlocksRsp> RealCacheManagerBackend::reconcileCacheBlocks(
+    std::vector<cache::CacheBlockKey> keys) {
+  meta::ReconcileCacheBlocksReq request;
+  request.service = service();
+  request.keys = std::move(keys);
+  request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  co_return co_await metaClient_->reconcileCacheBlocks(std::move(request));
+}
+
+CoTryTask<storage::RetireCacheReplicasRsp> RealCacheManagerBackend::retireCacheReplicas(
+    std::vector<storage::RetireCacheReplicaItem> items) {
+  storage::RetireCacheReplicasReq request;
+  request.userInfo = flat::UserInfo{};
+  request.items = std::move(items);
+  request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  co_return co_await storageClient_->retireCacheReplicas(request);
+}
+
 CoTryTask<CacheReplicaObservation> RealCacheManagerBackend::queryReconcile(
     const meta::ReconcileCacheBlockStatus &status) {
   CO_RETURN_ON_ERROR(status.valid());

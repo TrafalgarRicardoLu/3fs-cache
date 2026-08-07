@@ -642,6 +642,7 @@ TEST_F(TestCacheStateMachine, ReconcileReturnsSnapshotOfEveryStateAndExplicitNon
       CO_ASSERT_EQ(response->results[index]->key, records[index].key);
       CO_ASSERT_EQ(response->results[index]->state, records[index].state);
       CO_ASSERT_EQ(response->results[index]->blockLength, records[index].blockLength);
+      CO_ASSERT_EQ(response->results[index]->cacheGeneration, records[index].cacheGeneration);
       CO_ASSERT_EQ(response->results[index]->ready, records[index].ready);
       CO_ASSERT_EQ(response->results[index]->placement, records[index].placement);
       auto expectedPermit = records[index].permit ? records[index].permit : records[index].committedPermit;
