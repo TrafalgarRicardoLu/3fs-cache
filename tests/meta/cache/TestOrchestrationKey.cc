@@ -4,6 +4,7 @@
 
 #include "common/kv/KeyPrefix.h"
 #include "meta/store/cache/OrchestrationKey.h"
+#include "meta/store/cache/UploadJobKey.h"
 #include "tests/GtestHelpers.h"
 
 namespace hf3fs::meta::server {
@@ -13,7 +14,8 @@ TEST(TestOrchestrationKey, PrefixesAreUniqueAndStable) {
   std::array prefixes{kv::KeyPrefix::PrefetchJob,
                       kv::KeyPrefix::PrefetchPlan,
                       kv::KeyPrefix::PinByBlock,
-                      kv::KeyPrefix::PinByOwner};
+                      kv::KeyPrefix::PinByOwner,
+                      kv::KeyPrefix::UploadJob};
   std::set<uint32_t> values;
   for (auto prefix : prefixes) values.insert(static_cast<uint32_t>(prefix));
   EXPECT_EQ(values.size(), prefixes.size());
@@ -21,6 +23,17 @@ TEST(TestOrchestrationKey, PrefixesAreUniqueAndStable) {
   EXPECT_EQ(kv::toStr(kv::KeyPrefix::PrefetchPlan), "PFPL");
   EXPECT_EQ(kv::toStr(kv::KeyPrefix::PinByBlock), "PNBL");
   EXPECT_EQ(kv::toStr(kv::KeyPrefix::PinByOwner), "PNOW");
+  EXPECT_EQ(kv::toStr(kv::KeyPrefix::UploadJob), "UPJB");
+}
+
+TEST(TestOrchestrationKey, UploadJobRoundTripAndRejectsMalformedKeys) {
+  cache::UploadJobId jobId{Uuid::from(5, 6)};
+  auto key = UploadJobKey::job(jobId);
+  ASSERT_EQ(*UploadJobKey::unpack(key), jobId);
+  EXPECT_TRUE(key.starts_with(UploadJobKey::prefix()));
+  key.push_back('x');
+  EXPECT_TRUE(UploadJobKey::unpack(key).hasError());
+  EXPECT_TRUE(UploadJobKey::unpack(OrchestrationKey::job(cache::PrefetchJobId{Uuid::from(5, 6)})).hasError());
 }
 
 TEST(TestOrchestrationKey, JobAndPlanRoundTripAndSortByBlock) {
