@@ -151,6 +151,7 @@ class MetaStore {
   OpPtr<UpdateCacheBlockAccessRsp> updateCacheBlockAccess(const UpdateCacheBlockAccessReq &req);
 
   OpPtr<FailCacheBlocksRsp> failCacheBlocks(const FailCacheBlocksReq &req);
+  OpPtr<ReconcileCacheBlocksRsp> reconcileCacheBlocks(const ReconcileCacheBlocksReq &req);
   OpPtr<RecoverExpiredCacheLoadsRsp> recoverExpiredCacheLoads(const RecoverExpiredCacheLoadsReq &req);
 
   OpPtr<BeginCleanCacheBlocksRsp> beginCleanCacheBlocks(const BeginCleanCacheBlocksReq &req);

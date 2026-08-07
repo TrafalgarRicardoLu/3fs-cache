@@ -591,6 +591,13 @@ META_CACHE_MUTATION_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, Fi
 
 #undef META_CACHE_MUTATION_METHOD
 
+CoTryTask<ReconcileCacheBlocksRsp> MetaOperator::reconcileCacheBlocks(ReconcileCacheBlocksReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::reconcileCacheBlocks, req);
+}
+
 CoTryTask<RecoverExpiredCacheLoadsRsp> MetaOperator::recoverExpiredCacheLoads(RecoverExpiredCacheLoadsReq req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkCacheService(req.service));

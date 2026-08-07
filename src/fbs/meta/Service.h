@@ -1758,7 +1758,14 @@ struct ReconcileCacheBlocksReq : ReqBase {
     RETURN_ON_ERROR(service.valid());
     if (keys.empty() || keys.size() > kMaxCacheBatchItems)
       return makeError(CacheCode::kRequestTooLarge, "invalid reconcile cache block batch");
-    for (const auto &key : keys) RETURN_ON_ERROR(key.valid());
+    for (size_t index = 0; index < keys.size(); ++index) {
+      RETURN_ON_ERROR(keys[index].valid());
+      for (size_t previous = 0; previous < index; ++previous) {
+        if (keys[index] == keys[previous]) {
+          return makeError(StatusCode::kInvalidArg, "duplicate reconcile cache block key");
+        }
+      }
+    }
     return VALID;
   }
 };

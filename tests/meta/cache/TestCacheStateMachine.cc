@@ -574,5 +574,96 @@ TEST_F(TestCacheStateMachine, SupersededInodeRejectsEveryLoadingMutation) {
   }());
 }
 
+TEST_F(TestCacheStateMachine, ReconcileReturnsSnapshotOfEveryStateAndExplicitNone) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    auto inode = co_await prepare(cluster, "/reconcile", 8 * 4096);
+    CO_ASSERT_OK(inode);
+
+    std::vector<CacheBlockRecord> records;
+    for (uint32_t index = 0; index < 7; ++index) {
+      auto permit = permitFor(cluster, *inode, index, Uuid::from(20, index + 1), Uuid::from(21, index + 1), 1);
+      CO_ASSERT_OK(permit);
+      CacheBlockRecord record;
+      record.key = block(*inode, index).key;
+      record.chainId = permit->placement.versionedChain.chainId;
+      record.blockLength = 4096;
+      record.state = static_cast<cache::CacheBlockState>(index + 1);
+      if (record.state == cache::CacheBlockState::QUEUED || record.state == cache::CacheBlockState::LOADING) {
+        record.chargeKind = cache::ChargeKind::RESERVED;
+        record.chargedBytes = 4096;
+        record.permit = *permit;
+      }
+      if (record.state == cache::CacheBlockState::LOADING) {
+        record.loaderId = Uuid::from(22, 1);
+        record.loadEpoch = 1;
+        record.cacheGeneration = cache::CacheGeneration{1};
+        record.leaseExpiresAt = UtcTime::fromMicroseconds(100);
+      }
+      if (record.state == cache::CacheBlockState::READY || record.state == cache::CacheBlockState::CLEANING ||
+          record.state == cache::CacheBlockState::EVICTING) {
+        record.chargeKind = cache::ChargeKind::COMMITTED;
+        record.chargedBytes = 4096;
+        record.loadEpoch = 1;
+        record.cacheGeneration = cache::CacheGeneration{1};
+        record.ready = cache::ReadyIdentity{1, record.cacheGeneration, 1, 1234, 4096};
+        record.placement = permit->placement;
+        record.committedPermit = *permit;
+        record.readyAt = UtcTime::fromMicroseconds(100);
+        record.lastAccessAt = record.readyAt;
+      }
+      if (record.state == cache::CacheBlockState::CLEANING) {
+        record.cleanupEpoch = cache::CleanupEpoch{1};
+        record.terminalState = cache::CleanupTerminalState::FAILED;
+        record.deleteGeneration = record.cacheGeneration;
+      }
+      if (record.state == cache::CacheBlockState::EVICTING) {
+        record.evictionEpoch = cache::EvictionEpoch{1};
+        record.retireOperationId = Uuid::from(23, 1);
+        record.evictionReason = cache::EvictionReason::CAPACITY_WATERMARK;
+      }
+      CO_ASSERT_OK(record.valid());
+      records.push_back(std::move(record));
+    }
+    auto txn = cluster.kvEngine()->createReadWriteTransaction();
+    for (const auto &record : records) CO_ASSERT_OK(co_await CacheBlockStore::store(*txn, record));
+    CO_ASSERT_OK(co_await txn->commit());
+
+    ReconcileCacheBlocksReq request;
+    request.service = service();
+    for (const auto &record : records) request.keys.push_back(record.key);
+    request.keys.push_back(block(*inode, 7).key);
+    request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto response = co_await cluster.meta().getOperator().reconcileCacheBlocks(request);
+    CO_ASSERT_OK(response);
+    CO_ASSERT_EQ(response->results.size(), request.keys.size());
+    for (size_t index = 0; index < records.size(); ++index) {
+      CO_ASSERT_OK(response->results[index]);
+      CO_ASSERT_EQ(response->results[index]->key, records[index].key);
+      CO_ASSERT_EQ(response->results[index]->state, records[index].state);
+      CO_ASSERT_EQ(response->results[index]->blockLength, records[index].blockLength);
+      CO_ASSERT_EQ(response->results[index]->ready, records[index].ready);
+      CO_ASSERT_EQ(response->results[index]->placement, records[index].placement);
+      auto expectedPermit = records[index].permit ? records[index].permit : records[index].committedPermit;
+      CO_ASSERT_EQ(response->results[index]->permit, expectedPermit);
+      CO_ASSERT_OK(response->results[index]->valid());
+    }
+    CO_ASSERT_OK(response->results.back());
+    CO_ASSERT_EQ(response->results.back()->state, cache::CacheBlockState::NONE);
+    CO_ASSERT_OK(response->results.back()->valid());
+
+    auto unauthorized = request;
+    unauthorized.service = service("wrong-token");
+    CO_ASSERT_ERROR(co_await cluster.meta().getOperator().reconcileCacheBlocks(unauthorized), MetaCode::kNoPermission);
+    auto oldProtocol = request;
+    oldProtocol.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+    CO_ASSERT_ERROR(co_await cluster.meta().getOperator().reconcileCacheBlocks(oldProtocol),
+                    CacheCode::kUpgradeRequired);
+    auto duplicate = request;
+    duplicate.keys.push_back(duplicate.keys.front());
+    CO_ASSERT_ERROR(co_await cluster.meta().getOperator().reconcileCacheBlocks(duplicate), StatusCode::kInvalidArg);
+  }());
+}
+
 }  // namespace
 }  // namespace hf3fs::meta::server
