@@ -17,6 +17,11 @@ class RoutedObjectStore final : public ObjectStore {
   CoTryTask<ObjectMetadata> head(const ObjectRef &object) override;
   CoTryTask<std::vector<uint8_t>> getRange(const ImmutableObjectIdentity &object, ByteRange range) override;
   CoTryTask<ListObjectsPage> listObjects(const ListObjectsRequest &request) override;
+  CoTryTask<MultipartUpload> createMultipartUpload(const CreateMultipartUploadRequest &request) override;
+  CoTryTask<UploadPartResult> uploadPart(UploadPartRequest request) override;
+  CoTryTask<ObjectMetadata> completeMultipartUpload(CompleteMultipartUploadRequest request) override;
+  CoTryTask<Void> abortMultipartUpload(const AbortMultipartUploadRequest &request) override;
+  CoTryTask<ObjectMetadata> headCompletedUpload(const HeadCompletedUploadRequest &request) override;
 
  private:
   Result<std::shared_ptr<ObjectStore>> find(OriginId originId) const;
