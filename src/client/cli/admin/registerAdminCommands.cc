@@ -8,6 +8,7 @@
 #include "CacheOrchestration.h"
 #include "CachePhase2Rollout.h"
 #include "CachePhase3Rollout.h"
+#include "CachePhase4Rollout.h"
 #include "CacheRefreshOrigin.h"
 #include "CacheStatus.h"
 #include "Chdir.h"
@@ -132,6 +133,7 @@ CoTryTask<void> registerAdminCommands(Dispatcher &dispatcher) {
   CO_RETURN_ON_ERROR(co_await registerCacheCleanupHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerCachePhase2RolloutHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerCachePhase3RolloutHandler(dispatcher));
+  CO_RETURN_ON_ERROR(co_await registerCachePhase4RolloutHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerCachePrefetchHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerCachePinHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerRotateLastSrvHandler(dispatcher));

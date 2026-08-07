@@ -108,6 +108,7 @@ class CacheManagerOperator {
   mutable std::mutex mutex_;
   bool running_ = false;
   std::atomic<bool> admissionReady_{false};
+  std::atomic<bool> recoveryHealthy_{false};
 };
 
 }  // namespace hf3fs::cache_manager

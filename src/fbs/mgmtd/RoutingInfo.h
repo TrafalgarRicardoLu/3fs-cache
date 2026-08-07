@@ -20,8 +20,15 @@ enum class CachePhase3RolloutState : uint8_t {
   ENABLED = 2,
 };
 
+enum class CachePhase4RolloutState : uint8_t {
+  DISABLED = 0,
+  DRAINING = 1,
+  ENABLED = 2,
+};
+
 inline constexpr std::string_view kCachePhase2RolloutTagId = "cache.phase2.rollout";
 inline constexpr std::string_view kCachePhase3RolloutTagId = "cache.phase3.rollout";
+inline constexpr std::string_view kCachePhase4RolloutTagId = "cache.phase4.rollout";
 
 struct RoutingInfo : public serde::SerdeHelper<RoutingInfo> {
   // return nullptr if not found
@@ -64,5 +71,6 @@ struct RoutingInfo : public serde::SerdeHelper<RoutingInfo> {
   SERDE_STRUCT_FIELD(targets, TargetMap{});
   SERDE_STRUCT_FIELD(cachePhase2State, CachePhase2RolloutState::DISABLED);
   SERDE_STRUCT_FIELD(cachePhase3State, CachePhase3RolloutState::DISABLED);
+  SERDE_STRUCT_FIELD(cachePhase4State, CachePhase4RolloutState::DISABLED);
 };
 }  // namespace hf3fs::flat

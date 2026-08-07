@@ -60,6 +60,13 @@ CoTryTask<Dispatcher::OutputTable> handle(IEnv &ienv,
   table.push_back({"phase3.pinned_bytes", std::to_string(managerResult->pinnedBytes)});
   table.push_back({"phase3.exclusive_queued_claims", std::to_string(managerResult->exclusiveQueuedClaims)});
   table.push_back({"phase3.last_job_error", managerResult->lastJobError});
+  table.push_back({"phase4.enabled", managerResult->phase4Enabled ? "true" : "false"});
+  table.push_back({"phase4.recovery_healthy", managerResult->recoveryHealthy ? "true" : "false"});
+  table.push_back({"phase4.nonterminal_recovery_work", std::to_string(managerResult->nonterminalRecoveryWork)});
+  table.push_back({"phase4.reconcile_dry_run", managerResult->reconcileDryRun ? "true" : "false"});
+  table.push_back({"phase4.reconcile_state", std::string(magic_enum::enum_name(managerResult->reconcile.state))});
+  table.push_back({"phase4.reconcile_conflicts", std::to_string(managerResult->reconcile.conflicts)});
+  table.push_back({"phase4.reconcile_retryable", std::to_string(managerResult->reconcile.retryable)});
   if (phase2Result.hasError()) {
     table.push_back({"phase2.available", "false"});
     table.push_back({"phase2.error", phase2Result.error().describe()});

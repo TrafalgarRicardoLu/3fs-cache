@@ -39,8 +39,8 @@ Result<Void> MetaServer::beforeStart() {
   mgmtdClient_->setAppInfoForHeartbeat(appInfo());
   mgmtdClient_->setConfigListener(ApplicationBase::updateConfig);
   auto heartbeat = flat::MetaHeartbeatInfo{};
-  heartbeat.cacheSchemaVersion = cache::kCacheSchemaVersion;
-  heartbeat.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  heartbeat.cacheSchemaVersion = cache::kCachePhase4SchemaVersion;
+  heartbeat.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
   mgmtdClient_->updateHeartbeatPayload(std::move(heartbeat));
   folly::coro::blockingWait(mgmtdClient_->start(&tpg().bgThreadPool().randomPick()));
   auto mgmtdClientRefreshRes = folly::coro::blockingWait(mgmtdClient_->refreshRoutingInfo(/*force=*/false));

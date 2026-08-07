@@ -42,6 +42,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
     if (running_) return Void{};
   }
   admissionReady_.store(false, std::memory_order_release);
+  recoveryHealthy_.store(false, std::memory_order_release);
   std::map<cache::OriginId, CapacityGate::Limit> originLimits;
   for (size_t i = 0; i < config_.origins_length(); ++i) {
     const auto &origin = config_.origins(i);
@@ -245,8 +246,10 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
   }});
   auto recovered = folly::coro::blockingWait(recovery.run());
   RETURN_ON_ERROR(recovered);
+  recoveryHealthy_.store(config_.enable_phase4(), std::memory_order_release);
   auto rollbackRecovered = [this] {
     admissionReady_.store(false, std::memory_order_release);
+    recoveryHealthy_.store(false, std::memory_order_release);
     if (orchestration_) orchestration_->stop();
     if (reconciler_) reconciler_->stop();
     if (accessFlushWorker_) accessFlushWorker_->stop();
@@ -320,6 +323,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                                      "CacheManagerLeaseRecovery",
                                      [this]() -> CoTask<void> {
                                        auto result = co_await permitRecovery_->run();
+                                       recoveryHealthy_.store(result.hasValue(), std::memory_order_release);
                                        if (result.hasError())
                                          XLOGF(WARN, "LOADING lease recovery iteration failed: {}", result.error());
                                      },
@@ -413,16 +417,19 @@ Result<Void> CacheManagerOperator::startForTest(SchedulerStartHook startHook, Sc
     if (running_) return Void{};
   }
   admissionReady_.store(false, std::memory_order_release);
+  recoveryHealthy_.store(false, std::memory_order_release);
   auto result = startHook ? startHook() : Result<Void>{Void{}};
   if (!result) {
     if (stopHook) stopHook();
     admissionReady_.store(false, std::memory_order_release);
+    recoveryHealthy_.store(false, std::memory_order_release);
     return result;
   }
   auto lock = std::unique_lock(mutex_);
   schedulerStopHook_ = std::move(stopHook);
   running_ = true;
   admissionReady_.store(true, std::memory_order_release);
+  recoveryHealthy_.store(config_.enable_phase4(), std::memory_order_release);
   return Void{};
 }
 
@@ -434,6 +441,7 @@ void CacheManagerOperator::stop() {
     if (!running_ && !scheduler_ && !schedulerStopHook_) return;
     running_ = false;
     admissionReady_.store(false, std::memory_order_release);
+    recoveryHealthy_.store(false, std::memory_order_release);
     scheduler = std::move(scheduler_);
     stopHook = std::move(schedulerStopHook_);
   }
@@ -514,6 +522,8 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
   GetCacheStatusRsp response;
   response.phase3Enabled = config_.enable_phase3();
   response.phase4Enabled = config_.enable_phase4();
+  response.recoveryHealthy = recoveryHealthy_.load(std::memory_order_acquire);
+  response.reconcileDryRun = config_.reconcile_dry_run();
   if (reconciler_) {
     response.reconcile = reconciler_->status();
   } else {
@@ -542,6 +552,13 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
           break;
         case cache::CacheBlockState::CLEANING:
           response.cleaning = count.count;
+          response.nonterminalRecoveryWork +=
+              std::min(count.count, std::numeric_limits<uint64_t>::max() - response.nonterminalRecoveryWork);
+          break;
+        case cache::CacheBlockState::LOADING:
+        case cache::CacheBlockState::EVICTING:
+          response.nonterminalRecoveryWork +=
+              std::min(count.count, std::numeric_limits<uint64_t>::max() - response.nonterminalRecoveryWork);
           break;
         default:
           break;
@@ -588,6 +605,8 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
       cache::metrics::setGauge(cache::metrics::Event::MANAGER_PINNED_BYTES, response.pinnedBytes);
     }
   }
+  response.nonterminalRecoveryWork +=
+      std::min(response.activeJobs, std::numeric_limits<uint64_t>::max() - response.nonterminalRecoveryWork);
   co_return response;
 }
 

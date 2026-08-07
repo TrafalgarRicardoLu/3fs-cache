@@ -6,6 +6,7 @@
 #include "client/cli/admin/CacheOriginCli.h"
 #include "client/cli/admin/CachePhase2Rollout.h"
 #include "client/cli/admin/CachePhase3Rollout.h"
+#include "client/cli/admin/CachePhase4Rollout.h"
 #include "client/cli/admin/registerAdminCommands.h"
 
 namespace hf3fs::client::cli::test {
@@ -63,9 +64,36 @@ TEST(CacheAdminCli, RegistersLifecycleCommands) {
                               "cache-phase2-rollout",
                               "cache-prefetch",
                               "cache-pin",
-                              "cache-phase3-rollout"}) {
+                              "cache-phase3-rollout",
+                              "cache-phase4-rollout"}) {
     EXPECT_TRUE(usages.contains(command)) << command;
   }
+}
+
+TEST(CacheAdminCli, Phase4GatesEnableAndRollbackOnRecoveryHealth) {
+  cache_manager::GetCacheStatusRsp status;
+  status.phase4Enabled = true;
+  status.recoveryHealthy = true;
+  status.reconcileDryRun = true;
+  status.reconcile.state = cache::ReconcileRunState::HEALTHY;
+  EXPECT_TRUE(cachePhase4EnableHealthy(status));
+  EXPECT_TRUE(cachePhase4DrainHealthy(status));
+
+  status.reconcile.conflicts = 1;
+  EXPECT_FALSE(cachePhase4EnableHealthy(status));
+  EXPECT_FALSE(cachePhase4DrainHealthy(status));
+  status.reconcile.conflicts = 0;
+  status.nonterminalRecoveryWork = 1;
+  EXPECT_TRUE(cachePhase4EnableHealthy(status));
+  EXPECT_FALSE(cachePhase4DrainHealthy(status));
+  status.nonterminalRecoveryWork = 0;
+  status.recoveryHealthy = false;
+  EXPECT_FALSE(cachePhase4EnableHealthy(status));
+  EXPECT_FALSE(cachePhase4DrainHealthy(status));
+
+  EXPECT_FALSE(cachePhase4DrainTimedOut(999, 1000));
+  EXPECT_TRUE(cachePhase4DrainTimedOut(1000, 1000));
+  EXPECT_TRUE(cachePhase4DrainTimedOut(0, 0));
 }
 
 TEST(CacheAdminCli, Phase3InventoryIncludesJobsPinsAndExclusiveClaims) {

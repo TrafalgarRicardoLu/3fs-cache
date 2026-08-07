@@ -242,8 +242,8 @@ void Components::triggerHeartbeatIfNeed() {
 
 void Components::updateHeartbeatPayload(const TargetMap &targetMap, bool offline /* = false */) {
   flat::StorageHeartbeatInfo heartbeat;
-  heartbeat.cacheSchemaVersion = cache::kCacheSchemaVersion;
-  heartbeat.cacheProtocolVersion = cache::kCacheProtocolVersion;
+  heartbeat.cacheSchemaVersion = cache::kCachePhase4SchemaVersion;
+  heartbeat.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
   for (auto &[targetId, target] : targetMap.getTargets()) {
     flat::LocalTargetInfo targetInfo;
     targetInfo.targetId = targetId;

@@ -87,8 +87,8 @@ CoTask<void> MgmtdHeartbeater::send() {
     // TODO: consider reuse some facilities of MgmtdClient for auto switching addresses
     sendHeartbeatCtx_->stub = state_.env_->mgmtdStubFactory()->create(addrs[0]);
     flat::MgmtdHeartbeatInfo heartbeat;
-    heartbeat.cacheSchemaVersion = cache::kCacheSchemaVersion;
-    heartbeat.cacheProtocolVersion = cache::kCacheProtocolVersion;
+    heartbeat.cacheSchemaVersion = cache::kCachePhase4SchemaVersion;
+    heartbeat.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
     sendHeartbeatCtx_->info = flat::HeartbeatInfo(state_.env_->appInfo(), std::move(heartbeat));
   }
 

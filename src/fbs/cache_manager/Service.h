@@ -107,6 +107,9 @@ struct GetCacheStatusRsp {
   SERDE_STRUCT_FIELD(exclusiveQueuedClaims, uint64_t{0});
   SERDE_STRUCT_FIELD(phase4Enabled, false);
   SERDE_STRUCT_FIELD(reconcile, cache::ReconcileProgress{});
+  SERDE_STRUCT_FIELD(recoveryHealthy, false);
+  SERDE_STRUCT_FIELD(nonterminalRecoveryWork, uint64_t{0});
+  SERDE_STRUCT_FIELD(reconcileDryRun, false);
 };
 
 struct CacheAccessReportItem {

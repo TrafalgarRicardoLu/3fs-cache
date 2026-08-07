@@ -142,6 +142,9 @@ TEST(ServiceContracts, Phase3StatusExtensionsAreBackwardCompatible) {
   EXPECT_EQ(current.pinnedBytes, 0u);
   EXPECT_FALSE(current.phase4Enabled);
   EXPECT_EQ(current.reconcile.state, ReconcileRunState::INVALID);
+  EXPECT_FALSE(current.recoveryHealthy);
+  EXPECT_EQ(current.nonterminalRecoveryWork, 0u);
+  EXPECT_FALSE(current.reconcileDryRun);
 
   current.phase3Enabled = true;
   current.activeJobs = 2;
@@ -154,6 +157,9 @@ TEST(ServiceContracts, Phase3StatusExtensionsAreBackwardCompatible) {
 TEST(ServiceContracts, ReconcileStatusExtensionsRoundTrip) {
   cache_manager::GetCacheStatusRsp original;
   original.phase4Enabled = true;
+  original.recoveryHealthy = true;
+  original.nonterminalRecoveryWork = 7;
+  original.reconcileDryRun = true;
   original.reconcile = {ReconcileRunId{Uuid::from(9, 10)},
                         ReconcileRunState::DEGRADED,
                         100,
@@ -172,6 +178,9 @@ TEST(ServiceContracts, ReconcileStatusExtensionsRoundTrip) {
   ASSERT_OK(serde::deserialize(decoded, serde::serialize(original)));
   EXPECT_TRUE(decoded.phase4Enabled);
   EXPECT_EQ(decoded.reconcile, original.reconcile);
+  EXPECT_TRUE(decoded.recoveryHealthy);
+  EXPECT_EQ(decoded.nonterminalRecoveryWork, 7u);
+  EXPECT_TRUE(decoded.reconcileDryRun);
 
   cache::ReconcileProgress neverRun;
   neverRun.state = ReconcileRunState::NEVER_RUN;
