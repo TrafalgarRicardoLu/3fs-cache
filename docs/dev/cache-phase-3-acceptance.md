@@ -1,6 +1,6 @@
 # Cache Phase 3 acceptance
 
-Record date: 2026-08-06
+Record date: 2026-08-07
 
 ## Scope and revision
 
@@ -42,11 +42,18 @@ The implementation chain is:
 
 ## Local qualification evidence
 
-The 2026-08-06 local qualification used the existing Clang 14 `RelWithDebInfo` incremental build with cache transport
-disabled because AWS SDK headers and runtime were unavailable. All 80 non-AWS Phase 3 changed translation units
-compiled with `-Wall -Wextra -Werror -Wpedantic`; the AWS executor translation unit was not compiled in this
-environment. The focused executables `test_cache_manager`, `test_cache`, `test_meta`, `test_mgmtd`, and
-`test_admin_cli` built and linked successfully.
+The initial 2026-08-06 local qualification used the existing Clang 14 `RelWithDebInfo` incremental build with cache
+transport disabled. All 80 non-AWS Phase 3 changed translation units compiled with
+`-Wall -Wextra -Werror -Wpedantic`; the focused executables `test_cache_manager`, `test_cache`, `test_meta`,
+`test_mgmtd`, and `test_admin_cli` built and linked successfully.
+
+The 2026-08-07 follow-up enabled `HF3FS_ENABLE_CACHE` and `HF3FS_ENABLE_CACHE_INTEGRATION_TESTS`, built and linked
+the AWS executor and `test_cache_minio` with Clang 14 and AWS SDK for C++ 1.10.55, and ran against MinIO
+`RELEASE.2025-09-07T16-13-09Z` on an isolated loopback endpoint and disposable bucket. The complete MinIO suite
+passed 3/3. Its Phase 3 case stores real prefix and manifest objects, exercises paged prefix listing/import,
+namespace path and path-list planning, segmented manifest reads with cursor continuation, and verifies the planned
+payload through ranged S3 reads. The same case also covers strict-priority selection, ready-ratio transition,
+cancellation completion, and active-job pin TTL renewal over the real-object plan.
 
 Final focused runs passed:
 
@@ -60,12 +67,13 @@ Formatting validation and `git diff --check` pass for the Phase 3 source and tes
 configuration includes every Phase 3 lifecycle, page-size, prefix-layout, active-pin TTL, and renewal setting while
 retaining `enable_phase3 = false`.
 
-## Deployment qualification still required
+## Remaining deployment qualification
 
-No MinIO server, Docker/Podman runtime, AWS SDK development headers, or `HF3FS_CACHE_MINIO_*` credentials were
-available on 2026-08-06. Consequently, the real MinIO path/list/manifest/prefix scenario was not run and is not
-reported as passed. Deployment CI must run `test_cache_minio` plus the Phase 3 planner/job workflow against a
-disposable versioned bucket, including priority, ratio, cancellation, retained-pin TTL, and injected process restarts.
+The local real-MinIO path/list/manifest/prefix qualification is complete. Deployment CI still needs to repeat
+`test_cache_minio` with the production dependency image and a disposable versioned bucket, then run the complete
+multi-service planner/job workflow with injected Cache Manager process restarts. That workflow must cover durable
+attempt replay and retained-pin conversion/expiry in addition to the locally qualified priority, ratio, cancellation,
+and active-pin renewal controls.
 
 The deployment run must also archive the Phase 3 status before enable and after drain, verify zero non-terminal jobs,
 zero `ACTIVE_JOB` pins, and zero exclusive queued claims before rollback, and retain the Phase 1/2 real-MinIO

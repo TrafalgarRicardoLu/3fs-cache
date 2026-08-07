@@ -18,7 +18,9 @@
 #include <gtest/gtest.h>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <unistd.h>
 #include <vector>
 
@@ -27,6 +29,11 @@
 #include "cache_manager/admission/CapacityGate.h"
 #include "cache_manager/admission/SecondMissAdmissionPolicy.h"
 #include "cache_manager/eviction/LRUEvictionPolicy.h"
+#include "cache_manager/job/ActiveJobPinManager.h"
+#include "cache_manager/job/JobTracker.h"
+#include "cache_manager/planner/ManifestPlanner.h"
+#include "cache_manager/planner/S3PrefixPlanner.h"
+#include "cache_manager/scheduler/HintCoalescer.h"
 #include "client/cache/CacheReadPipeline.h"
 #include "tests/GtestHelpers.h"
 
@@ -144,6 +151,97 @@ meta::Inode originInode(meta::InodeId inode, uint64_t length, ImmutableObjectIde
       meta::InodeData{
           meta::OriginFile{length, meta::Layout::newEmpty(flat::ChainTableId{1}, kBlockSize, 1), std::move(identity)}}};
 }
+
+class Phase3Resolver final : public cache_manager::NamespaceFileResolver {
+ public:
+  CoTryTask<meta::Inode> stat(std::string_view path) override {
+    auto found = inodes.find(std::string(path));
+    if (found == inodes.end()) co_return makeError(MetaCode::kNotFound);
+    co_return found->second;
+  }
+
+  std::map<std::string, meta::Inode> inodes;
+};
+
+class Phase3Importer final : public cache_manager::OriginFileImporter {
+ public:
+  explicit Phase3Importer(std::shared_ptr<Phase3Resolver> resolver)
+      : resolver_(std::move(resolver)) {}
+
+  CoTryTask<meta::Inode> import(std::string_view path,
+                                const origin::ObjectMetadata &object,
+                                const cache_manager::PrefixImportLayout &) override {
+    auto key = std::string(path);
+    auto existing = resolver_->inodes.find(key);
+    if (existing != resolver_->inodes.end()) co_return existing->second;
+    auto inode = originInode(meta::InodeId{nextInode_++}, object.size, object.identity);
+    resolver_->inodes.emplace(std::move(key), inode);
+    co_return inode;
+  }
+
+ private:
+  std::shared_ptr<Phase3Resolver> resolver_;
+  uint64_t nextInode_{201};
+};
+
+class Phase3TrackerBackend final : public cache_manager::JobTrackerBackend {
+ public:
+  CoTryTask<meta::TrackPrefetchReadyRsp> track(cache::PrefetchJobId, std::optional<CacheBlockKey>, uint32_t) override {
+    ++trackCalls;
+    co_return tracked;
+  }
+
+  CoTryTask<meta::AdvancePrefetchJobStateRsp> advance(cache::PrefetchJobId, uint64_t) override {
+    ++advanceCalls;
+    co_return advanced;
+  }
+
+  meta::TrackPrefetchReadyRsp tracked;
+  meta::AdvancePrefetchJobStateRsp advanced;
+  size_t trackCalls{0};
+  size_t advanceCalls{0};
+};
+
+class Phase3PinBackend final : public cache_manager::ActiveJobPinBackend {
+ public:
+  CoTryTask<meta::ListPrefetchJobsRsp> listJobs(std::optional<PrefetchJobId>, uint32_t) override {
+    meta::ListPrefetchJobsRsp response;
+    response.jobs = jobs;
+    co_return response;
+  }
+
+  CoTryTask<meta::ListPrefetchPlanRsp> listPlan(PrefetchJobId,
+                                                std::optional<CacheBlockKey> after,
+                                                uint32_t limit) override {
+    meta::ListPrefetchPlanRsp response;
+    for (const auto &entry : plan) {
+      if (after && std::tie(entry.key.inode, entry.key.block) <= std::tie(after->inode, after->block)) continue;
+      if (response.entries.size() == limit) {
+        response.more = true;
+        break;
+      }
+      response.entries.push_back(entry);
+    }
+    co_return response;
+  }
+
+  CoTryTask<void> upsert(std::vector<PinRecord> records) override {
+    pins.insert(pins.end(), records.begin(), records.end());
+    co_return Void{};
+  }
+
+  CoTryTask<void> remove(PinOwner owner) override {
+    removed.push_back(owner);
+    co_return Void{};
+  }
+
+  CoTryTask<void> convert(PrefetchJobId, std::vector<CacheBlockKey>) override { co_return Void{}; }
+
+  std::vector<PrefetchJobRecord> jobs;
+  std::vector<PrefetchPlanEntry> plan;
+  std::vector<PinRecord> pins;
+  std::vector<PinOwner> removed;
+};
 
 class MinIOIntegration : public ::testing::Test {
  protected:
@@ -302,8 +400,12 @@ TEST_F(MinIOIntegration, ColdFillWarmMixedRefreshCapacityAndCleanup) {
 
   cache_manager::SecondMissAdmissionPolicy admission(1'000'000, 1024);
   cache::CacheBlockKey firstKey{inode.id.u64(), CacheBlockIndex{0}};
-  EXPECT_EQ(admission.evaluate({firstKey, 100}).action, cache_manager::AdmissionAction::BYPASS);
-  EXPECT_EQ(admission.evaluate({firstKey, 101}).action, cache_manager::AdmissionAction::ADMIT);
+  EXPECT_EQ(
+      admission.evaluate({firstKey, 100, cache_manager::EnsureReason::FOREGROUND_MISS, 0, {}, false, false}).action,
+      cache_manager::AdmissionAction::BYPASS);
+  EXPECT_EQ(
+      admission.evaluate({firstKey, 101, cache_manager::EnsureReason::FOREGROUND_MISS, 0, {}, false, false}).action,
+      cache_manager::AdmissionAction::ADMIT);
 
   for (uint32_t index = 0; uint64_t{index} * kBlockSize < initial.size(); ++index) {
     auto offset = uint64_t{index} * kBlockSize;
@@ -386,6 +488,151 @@ TEST_F(MinIOIntegration, ColdFillWarmMixedRefreshCapacityAndCleanup) {
       folly::coro::blockingWait(refreshedPipeline.read(flat::UserInfo{}, refreshedInode, session, 0, refreshedOutput)));
   ASSERT_GT(countingStore_->rangeRequests.load(), size_t{0});
   objects_.at("multi") = std::move(refreshedData);
+}
+
+TEST_F(MinIOIntegration, Phase3PlansAndControlsRealObjects) {
+  ASSERT_TRUE(configurationError_.empty()) << configurationError_;
+  objects_["phase3/data/a"] = sequence(5, 41);
+  objects_["phase3/data/b"] = sequence(3, 61);
+  const std::string manifestBody = "/dataset/a\n/dataset/b\n";
+  objects_["phase3/manifest.txt"] = std::vector<uint8_t>(manifestBody.begin(), manifestBody.end());
+  ASSERT_TRUE(put("phase3/data/a", objects_.at("phase3/data/a"))) << configurationError_;
+  ASSERT_TRUE(put("phase3/data/b", objects_.at("phase3/data/b"))) << configurationError_;
+  ASSERT_TRUE(put("phase3/manifest.txt", objects_.at("phase3/manifest.txt"))) << configurationError_;
+
+  auto resolver = std::make_shared<Phase3Resolver>();
+  auto importer = std::make_shared<Phase3Importer>(resolver);
+  auto jobId = PrefetchJobId{Uuid::from(3, 1)};
+  auto prefixSource = S3PrefixSource{OriginId{1}, bucket_, "phase3/data/", "/dataset"};
+  cache_manager::S3PrefixPlannerConfig prefixConfig{{flat::ChainTableId{1}, kBlockSize, 1, meta::Permission{0444}}, 16};
+  cache_manager::PlannerContext prefixContext{jobId, 0, 9, 1, {}};
+  cache_manager::S3PrefixPlanner prefixPlanner{store_, importer, prefixSource, prefixConfig, prefixContext, 4096};
+  std::vector<PrefetchPlanEntry> prefixPlan;
+  std::string cursor;
+  while (true) {
+    auto page = folly::coro::blockingWait(prefixPlanner.nextPage(cursor));
+    ASSERT_OK(page);
+    prefixPlan.insert(prefixPlan.end(), page->entries.begin(), page->entries.end());
+    if (page->done) break;
+    ASSERT_FALSE(page->nextCursor.empty());
+    cursor = std::move(page->nextCursor);
+  }
+  ASSERT_EQ(prefixPlan.size(), size_t{3});
+  for (const auto &entry : prefixPlan) EXPECT_EQ(entry.priority, 9u);
+  ASSERT_TRUE(resolver->inodes.contains("/dataset/a"));
+  ASSERT_TRUE(resolver->inodes.contains("/dataset/b"));
+
+  cache_manager::NamespaceFilePlanner pathPlanner{resolver,
+                                                  NamespacePathSource{"/dataset/a", false},
+                                                  {jobId, 1, 7, 8, {}},
+                                                  4096};
+  auto pathPage = folly::coro::blockingWait(pathPlanner.nextPage(""));
+  ASSERT_OK(pathPage);
+  ASSERT_TRUE(pathPage->done);
+  ASSERT_EQ(pathPage->entries.size(), size_t{2});
+
+  DatasetSource pathList{PathListSource{{"/dataset/a", "/dataset/b"}}};
+  cache_manager::NamespaceDatasetPlanner listPlanner{resolver, pathList, {jobId, 2, 6, 8, {}}, 4096};
+  auto listPage = folly::coro::blockingWait(listPlanner.nextPage(""));
+  ASSERT_OK(listPage);
+  ASSERT_TRUE(listPage->done);
+  ASSERT_EQ(listPage->entries.size(), size_t{3});
+
+  auto manifestMetadata = folly::coro::blockingWait(store_->head({OriginId{1}, bucket_, "phase3/manifest.txt"}));
+  ASSERT_OK(manifestMetadata);
+  resolver->inodes["/manifest"] = originInode(meta::InodeId{210}, manifestMetadata->size, manifestMetadata->identity);
+  cache_manager::ManifestPlannerConfig manifestConfig{1024, 128, 8, 16, 3};
+  cache_manager::ManifestPlanner manifestPlanner{resolver,
+                                                 store_,
+                                                 ManifestPathSource{"/manifest"},
+                                                 manifestConfig,
+                                                 {jobId, 3, 5, 8, {}},
+                                                 4096};
+  std::vector<PrefetchPlanEntry> manifestPlan;
+  cursor.clear();
+  while (true) {
+    auto page = folly::coro::blockingWait(manifestPlanner.nextPage(cursor));
+    ASSERT_OK(page);
+    manifestPlan.insert(manifestPlan.end(), page->entries.begin(), page->entries.end());
+    if (page->done) break;
+    ASSERT_FALSE(page->nextCursor.empty());
+    cursor = std::move(page->nextCursor);
+  }
+  ASSERT_EQ(manifestPlan.size(), size_t{3});
+
+  for (const auto &path : {std::string{"/dataset/a"}, std::string{"/dataset/b"}}) {
+    const auto &inode = resolver->inodes.at(path);
+    auto bytes =
+        folly::coro::blockingWait(store_->getRange(inode.asOriginFile().object, {0, inode.asOriginFile().length}));
+    ASSERT_OK(bytes);
+    EXPECT_EQ(*bytes, objects_.at("phase3/data/" + path.substr(std::string{"/dataset/"}.size())));
+  }
+
+  PrefetchJobRecord job;
+  job.spec.jobId = jobId;
+  job.spec.ownerUid = flat::Uid{1};
+  job.spec.sources.push_back(DatasetSource{prefixSource});
+  job.spec.priority = 9;
+  job.spec.requiredReadyBps = 5000;
+  job.state = PrefetchJobState::LOADING;
+  job.stateVersion = 1;
+  job.createdAtMs = job.updatedAtMs = 100;
+  job.plannerSourceIndex = 1;
+  job.planningComplete = true;
+  job.plannedBlocks = prefixPlan.size();
+  for (const auto &entry : prefixPlan) job.plannedBytes += entry.blockLength;
+  ASSERT_OK(job.valid());
+
+  auto pinBackend = std::make_shared<Phase3PinBackend>();
+  pinBackend->jobs = {job};
+  pinBackend->plan = prefixPlan;
+  cache_manager::ActiveJobPinManager pinManager(pinBackend, 8, 8, 500, [] { return uint64_t{1000}; });
+  ASSERT_OK(folly::coro::blockingWait(pinManager.runOnce()));
+  ASSERT_EQ(pinBackend->pins.size(), prefixPlan.size());
+  for (const auto &pin : pinBackend->pins) EXPECT_EQ(pin.expiresAtMs, 1500u);
+
+  auto trackerBackend = std::make_shared<Phase3TrackerBackend>();
+  auto trackedJob = job;
+  trackedJob.readyBlocks = trackedJob.plannedBlocks;
+  trackedJob.readyBytes = trackedJob.plannedBytes;
+  ++trackedJob.stateVersion;
+  ++trackedJob.updatedAtMs;
+  trackerBackend->tracked.job = trackedJob;
+  trackerBackend->tracked.currentReadyBlocks = trackedJob.readyBlocks;
+  trackerBackend->tracked.currentReadyBytes = trackedJob.readyBytes;
+  auto readyJob = trackedJob;
+  readyJob.state = PrefetchJobState::READY;
+  ++readyJob.stateVersion;
+  ++readyJob.updatedAtMs;
+  trackerBackend->advanced.job = readyJob;
+  trackerBackend->advanced.achievedReadyBps = 10000;
+  cache_manager::JobTracker tracker(trackerBackend, 8);
+  auto tracked = folly::coro::blockingWait(tracker.run(job));
+  ASSERT_OK(tracked);
+  EXPECT_EQ(tracked->job.state, PrefetchJobState::READY);
+  EXPECT_EQ(tracked->achievedReadyBps, 10000u);
+
+  cache_manager::HintCoalescer hints;
+  std::vector<status_code_t> completions;
+  auto lowJob = PrefetchJobId{Uuid::from(3, 2)};
+  ASSERT_OK(hints.attach({meta::InodeId{prefixPlan.front().key.inode},
+                          prefixPlan.front().key.block,
+                          prefixPlan.front().blockLength,
+                          cache_manager::EnsureReason::PREFETCH,
+                          1,
+                          {{lowJob, 1, [&](const Status &status) { completions.push_back(status.code()); }}}}));
+  ASSERT_OK(hints.attach({meta::InodeId{prefixPlan.back().key.inode},
+                          prefixPlan.back().key.block,
+                          prefixPlan.back().blockLength,
+                          cache_manager::EnsureReason::PREFETCH,
+                          9,
+                          {{jobId, 9, {}}}}));
+  auto highest = hints.pop();
+  ASSERT_TRUE(highest);
+  EXPECT_EQ(highest->priority, 9);
+  EXPECT_TRUE(hints.cancel(prefixPlan.front().key, lowJob));
+  EXPECT_EQ(completions, (std::vector<status_code_t>{MetaCode::kRequestCanceled}));
+  EXPECT_EQ(hints.size(), size_t{0});
 }
 
 }  // namespace
