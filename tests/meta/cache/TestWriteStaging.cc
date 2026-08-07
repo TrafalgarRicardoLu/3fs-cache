@@ -2,6 +2,7 @@
 #include <folly/experimental/coro/Sleep.h>
 #include <gtest/gtest.h>
 
+#include "meta/store/FileSession.h"
 #include "meta/store/cache/UploadJobStore.h"
 #include "tests/GtestHelpers.h"
 #include "tests/meta/MetaTestBase.h"
@@ -43,10 +44,14 @@ class TestWriteStaging : public MetaTestBase<kv::mem::MemKV> {
         node.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
       }
     }
-    auto &table = raw.chainTables.at(flat::ChainTableId{2}).rbegin()->second;
-    table.role = flat::ChainTableRole::WRITE_STAGING;
-    table.logicalCapacity = 0;
-    table.checksumType = flat::ChainTableChecksumType::NONE;
+    auto &cacheTable = raw.chainTables.at(flat::ChainTableId{1}).rbegin()->second;
+    cacheTable.role = flat::ChainTableRole::CACHE_DATA;
+    cacheTable.logicalCapacity = 1ULL << 30;
+    cacheTable.checksumType = flat::ChainTableChecksumType::CRC32C;
+    auto &stagingTable = raw.chainTables.at(flat::ChainTableId{2}).rbegin()->second;
+    stagingTable.role = flat::ChainTableRole::WRITE_STAGING;
+    stagingTable.logicalCapacity = 0;
+    stagingTable.checksumType = flat::ChainTableChecksumType::NONE;
     cluster.mgmtdClient()->setRoutingInfo(std::move(routing));
   }
 };
@@ -100,6 +105,70 @@ CoTryTask<Inode> setStagingLength(std::shared_ptr<kv::IKVEngine> engine, InodeId
   CO_RETURN_ON_ERROR(co_await inode->store(*txn));
   CO_RETURN_ON_ERROR(co_await txn->commit());
   co_return std::move(*inode);
+}
+
+CoTryTask<PublishOriginFileFromStagingReq> preparePublish(MockCluster &cluster,
+                                                          std::string path,
+                                                          cache::UploadJobId jobId,
+                                                          uint64_t length = 4096) {
+  auto &meta = cluster.meta().getOperator();
+  auto created = co_await meta.createWriteStaging(stagingReq(std::move(path), jobId));
+  CO_RETURN_ON_ERROR(created);
+  CO_RETURN_ON_ERROR(co_await setStagingLength(cluster.kvEngine(), created->inode.id, VersionedLength{length, 0}));
+  auto sealed = co_await meta.sealWriteStaging(sealReq(*created, VersionedLength{length, 0}));
+  CO_RETURN_ON_ERROR(sealed);
+
+  BeginMultipartUploadReq begin;
+  begin.service = {std::string{kServiceName}, std::string{kServiceToken}};
+  begin.jobId = jobId;
+  begin.expectedStateVersion = sealed->job.stateVersion;
+  begin.multipartId = "upload-test";
+  begin.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto begun = co_await meta.beginMultipartUpload(begin);
+  CO_RETURN_ON_ERROR(begun);
+
+  CheckpointUploadPartReq checkpoint;
+  checkpoint.service = begin.service;
+  checkpoint.jobId = jobId;
+  checkpoint.expectedStateVersion = begun->job.stateVersion;
+  checkpoint.multipartId = begun->job.multipartId;
+  checkpoint.part = {1, length, "etag", "crc32c:00000001"};
+  checkpoint.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto uploaded = co_await meta.checkpointUploadPart(checkpoint);
+  CO_RETURN_ON_ERROR(uploaded);
+
+  MutateMultipartUploadReq mutation;
+  mutation.service = begin.service;
+  mutation.jobId = jobId;
+  mutation.expectedStateVersion = uploaded->job.stateVersion;
+  mutation.multipartId = uploaded->job.multipartId;
+  mutation.mutation = MultipartUploadMutation::PREPARE_COMPLETE;
+  mutation.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto completing = co_await meta.mutateMultipartUpload(mutation);
+  CO_RETURN_ON_ERROR(completing);
+  mutation.expectedStateVersion = completing->job.stateVersion;
+  mutation.mutation = MultipartUploadMutation::SAVE_COMPLETED;
+  mutation.completedObject = cache::ImmutableObjectIdentity{cache::OriginId{1},
+                                                            "bucket",
+                                                            "objects/staged",
+                                                            {cache::VersionSelectorType::VERSION_ID, "version-1"}};
+  auto publishing = co_await meta.mutateMultipartUpload(mutation);
+  CO_RETURN_ON_ERROR(publishing);
+
+  PublishOriginFileFromStagingReq publish;
+  publish.user = SUPER_USER;
+  publish.service = begin.service;
+  publish.jobId = jobId;
+  publish.expectedStateVersion = publishing->job.stateVersion;
+  publish.expectedStagingInode = created->inode.id;
+  publish.metadata.object = *publishing->job.completedObject;
+  publish.metadata.objectSize = length;
+  publish.metadata.tableId = flat::ChainTableId{1};
+  publish.metadata.blockSize = 4096;
+  publish.metadata.stripeSize = 1;
+  publish.metadata.permission = p644;
+  publish.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  co_return publish;
 }
 
 TEST_F(TestWriteStaging, CreatesInodeSessionAndJobAtomicallyAndRetriesByJobId) {
@@ -453,6 +522,92 @@ TEST_F(TestWriteStaging, AbortsMultipartProgressIdempotently) {
     auto finishRetry = co_await meta.mutateMultipartUpload(mutation);
     CO_ASSERT_OK(finishRetry);
     CO_ASSERT_EQ(finishRetry->job, cancelled->job);
+  }());
+}
+
+TEST_F(TestWriteStaging, PublishesOriginAndUploadJobAtomicallyAndRetriesSameInode) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    enableWriteStaging(cluster);
+    auto request = co_await preparePublish(cluster, "/published", cache::UploadJobId{Uuid::from(39, 40)});
+    CO_ASSERT_OK(request);
+
+    auto session = MetaTestHelper::randomSession();
+    auto sessionTxn = this->kvEngine()->createReadWriteTransaction();
+    CO_ASSERT_OK(co_await FileSession::create(request->expectedStagingInode, session).store(*sessionTxn));
+    CO_ASSERT_OK(co_await sessionTxn->commit());
+
+    auto &meta = cluster.meta().getOperator();
+    auto published = co_await meta.publishOriginFileFromStaging(*request);
+    CO_ASSERT_OK(published);
+    CO_ASSERT_EQ(published->outcome, PublishOriginFileOutcome::PUBLISHED);
+    CO_ASSERT_TRUE(published->inode.isOriginFile());
+    CO_ASSERT_EQ(published->inode.asOriginFile().object, request->metadata.object);
+
+    auto retry = co_await meta.publishOriginFileFromStaging(*request);
+    CO_ASSERT_OK(retry);
+    CO_ASSERT_EQ(retry->outcome, PublishOriginFileOutcome::ALREADY_PUBLISHED);
+    CO_ASSERT_EQ(retry->inode.id, published->inode.id);
+
+    auto read = this->kvEngine()->createReadonlyTransaction();
+    auto job = co_await UploadJobStore::snapshotLoad(*read, request->jobId);
+    CO_ASSERT_OK(job);
+    CO_ASSERT_TRUE(job->has_value());
+    CO_ASSERT_EQ((**job).state, cache::UploadJobState::PUBLISHED);
+    CO_ASSERT_EQ((**job).publishedInode, published->inode.id.u64());
+    auto staging = co_await Inode::snapshotLoad(*read, request->expectedStagingInode);
+    CO_ASSERT_OK(staging);
+    CO_ASSERT_TRUE(staging->has_value());
+    CO_ASSERT_EQ((**staging).nlink, 0);
+    auto openSession = co_await FileSession::load(*read, request->expectedStagingInode, session.session);
+    CO_ASSERT_OK(openSession);
+    CO_ASSERT_TRUE(openSession->has_value());
+  }());
+}
+
+TEST_F(TestWriteStaging, PublishCasConflictsWithConcurrentRenameAndRemovedPath) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    enableWriteStaging(cluster);
+    auto &meta = cluster.meta().getOperator();
+    auto &store = cluster.meta().getStore();
+    auto request = co_await preparePublish(cluster, "/rename-race", cache::UploadJobId{Uuid::from(41, 42)});
+    CO_ASSERT_OK(request);
+
+    auto publishTxn = this->kvEngine()->createReadWriteTransaction();
+    auto operation = store.publishOriginFileFromStaging(*request);
+    auto uncommitted = co_await operation->run(*publishTxn);
+    CO_ASSERT_OK(uncommitted);
+    auto renameTxn = this->kvEngine()->createReadWriteTransaction();
+    auto oldEntry = co_await DirEntry::load(*renameTxn, InodeId::root(), "rename-race");
+    CO_ASSERT_OK(oldEntry);
+    CO_ASSERT_TRUE(oldEntry->has_value());
+    DirEntry renamed(InodeId::root(), "renamed");
+    renamed.data() = (**oldEntry).data();
+    CO_ASSERT_OK(co_await (**oldEntry).remove(*renameTxn));
+    CO_ASSERT_OK(co_await renamed.store(*renameTxn));
+    CO_ASSERT_OK(co_await renameTxn->commit());
+    CO_ASSERT_ERROR(co_await publishTxn->commit(), TransactionCode::kConflict);
+
+    auto read = this->kvEngine()->createReadonlyTransaction();
+    auto unpublishedInode = co_await Inode::snapshotLoad(*read, uncommitted->inode.id);
+    CO_ASSERT_OK(unpublishedInode);
+    CO_ASSERT_FALSE(unpublishedInode->has_value());
+    auto job = co_await UploadJobStore::snapshotLoad(*read, request->jobId);
+    CO_ASSERT_OK(job);
+    CO_ASSERT_TRUE(job->has_value());
+    CO_ASSERT_EQ((**job).state, cache::UploadJobState::PUBLISHING);
+    CO_ASSERT_ERROR(co_await meta.publishOriginFileFromStaging(*request), CacheCode::kStateConflict);
+
+    auto removed = co_await preparePublish(cluster, "/remove-race", cache::UploadJobId{Uuid::from(43, 44)});
+    CO_ASSERT_OK(removed);
+    auto removeTxn = this->kvEngine()->createReadWriteTransaction();
+    auto entry = co_await DirEntry::load(*removeTxn, InodeId::root(), "remove-race");
+    CO_ASSERT_OK(entry);
+    CO_ASSERT_TRUE(entry->has_value());
+    CO_ASSERT_OK(co_await (**entry).remove(*removeTxn));
+    CO_ASSERT_OK(co_await removeTxn->commit());
+    CO_ASSERT_ERROR(co_await meta.publishOriginFileFromStaging(*removed), CacheCode::kStateConflict);
   }());
 }
 

@@ -141,6 +141,8 @@ class MetaStore {
 
   OpPtr<RefreshOriginFileRsp> refreshOriginFile(const RefreshOriginFileReq &req);
 
+  OpPtr<PublishOriginFileFromStagingRsp> publishOriginFileFromStaging(const PublishOriginFileFromStagingReq &req);
+
   OpPtr<GetFileReadPlanRsp> getFileReadPlan(const GetFileReadPlanReq &req);
 
   OpPtr<EnqueueCacheBlocksRsp> enqueueCacheBlocks(const EnqueueCacheBlocksReq &req);

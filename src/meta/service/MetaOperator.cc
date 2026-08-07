@@ -508,7 +508,7 @@ CoTryTask<PublishOriginFileFromStagingRsp> MetaOperator::publishOriginFileFromSt
   CO_RETURN_ON_ERROR(checkCacheService(req.service));
   CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
   CO_RETURN_ON_ERROR(checkCacheTable(req.metadata.tableId));
-  co_return makeError(StatusCode::kNotImplemented, "staged publish transaction is not implemented");
+  co_return co_await runOp(&MetaStore::publishOriginFileFromStaging, req);
 }
 
 CoTryTask<MkdirsRsp> MetaOperator::mkdirs(MkdirsReq req) {
