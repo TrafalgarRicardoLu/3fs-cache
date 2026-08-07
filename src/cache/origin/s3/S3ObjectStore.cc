@@ -33,6 +33,7 @@ folly::Unexpected<Status> mapFailure(const S3Failure &failure) {
     case S3FailureKind::SERVER:
       return makeError(CacheCode::kUnavailable, failure.message);
     case S3FailureKind::NOT_FOUND:
+    case S3FailureKind::NO_SUCH_UPLOAD:
       return makeError(CacheCode::kNotFound, failure.message);
     case S3FailureKind::VERSION_MISMATCH:
       return makeError(CacheCode::kVersionMismatch, failure.message);
@@ -226,6 +227,82 @@ Result<ListObjectsPage> S3ObjectStore::listObjectsSync(const ListObjectsRequest 
   }
 }
 
+Result<MultipartUpload> S3ObjectStore::createMultipartUploadSync(const CreateMultipartUploadRequest &request) {
+  RETURN_ON_ERROR(request.valid());
+  auto permit = acquire(0);
+  RETURN_ON_ERROR(permit);
+  auto outcome = executor_->createMultipartUpload({request.destination.bucket, request.destination.key});
+  if (auto response = std::get_if<S3CreateMultipartResponse>(&outcome)) {
+    MultipartUpload upload{request.destination, std::move(response->uploadId)};
+    auto valid = upload.valid();
+    if (valid.hasError()) return makeError(CacheCode::kInvalidResponse, valid.error().message());
+    return upload;
+  }
+  return mapFailure(std::get<S3Failure>(outcome));
+}
+
+Result<UploadPartResult> S3ObjectStore::uploadPartSync(UploadPartRequest request) {
+  RETURN_ON_ERROR(request.valid());
+  auto permit = acquire(request.body.size());
+  RETURN_ON_ERROR(permit);
+  auto partSize = request.body.size();
+  auto outcome = executor_->uploadPart({request.upload.destination.bucket,
+                                        request.upload.destination.key,
+                                        request.upload.uploadId,
+                                        request.partNumber,
+                                        std::move(request.body),
+                                        request.checksum});
+  if (auto response = std::get_if<S3UploadPartResponse>(&outcome)) {
+    auto etag = normalizeEtag(std::move(response->etag));
+    UploadPartResult result{{request.partNumber, partSize, std::move(etag), std::move(request.checksum)}};
+    auto valid = result.valid();
+    if (valid.hasError()) return makeError(CacheCode::kInvalidResponse, valid.error().message());
+    return result;
+  }
+  return mapFailure(std::get<S3Failure>(outcome));
+}
+
+Result<ObjectMetadata> S3ObjectStore::completeMultipartUploadSync(CompleteMultipartUploadRequest request) {
+  RETURN_ON_ERROR(request.valid());
+  auto permit = acquire(0);
+  RETURN_ON_ERROR(permit);
+  auto outcome = executor_->completeMultipartUpload(
+      {request.upload.destination.bucket, request.upload.destination.key, request.upload.uploadId, request.parts});
+  if (auto response = std::get_if<S3CompleteMultipartResponse>(&outcome)) {
+    if (response->bucket != request.upload.destination.bucket || response->key != request.upload.destination.key) {
+      return makeError(CacheCode::kInvalidResponse, "S3 multipart completion changed the destination");
+    }
+    auto version = selectVersion({request.expectedSize, std::move(response->versionId), std::move(response->etag)});
+    if (version.hasError()) return makeError(CacheCode::kInvalidResponse, version.error().message());
+    return ObjectMetadata{{request.upload.destination.originId,
+                           request.upload.destination.bucket,
+                           request.upload.destination.key,
+                           std::move(*version)},
+                          request.expectedSize};
+  }
+  return mapFailure(std::get<S3Failure>(outcome));
+}
+
+Result<Void> S3ObjectStore::abortMultipartUploadSync(const AbortMultipartUploadRequest &request) {
+  RETURN_ON_ERROR(request.valid());
+  auto permit = acquire(0);
+  RETURN_ON_ERROR(permit);
+  auto outcome = executor_->abortMultipartUpload(
+      {request.upload.destination.bucket, request.upload.destination.key, request.upload.uploadId});
+  if (std::holds_alternative<S3AbortMultipartResponse>(outcome)) return Void{};
+  return mapFailure(std::get<S3Failure>(outcome));
+}
+
+Result<ObjectMetadata> S3ObjectStore::headCompletedUploadSync(const HeadCompletedUploadRequest &request) {
+  RETURN_ON_ERROR(request.valid());
+  auto result = headSync(request.destination);
+  RETURN_ON_ERROR(result);
+  if (result->size != request.expectedSize) {
+    return makeError(CacheCode::kInvalidResponse, "completed S3 object size does not match the staged upload");
+  }
+  return result;
+}
+
 CoTryTask<ObjectMetadata> S3ObjectStore::head(const ObjectRef &object) {
   auto task = folly::coro::co_invoke([this, object]() -> CoTryTask<ObjectMetadata> { co_return headSync(object); });
   co_return co_await std::move(task).scheduleOn(&ioExecutor_);
@@ -240,6 +317,38 @@ CoTryTask<std::vector<uint8_t>> S3ObjectStore::getRange(const ImmutableObjectIde
 CoTryTask<ListObjectsPage> S3ObjectStore::listObjects(const ListObjectsRequest &request) {
   auto task =
       folly::coro::co_invoke([this, request]() -> CoTryTask<ListObjectsPage> { co_return listObjectsSync(request); });
+  co_return co_await std::move(task).scheduleOn(&ioExecutor_);
+}
+
+CoTryTask<MultipartUpload> S3ObjectStore::createMultipartUpload(const CreateMultipartUploadRequest &request) {
+  auto task = folly::coro::co_invoke(
+      [this, request]() -> CoTryTask<MultipartUpload> { co_return createMultipartUploadSync(request); });
+  co_return co_await std::move(task).scheduleOn(&ioExecutor_);
+}
+
+CoTryTask<UploadPartResult> S3ObjectStore::uploadPart(UploadPartRequest request) {
+  auto task = folly::coro::co_invoke([this, request = std::move(request)]() mutable -> CoTryTask<UploadPartResult> {
+    co_return uploadPartSync(std::move(request));
+  });
+  co_return co_await std::move(task).scheduleOn(&ioExecutor_);
+}
+
+CoTryTask<ObjectMetadata> S3ObjectStore::completeMultipartUpload(CompleteMultipartUploadRequest request) {
+  auto task = folly::coro::co_invoke([this, request = std::move(request)]() mutable -> CoTryTask<ObjectMetadata> {
+    co_return completeMultipartUploadSync(std::move(request));
+  });
+  co_return co_await std::move(task).scheduleOn(&ioExecutor_);
+}
+
+CoTryTask<Void> S3ObjectStore::abortMultipartUpload(const AbortMultipartUploadRequest &request) {
+  auto task =
+      folly::coro::co_invoke([this, request]() -> CoTryTask<Void> { co_return abortMultipartUploadSync(request); });
+  co_return co_await std::move(task).scheduleOn(&ioExecutor_);
+}
+
+CoTryTask<ObjectMetadata> S3ObjectStore::headCompletedUpload(const HeadCompletedUploadRequest &request) {
+  auto task = folly::coro::co_invoke(
+      [this, request]() -> CoTryTask<ObjectMetadata> { co_return headCompletedUploadSync(request); });
   co_return co_await std::move(task).scheduleOn(&ioExecutor_);
 }
 

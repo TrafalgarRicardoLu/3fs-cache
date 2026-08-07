@@ -35,14 +35,54 @@ class FakeExecutor : public S3RequestExecutor {
     return outcome;
   }
 
+  S3Outcome<S3CreateMultipartResponse> createMultipartUpload(const S3CreateMultipartRequest &) override {
+    ++createMultipartCalls;
+    auto outcome = std::move(createMultipartOutcomes.front());
+    createMultipartOutcomes.pop_front();
+    return outcome;
+  }
+
+  S3Outcome<S3UploadPartResponse> uploadPart(const S3UploadPartRequest &request) override {
+    ++uploadPartCalls;
+    lastUploadPart = request;
+    auto outcome = std::move(uploadPartOutcomes.front());
+    uploadPartOutcomes.pop_front();
+    return outcome;
+  }
+
+  S3Outcome<S3CompleteMultipartResponse> completeMultipartUpload(const S3CompleteMultipartRequest &request) override {
+    ++completeMultipartCalls;
+    lastComplete = request;
+    auto outcome = std::move(completeMultipartOutcomes.front());
+    completeMultipartOutcomes.pop_front();
+    return outcome;
+  }
+
+  S3Outcome<S3AbortMultipartResponse> abortMultipartUpload(const S3AbortMultipartRequest &) override {
+    ++abortMultipartCalls;
+    auto outcome = std::move(abortMultipartOutcomes.front());
+    abortMultipartOutcomes.pop_front();
+    return outcome;
+  }
+
   uint32_t headCalls{0};
   uint32_t getCalls{0};
   uint32_t listCalls{0};
+  uint32_t createMultipartCalls{0};
+  uint32_t uploadPartCalls{0};
+  uint32_t completeMultipartCalls{0};
+  uint32_t abortMultipartCalls{0};
   ByteRange lastRange;
   ListRequest lastList;
+  S3UploadPartRequest lastUploadPart;
+  S3CompleteMultipartRequest lastComplete;
   std::deque<S3Outcome<HeadResponse>> headOutcomes;
   std::deque<S3Outcome<GetRangeResponse>> getOutcomes;
   std::deque<S3Outcome<ListResponse>> listOutcomes;
+  std::deque<S3Outcome<S3CreateMultipartResponse>> createMultipartOutcomes;
+  std::deque<S3Outcome<S3UploadPartResponse>> uploadPartOutcomes;
+  std::deque<S3Outcome<S3CompleteMultipartResponse>> completeMultipartOutcomes;
+  std::deque<S3Outcome<S3AbortMultipartResponse>> abortMultipartOutcomes;
 };
 
 ObjectRef objectRef() { return ObjectRef{OriginId{1}, "bucket", "key"}; }
@@ -238,6 +278,59 @@ TEST(S3ObjectStore, RejectsListTokenWithoutProgressAndUnsortedResults) {
   ASSERT_ERROR(stuck, CacheCode::kInvalidResponse);
   auto unsorted = folly::coro::blockingWait(store.listObjects({OriginId{1}, "bucket", "prefix/", {}, 2}));
   ASSERT_ERROR(unsorted, CacheCode::kInvalidResponse);
+}
+
+TEST(S3ObjectStore, ExecutesAndValidatesMultipartLifecycle) {
+  auto executor = std::make_unique<FakeExecutor>();
+  auto *fake = executor.get();
+  fake->createMultipartOutcomes.emplace_back(S3CreateMultipartResponse{"upload-id"});
+  fake->uploadPartOutcomes.emplace_back(S3UploadPartResponse{"\"part-etag\""});
+  fake->completeMultipartOutcomes.emplace_back(
+      S3CompleteMultipartResponse{"bucket", "key", "version-1", "\"multipart-etag-1\""});
+  fake->headOutcomes.emplace_back(HeadResponse{3, "version-1", "\"multipart-etag-1\""});
+  fake->abortMultipartOutcomes.emplace_back(S3AbortMultipartResponse{});
+  S3ObjectStore store(testConfig(), std::move(executor));
+
+  auto created = folly::coro::blockingWait(store.createMultipartUpload({objectRef()}));
+  ASSERT_OK(created);
+  auto uploaded = folly::coro::blockingWait(
+      store.uploadPart(UploadPartRequest{*created, 1, std::vector<uint8_t>{1, 2, 3}, "local-checksum"}));
+  ASSERT_OK(uploaded);
+  EXPECT_EQ(uploaded->part, (CompletedUploadPart{1, 3, "part-etag", "local-checksum"}));
+  EXPECT_EQ(fake->lastUploadPart.body, (std::vector<uint8_t>{1, 2, 3}));
+
+  auto completed = folly::coro::blockingWait(
+      store.completeMultipartUpload(CompleteMultipartUploadRequest{*created, {uploaded->part}, 3}));
+  ASSERT_OK(completed);
+  EXPECT_EQ(completed->identity.version, (VersionSelector{VersionSelectorType::VERSION_ID, "version-1"}));
+  ASSERT_EQ(fake->lastComplete.parts, (std::vector<CompletedUploadPart>{uploaded->part}));
+
+  ASSERT_OK(folly::coro::blockingWait(store.headCompletedUpload({objectRef(), 3})));
+  ASSERT_OK(folly::coro::blockingWait(store.abortMultipartUpload({*created})));
+  EXPECT_EQ(fake->createMultipartCalls, uint32_t{1});
+  EXPECT_EQ(fake->uploadPartCalls, uint32_t{1});
+  EXPECT_EQ(fake->completeMultipartCalls, uint32_t{1});
+  EXPECT_EQ(fake->abortMultipartCalls, uint32_t{1});
+}
+
+TEST(S3ObjectStore, ClassifiesMultipartFailuresAndRejectsMalformedResponses) {
+  auto executor = std::make_unique<FakeExecutor>();
+  auto *fake = executor.get();
+  fake->createMultipartOutcomes.emplace_back(S3Failure{S3FailureKind::AUTHENTICATION, 403, "denied"});
+  fake->uploadPartOutcomes.emplace_back(S3UploadPartResponse{});
+  fake->completeMultipartOutcomes.emplace_back(S3Failure{S3FailureKind::TIMEOUT, 0, "ambiguous completion"});
+  fake->abortMultipartOutcomes.emplace_back(S3Failure{S3FailureKind::NO_SUCH_UPLOAD, 404, "gone"});
+  fake->headOutcomes.emplace_back(HeadResponse{2, "version", "etag"});
+  S3ObjectStore store(testConfig(), std::move(executor));
+  auto upload = MultipartUpload{objectRef(), "upload-id"};
+
+  ASSERT_ERROR(folly::coro::blockingWait(store.createMultipartUpload({objectRef()})), CacheCode::kAccessDenied);
+  ASSERT_ERROR(folly::coro::blockingWait(store.uploadPart({upload, 1, {1}, "checksum"})), CacheCode::kInvalidResponse);
+  ASSERT_ERROR(folly::coro::blockingWait(store.completeMultipartUpload({upload, {{1, 1, "etag", "checksum"}}, 1})),
+               CacheCode::kTimeout);
+  EXPECT_EQ(fake->completeMultipartCalls, uint32_t{1});
+  ASSERT_ERROR(folly::coro::blockingWait(store.abortMultipartUpload({upload})), CacheCode::kNotFound);
+  ASSERT_ERROR(folly::coro::blockingWait(store.headCompletedUpload({objectRef(), 1})), CacheCode::kInvalidResponse);
 }
 
 #ifndef HF3FS_ENABLE_CACHE

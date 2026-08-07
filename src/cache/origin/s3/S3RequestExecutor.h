@@ -15,6 +15,7 @@ enum class S3FailureKind : uint8_t {
   THROTTLED,
   SERVER,
   NOT_FOUND,
+  NO_SUCH_UPLOAD,
   VERSION_MISMATCH,
   AUTHENTICATION,
   INVALID_RESPONSE,
@@ -70,6 +71,50 @@ struct ListResponse {
   bool truncated{false};
 };
 
+struct S3CreateMultipartRequest {
+  std::string bucket;
+  std::string key;
+};
+
+struct S3CreateMultipartResponse {
+  std::string uploadId;
+};
+
+struct S3UploadPartRequest {
+  std::string bucket;
+  std::string key;
+  std::string uploadId;
+  uint32_t partNumber{0};
+  std::vector<uint8_t> body;
+  std::string checksum;
+};
+
+struct S3UploadPartResponse {
+  std::string etag;
+};
+
+struct S3CompleteMultipartRequest {
+  std::string bucket;
+  std::string key;
+  std::string uploadId;
+  std::vector<CompletedUploadPart> parts;
+};
+
+struct S3CompleteMultipartResponse {
+  std::string bucket;
+  std::string key;
+  std::optional<std::string> versionId;
+  std::optional<std::string> etag;
+};
+
+struct S3AbortMultipartRequest {
+  std::string bucket;
+  std::string key;
+  std::string uploadId;
+};
+
+struct S3AbortMultipartResponse {};
+
 template <typename T>
 using S3Outcome = std::variant<T, S3Failure>;
 
@@ -80,6 +125,10 @@ class S3RequestExecutor {
   virtual S3Outcome<HeadResponse> head(const HeadRequest &request) = 0;
   virtual S3Outcome<GetRangeResponse> getRange(const GetRangeRequest &request) = 0;
   virtual S3Outcome<ListResponse> listObjects(const ListRequest &request) = 0;
+  virtual S3Outcome<S3CreateMultipartResponse> createMultipartUpload(const S3CreateMultipartRequest &request) = 0;
+  virtual S3Outcome<S3UploadPartResponse> uploadPart(const S3UploadPartRequest &request) = 0;
+  virtual S3Outcome<S3CompleteMultipartResponse> completeMultipartUpload(const S3CompleteMultipartRequest &request) = 0;
+  virtual S3Outcome<S3AbortMultipartResponse> abortMultipartUpload(const S3AbortMultipartRequest &request) = 0;
 };
 
 }  // namespace hf3fs::cache::origin::s3
