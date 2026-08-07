@@ -142,6 +142,7 @@ TEST(TestOrchestrationCoordinator, RecoversNonTerminalJobsAndRunsSeparatedTicks)
   uint32_t plannerCalls = 0;
   uint32_t runnerCalls = 0;
   uint32_t trackerCalls = 0;
+  uint32_t recoveryCalls = 0;
   OrchestrationCoordinator coordinator(
       backend,
       2,
@@ -165,11 +166,21 @@ TEST(TestOrchestrationCoordinator, RecoversNonTerminalJobsAndRunsSeparatedTicks)
       [&](const cache::PrefetchJobRecord &, const CancellationToken &) -> CoTryTask<void> {
         ++trackerCalls;
         co_return Void{};
+      },
+      [&](const cache::PrefetchJobRecord &current,
+          std::optional<cache::CacheBlockKey>,
+          const CancellationToken &) -> CoTryTask<JobRunnerPageResult> {
+        ++recoveryCalls;
+        EXPECT_EQ(current.spec.jobId, loading.spec.jobId);
+        co_return JobRunnerPageResult{};
       });
 
   auto recovered = folly::coro::blockingWait(coordinator.recover());
   ASSERT_OK(recovered);
   EXPECT_EQ(*recovered, 3u);
+  EXPECT_EQ(recoveryCalls, 1u);
+  ASSERT_OK(folly::coro::blockingWait(coordinator.recover()));
+  EXPECT_EQ(recoveryCalls, 2u);
   ASSERT_OK(folly::coro::blockingWait(coordinator.runPlannerOnce()));
   EXPECT_EQ(plannerCalls, 2u);
   ASSERT_OK(folly::coro::blockingWait(coordinator.runRunnerOnce()));

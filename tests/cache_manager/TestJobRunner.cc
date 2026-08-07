@@ -159,6 +159,31 @@ TEST(TestJobRunner, ReusesDurableAttemptAfterAmbiguousTimeoutAndRestart) {
   EXPECT_EQ(backend->seenAttempts[1], Uuid::from(9, 9));
 }
 
+TEST(TestJobRunner, RecoveryReattachesDurableOwnershipWithoutNewAdmission) {
+  auto backend = std::make_shared<FakeJobRunnerBackend>();
+  auto planned = entry(0);
+  auto admitted = entry(1);
+  admitted.state = cache::PrefetchPlanEntryState::ADMITTED;
+  admitted.admissionAttemptId = Uuid::from(7, 7);
+  backend->entries = {planned, admitted};
+  backend->dispositions = {{1, JobAdmissionDisposition::READY}};
+  JobQuota quota;
+  uint64_t newAttempts = 0;
+  JobRunner restarted(backend, quota, 10, [&] {
+    ++newAttempts;
+    return Uuid::from(8, newAttempts);
+  });
+
+  auto recovered = folly::coro::blockingWait(restarted.runNextPage(job(), std::nullopt, {}, true));
+  ASSERT_OK(recovered);
+  EXPECT_EQ(recovered->visited, 2u);
+  EXPECT_EQ(recovered->ready, 1u);
+  EXPECT_EQ(newAttempts, 0u);
+  ASSERT_EQ(backend->seenAttempts.size(), 1u);
+  EXPECT_EQ(backend->seenAttempts.front(), Uuid::from(7, 7));
+  EXPECT_EQ(backend->entries.front().state, cache::PrefetchPlanEntryState::PLANNED);
+}
+
 TEST(TestJobRunner, HandlesCompletionRacingWithAttach) {
   auto backend = std::make_shared<FakeJobRunnerBackend>();
   backend->entries = {entry(0)};

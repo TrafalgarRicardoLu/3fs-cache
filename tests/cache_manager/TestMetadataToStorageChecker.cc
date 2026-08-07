@@ -64,6 +64,10 @@ meta::ReconcileCacheBlockStatus evictingStatus(uint32_t block) {
 
 class ReconcileBackend : public CacheManagerBackend {
  public:
+  std::shared_ptr<client::RoutingInfo> routingInfo() final {
+    ++routingQueries;
+    return nullptr;
+  }
   CoTryTask<meta::Inode> stat(meta::InodeId inode) final {
     auto object = cache::ImmutableObjectIdentity{cache::OriginId{1},
                                                  "bucket",
@@ -140,6 +144,7 @@ class ReconcileBackend : public CacheManagerBackend {
   std::vector<meta::BeginCleanCacheBlockItem> cleaned;
   std::vector<meta::CacheEvictionIdentity> evictions;
   size_t queryCalls{0};
+  size_t routingQueries{0};
   int finished{0};
   bool staleReady{false};
 };
@@ -226,6 +231,19 @@ TEST(TestMetadataToStorageChecker, ReplaysCleaningAndEvictingWithPersistedIdenti
   EXPECT_EQ(backend->evictions[0].evictionEpoch, backend->records[1].evictionEpoch);
   EXPECT_EQ(backend->evictions[0].retireOperationId, backend->records[1].retireOperationId);
   EXPECT_EQ(backend->queryCalls, 0);
+  EXPECT_EQ(backend->routingQueries, 0);
+
+  auto replayed = folly::coro::blockingWait(checker.run());
+  ASSERT_OK(replayed);
+  EXPECT_EQ(replayed->repaired, 2);
+  ASSERT_EQ(backend->cleaned.size(), 2);
+  ASSERT_EQ(backend->evictions.size(), 2);
+  EXPECT_EQ(backend->cleaned[1].key, backend->cleaned[0].key);
+  EXPECT_EQ(backend->cleaned[1].expectedReady, backend->cleaned[0].expectedReady);
+  EXPECT_EQ(backend->cleaned[1].observedGeneration, backend->cleaned[0].observedGeneration);
+  EXPECT_EQ(backend->cleaned[1].terminalState, backend->cleaned[0].terminalState);
+  EXPECT_EQ(backend->evictions[1], backend->evictions[0]);
+  EXPECT_EQ(backend->routingQueries, 0);
 }
 
 }  // namespace

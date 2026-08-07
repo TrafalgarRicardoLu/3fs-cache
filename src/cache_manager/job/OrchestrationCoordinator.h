@@ -44,7 +44,8 @@ class OrchestrationCoordinator {
                            uint32_t jobPageLimit,
                            PlannerTick planner,
                            RunnerTick runner,
-                           TrackerTick tracker = {});
+                           TrackerTick tracker = {},
+                           RunnerTick recoveryRunner = {});
 
   CoTryTask<uint32_t> recover();
   CoTryTask<void> runPlannerOnce();
@@ -56,6 +57,7 @@ class OrchestrationCoordinator {
  private:
   static bool terminal(cache::PrefetchJobState state);
   CoTryTask<void> refresh();
+  CoTryTask<void> runJobs(const RunnerTick &runner);
   std::vector<cache::PrefetchJobRecord> snapshot() const;
   void remember(cache::PrefetchJobRecord job);
 
@@ -63,6 +65,7 @@ class OrchestrationCoordinator {
   uint32_t jobPageLimit_;
   PlannerTick planner_;
   RunnerTick runner_;
+  RunnerTick recoveryRunner_;
   TrackerTick tracker_;
   CancellationSource cancellation_;
   std::atomic<bool> stopping_{false};

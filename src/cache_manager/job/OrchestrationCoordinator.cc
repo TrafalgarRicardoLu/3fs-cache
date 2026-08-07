@@ -19,11 +19,13 @@ OrchestrationCoordinator::OrchestrationCoordinator(std::shared_ptr<Orchestration
                                                    uint32_t jobPageLimit,
                                                    PlannerTick planner,
                                                    RunnerTick runner,
-                                                   TrackerTick tracker)
+                                                   TrackerTick tracker,
+                                                   RunnerTick recoveryRunner)
     : backend_(std::move(backend)),
       jobPageLimit_(jobPageLimit),
       planner_(std::move(planner)),
       runner_(std::move(runner)),
+      recoveryRunner_(std::move(recoveryRunner)),
       tracker_(std::move(tracker)) {}
 
 bool OrchestrationCoordinator::terminal(cache::PrefetchJobState state) {
@@ -74,6 +76,7 @@ CoTryTask<void> OrchestrationCoordinator::refresh() {
 
 CoTryTask<uint32_t> OrchestrationCoordinator::recover() {
   CO_RETURN_ON_ERROR(co_await refresh());
+  CO_RETURN_ON_ERROR(co_await runJobs(recoveryRunner_));
   co_return static_cast<uint32_t>(activeJobs());
 }
 
@@ -91,16 +94,14 @@ CoTryTask<void> OrchestrationCoordinator::runPlannerOnce() {
   co_return Void{};
 }
 
-CoTryTask<void> OrchestrationCoordinator::runRunnerOnce() {
-  cache::metrics::recordCount(cache::metrics::Event::MANAGER_ORCHESTRATION_TICK, 1, {.reason = "runner"});
-  CO_RETURN_ON_ERROR(co_await refresh());
-  if (!runner_) co_return Void{};
+CoTryTask<void> OrchestrationCoordinator::runJobs(const RunnerTick &runner) {
+  if (!runner) co_return Void{};
   for (const auto &job : snapshot()) {
     if (stopping_.load(std::memory_order_acquire)) throw OperationCancelled();
     if (job.plannedBlocks == 0) continue;
     std::optional<cache::CacheBlockKey> after;
     do {
-      auto page = co_await runner_(job, after, cancellation_.getToken());
+      auto page = co_await runner(job, after, cancellation_.getToken());
       CO_RETURN_ON_ERROR(page);
       if (page->throttled || !page->more) break;
       if (!page->nextAfter) co_return makeError(CacheCode::kInvalidResponse, "JobRunner page did not advance");
@@ -108,6 +109,12 @@ CoTryTask<void> OrchestrationCoordinator::runRunnerOnce() {
     } while (true);
   }
   co_return Void{};
+}
+
+CoTryTask<void> OrchestrationCoordinator::runRunnerOnce() {
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_ORCHESTRATION_TICK, 1, {.reason = "runner"});
+  CO_RETURN_ON_ERROR(co_await refresh());
+  co_return co_await runJobs(runner_);
 }
 
 CoTryTask<void> OrchestrationCoordinator::runTrackerOnce() {

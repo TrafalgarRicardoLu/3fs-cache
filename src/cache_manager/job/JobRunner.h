@@ -61,7 +61,8 @@ class JobRunner {
 
   CoTryTask<JobRunnerPageResult> runNextPage(const cache::PrefetchJobRecord &job,
                                              std::optional<cache::CacheBlockKey> after = std::nullopt,
-                                             const CancellationToken &cancellation = {});
+                                             const CancellationToken &cancellation = {},
+                                             bool recoverOnly = false);
 
  private:
   struct ClaimKey {

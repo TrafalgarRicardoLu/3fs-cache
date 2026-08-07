@@ -62,7 +62,8 @@ JobRunnerBackend::Completion JobRunner::completion(const cache::PrefetchPlanEntr
 
 CoTryTask<JobRunnerPageResult> JobRunner::runNextPage(const cache::PrefetchJobRecord &job,
                                                       std::optional<cache::CacheBlockKey> after,
-                                                      const CancellationToken &cancellation) {
+                                                      const CancellationToken &cancellation,
+                                                      bool recoverOnly) {
   CO_RETURN_ON_ERROR(job.valid());
   if (!job.spec.loadMissing) co_return JobRunnerPageResult{};
   if (pageLimit_ == 0 || pageLimit_ > cache::kMaxPhase2BatchItems) {
@@ -84,6 +85,10 @@ CoTryTask<JobRunnerPageResult> JobRunner::runNextPage(const cache::PrefetchJobRe
     if (current.state == cache::PrefetchPlanEntryState::READY ||
         current.state == cache::PrefetchPlanEntryState::FAILED ||
         current.state == cache::PrefetchPlanEntryState::CANCELLED) {
+      result.nextAfter = current.key;
+      continue;
+    }
+    if (recoverOnly && current.state == cache::PrefetchPlanEntryState::PLANNED) {
       result.nextAfter = current.key;
       continue;
     }

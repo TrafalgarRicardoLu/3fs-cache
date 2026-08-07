@@ -184,6 +184,11 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
                                 const CancellationToken &cancellation) -> CoTryTask<void> {
           CO_RETURN_ON_ERROR(co_await tracker->run(job, cancellation));
           co_return Void{};
+        },
+        [runner = jobRunner_](const cache::PrefetchJobRecord &job,
+                              std::optional<cache::CacheBlockKey> after,
+                              const CancellationToken &cancellation) -> CoTryTask<JobRunnerPageResult> {
+          co_return co_await runner->runNextPage(job, after, cancellation, true);
         });
   }
   auto noCleanup = [] {};
