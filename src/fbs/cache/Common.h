@@ -16,6 +16,8 @@ namespace hf3fs::cache {
 inline constexpr uint32_t kCacheSchemaVersion = 2;
 inline constexpr uint32_t kCacheProtocolVersion = 2;
 inline constexpr uint32_t kCachePhase3ProtocolVersion = 3;
+inline constexpr uint32_t kCachePhase4SchemaVersion = 4;
+inline constexpr uint32_t kCachePhase4ProtocolVersion = 4;
 inline constexpr size_t kMaxPhase2BatchItems = 1000;
 inline constexpr size_t kMaxDatasetSources = 64;
 inline constexpr size_t kMaxDatasetPaths = 4096;
@@ -26,6 +28,10 @@ inline constexpr size_t kMaxOriginNameLength = 1024;
 inline constexpr uint32_t kMaxJobParallelLoads = 1024;
 inline constexpr uint32_t kReadyRatioScaleBps = 10000;
 inline constexpr uint64_t kMaxPinTtlMs = 365ULL * 24 * 60 * 60 * 1000;
+inline constexpr uint32_t kMaxUploadParts = 10000;
+inline constexpr size_t kMaxMultipartUploadIdBytes = 4096;
+inline constexpr size_t kMaxCompletedPartTagBytes = 1024;
+inline constexpr size_t kMaxUploadErrorBytes = 4096;
 
 inline Result<Void> checkPhase2Capability(uint32_t protocolVersion, bool enabled) {
   if (protocolVersion != kCacheProtocolVersion) {
@@ -43,6 +49,14 @@ inline Result<Void> checkPhase3Capability(uint32_t protocolVersion, bool enabled
   return Void{};
 }
 
+inline Result<Void> checkPhase4Capability(uint32_t protocolVersion, bool enabled) {
+  if (protocolVersion != kCachePhase4ProtocolVersion) {
+    return makeError(CacheCode::kUpgradeRequired, "incompatible cache phase four protocol version");
+  }
+  if (!enabled) return makeError(CacheCode::kFeatureDisabled, "cache phase four is disabled");
+  return Void{};
+}
+
 STRONG_TYPEDEF(uint32_t, OriginId);
 STRONG_TYPEDEF(uint32_t, CacheBlockIndex);
 STRONG_TYPEDEF(uint64_t, CacheGeneration);
@@ -50,6 +64,8 @@ STRONG_TYPEDEF(uint64_t, CleanupEpoch);
 STRONG_TYPEDEF(uint64_t, EvictionEpoch);
 STRONG_TYPEDEF(Uuid, PrefetchJobId);
 STRONG_TYPEDEF(Uuid, PinOwnerId);
+STRONG_TYPEDEF(Uuid, UploadJobId);
+STRONG_TYPEDEF(Uuid, ReconcileRunId);
 
 enum class EvictionReason : uint8_t {
   INVALID = 0,
@@ -110,6 +126,27 @@ enum class PrefetchJobState : uint8_t {
   READY = 5,
   FAILED = 6,
   CANCELLED = 7,
+};
+
+enum class UploadJobState : uint8_t {
+  INVALID = 0,
+  OPEN = 1,
+  SEALED = 2,
+  UPLOADING = 3,
+  COMPLETING = 4,
+  PUBLISHING = 5,
+  PUBLISHED = 6,
+  ABORTING = 7,
+  FAILED = 8,
+  CANCELLED = 9,
+};
+
+enum class ReconcileRunState : uint8_t {
+  INVALID = 0,
+  RUNNING = 1,
+  HEALTHY = 2,
+  DEGRADED = 3,
+  FAILED = 4,
 };
 
 enum class DatasetSourceType : uint8_t {
@@ -245,6 +282,60 @@ struct ImmutableObjectIdentity {
  public:
   Result<Void> valid() const;
   bool operator==(const ImmutableObjectIdentity &) const = default;
+};
+
+struct CompletedUploadPart {
+  SERDE_STRUCT_FIELD(partNumber, uint32_t{});
+  SERDE_STRUCT_FIELD(size, uint64_t{});
+  SERDE_STRUCT_FIELD(etag, std::string{});
+  SERDE_STRUCT_FIELD(checksum, std::string{});
+
+ public:
+  Result<Void> valid() const;
+  bool operator==(const CompletedUploadPart &) const = default;
+};
+
+struct UploadJobRecord {
+  SERDE_STRUCT_FIELD(jobId, UploadJobId{});
+  SERDE_STRUCT_FIELD(ownerUid, flat::Uid{});
+  SERDE_STRUCT_FIELD(path, std::string{});
+  // InodeId intentionally stays wire-neutral so cache-fbs does not depend on meta-fbs.
+  SERDE_STRUCT_FIELD(stagingInode, uint64_t{});
+  SERDE_STRUCT_FIELD(stagingLength, uint64_t{});
+  SERDE_STRUCT_FIELD(destination, ObjectRef{});
+  SERDE_STRUCT_FIELD(multipartId, std::string{});
+  SERDE_STRUCT_FIELD(nextPartNumber, uint32_t{1});
+  SERDE_STRUCT_FIELD(parts, std::vector<CompletedUploadPart>{});
+  SERDE_STRUCT_FIELD(state, UploadJobState::INVALID);
+  SERDE_STRUCT_FIELD(stateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(createdAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(updatedAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(writerLeaseId, Uuid::zero());
+  SERDE_STRUCT_FIELD(writerLeaseExpiresAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(completedObject, std::optional<ImmutableObjectIdentity>{});
+  SERDE_STRUCT_FIELD(publishedInode, uint64_t{});
+  SERDE_STRUCT_FIELD(error, std::string{});
+
+ public:
+  Result<Void> valid() const;
+  bool operator==(const UploadJobRecord &) const = default;
+};
+
+struct ReconcileProgress {
+  SERDE_STRUCT_FIELD(runId, ReconcileRunId{});
+  SERDE_STRUCT_FIELD(state, ReconcileRunState::INVALID);
+  SERDE_STRUCT_FIELD(startedAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(updatedAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(scanned, uint64_t{});
+  SERDE_STRUCT_FIELD(repaired, uint64_t{});
+  SERDE_STRUCT_FIELD(orphaned, uint64_t{});
+  SERDE_STRUCT_FIELD(missing, uint64_t{});
+  SERDE_STRUCT_FIELD(conflicts, uint64_t{});
+  SERDE_STRUCT_FIELD(error, std::string{});
+
+ public:
+  Result<Void> valid() const;
+  bool operator==(const ReconcileProgress &) const = default;
 };
 
 struct CacheBlockKey {

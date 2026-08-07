@@ -96,18 +96,94 @@ Result<Void> ObjectRef::valid() const {
   if (originId == OriginId{}) {
     return makeError(StatusCode::kInvalidArg, "empty origin id");
   }
-  if (bucket.empty()) {
-    return makeError(StatusCode::kInvalidArg, "empty object bucket");
-  }
-  if (key.empty()) {
-    return makeError(StatusCode::kInvalidArg, "empty object key");
-  }
+  RETURN_ON_ERROR(validOriginComponent(bucket, "object bucket"));
+  RETURN_ON_ERROR(validOriginComponent(key, "object key"));
   return Void{};
 }
 
 Result<Void> ImmutableObjectIdentity::valid() const {
   RETURN_ON_ERROR((ObjectRef{originId, bucket, key}.valid()));
   return version.valid();
+}
+
+Result<Void> CompletedUploadPart::valid() const {
+  if (partNumber == 0 || partNumber > kMaxUploadParts) {
+    return makeError(StatusCode::kInvalidArg, "invalid completed upload part number");
+  }
+  if (etag.empty() || etag.size() > kMaxCompletedPartTagBytes || etag.find('\0') != std::string::npos ||
+      checksum.size() > kMaxCompletedPartTagBytes || checksum.find('\0') != std::string::npos) {
+    return makeError(StatusCode::kInvalidArg, "invalid completed upload part tag");
+  }
+  return Void{};
+}
+
+Result<Void> UploadJobRecord::valid() const {
+  if (jobId == UploadJobId{} || stagingInode == 0) {
+    return makeError(StatusCode::kInvalidArg, "empty upload job or staging inode identity");
+  }
+  RETURN_ON_ERROR(validAbsoluteNamespacePath(path));
+  RETURN_ON_ERROR(destination.valid());
+  if (!magic_enum::enum_contains(state) || state == UploadJobState::INVALID || stateVersion == 0 || createdAtMs == 0 ||
+      updatedAtMs < createdAtMs || nextPartNumber == 0 || nextPartNumber > kMaxUploadParts + 1 ||
+      parts.size() > kMaxUploadParts || multipartId.size() > kMaxMultipartUploadIdBytes ||
+      multipartId.find('\0') != std::string::npos || error.size() > kMaxUploadErrorBytes ||
+      error.find('\0') != std::string::npos) {
+    return makeError(StatusCode::kInvalidArg, "invalid upload job state, bounds, or timestamp");
+  }
+  uint32_t expectedPart = 1;
+  uint64_t uploadedBytes = 0;
+  for (const auto &part : parts) {
+    RETURN_ON_ERROR(part.valid());
+    if (part.partNumber != expectedPart++) {
+      return makeError(StatusCode::kInvalidArg, "upload parts are not contiguous");
+    }
+    if (part.size > std::numeric_limits<uint64_t>::max() - uploadedBytes) {
+      return makeError(StatusCode::kInvalidArg, "uploaded part bytes overflow");
+    }
+    uploadedBytes += part.size;
+  }
+  if (nextPartNumber != expectedPart || uploadedBytes > stagingLength) {
+    return makeError(StatusCode::kInvalidArg, "upload part progress exceeds staging snapshot");
+  }
+  const bool open = state == UploadJobState::OPEN;
+  if (open != (writerLeaseId != Uuid::zero()) || open != (writerLeaseExpiresAtMs > updatedAtMs)) {
+    return makeError(StatusCode::kInvalidArg, "upload writer lease does not match job state");
+  }
+  if (open && (!multipartId.empty() || !parts.empty() || completedObject || publishedInode != 0)) {
+    return makeError(StatusCode::kInvalidArg, "open upload job has durable upload results");
+  }
+  const bool needsMultipart =
+      state == UploadJobState::UPLOADING || state == UploadJobState::COMPLETING || state == UploadJobState::ABORTING;
+  if (needsMultipart && multipartId.empty()) {
+    return makeError(StatusCode::kInvalidArg, "active multipart job has no upload id");
+  }
+  const bool completed = state == UploadJobState::PUBLISHING || state == UploadJobState::PUBLISHED;
+  if (completed != completedObject.has_value()) {
+    return makeError(StatusCode::kInvalidArg, "upload completion identity does not match job state");
+  }
+  if (completedObject) {
+    RETURN_ON_ERROR(completedObject->valid());
+    if (completedObject->originId != destination.originId || completedObject->bucket != destination.bucket ||
+        completedObject->key != destination.key || uploadedBytes != stagingLength) {
+      return makeError(StatusCode::kInvalidArg, "completed object does not match upload destination or length");
+    }
+  }
+  if ((state == UploadJobState::PUBLISHED) != (publishedInode != 0)) {
+    return makeError(StatusCode::kInvalidArg, "published inode does not match upload job state");
+  }
+  return Void{};
+}
+
+Result<Void> ReconcileProgress::valid() const {
+  if (runId == ReconcileRunId{} || !magic_enum::enum_contains(state) || state == ReconcileRunState::INVALID ||
+      startedAtMs == 0 || updatedAtMs < startedAtMs || repaired > scanned || orphaned > scanned || missing > scanned ||
+      conflicts > scanned || error.size() > kMaxUploadErrorBytes || error.find('\0') != std::string::npos) {
+    return makeError(StatusCode::kInvalidArg, "invalid cache reconcile progress");
+  }
+  if (state == ReconcileRunState::HEALTHY && (!error.empty() || conflicts != 0)) {
+    return makeError(StatusCode::kInvalidArg, "healthy reconcile run has unresolved errors");
+  }
+  return Void{};
 }
 
 Result<Void> CacheBlockKey::valid() const {

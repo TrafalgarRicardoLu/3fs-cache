@@ -94,6 +94,69 @@ TEST(CacheCommonTypes, RejectsInvalidOrchestrationRecords) {
   EXPECT_TRUE(pin.valid().hasError());
 }
 
+TEST(CacheCommonTypes, PhaseFourRecordsRoundTrip) {
+  UploadJobRecord upload;
+  upload.jobId = UploadJobId{Uuid::from(7, 8)};
+  upload.ownerUid = flat::Uid{1};
+  upload.path = "/checkpoints/model";
+  upload.stagingInode = 42;
+  upload.stagingLength = 4096;
+  upload.destination = {OriginId{1}, "bucket", "checkpoints/model-7"};
+  upload.multipartId = "upload-id";
+  upload.nextPartNumber = 2;
+  upload.parts = {{1, 4096, "etag", "checksum"}};
+  upload.state = UploadJobState::PUBLISHING;
+  upload.stateVersion = 5;
+  upload.createdAtMs = 100;
+  upload.updatedAtMs = 200;
+  upload.completedObject =
+      ImmutableObjectIdentity{OriginId{1}, "bucket", "checkpoints/model-7", {VersionSelectorType::VERSION_ID, "v1"}};
+
+  ReconcileProgress reconcile{ReconcileRunId{Uuid::from(9, 10)},
+                              ReconcileRunState::DEGRADED,
+                              100,
+                              200,
+                              10,
+                              2,
+                              1,
+                              1,
+                              1,
+                              "retryable target"};
+
+  ASSERT_OK(upload.valid());
+  ASSERT_OK(reconcile.valid());
+  UploadJobRecord decodedUpload;
+  ReconcileProgress decodedReconcile;
+  ASSERT_OK(serde::deserialize(decodedUpload, serde::serialize(upload)));
+  ASSERT_OK(serde::deserialize(decodedReconcile, serde::serialize(reconcile)));
+  EXPECT_EQ(decodedUpload, upload);
+  EXPECT_EQ(decodedReconcile, reconcile);
+}
+
+TEST(CacheCommonTypes, RejectsInvalidPhaseFourRecords) {
+  CompletedUploadPart invalidPart{0, 0, "", {}};
+  EXPECT_TRUE(invalidPart.valid().hasError());
+
+  UploadJobRecord open;
+  open.jobId = UploadJobId{Uuid::from(7, 8)};
+  open.path = "/checkpoints/model";
+  open.stagingInode = 42;
+  open.destination = {OriginId{1}, "bucket", "checkpoints/model-7"};
+  open.state = UploadJobState::OPEN;
+  open.stateVersion = 1;
+  open.createdAtMs = open.updatedAtMs = 100;
+  EXPECT_TRUE(open.valid().hasError());
+
+  ReconcileProgress healthy{ReconcileRunId{Uuid::from(9, 10)}, ReconcileRunState::HEALTHY, 100, 200, 1, 0, 0, 0, 1, {}};
+  EXPECT_TRUE(healthy.valid().hasError());
+}
+
+TEST(CacheCommonTypes, ChecksPhaseFourCapability) {
+  ASSERT_OK(checkPhase4Capability(kCachePhase4ProtocolVersion, true));
+  ASSERT_ERROR(checkPhase4Capability(kCachePhase3ProtocolVersion, true), CacheCode::kUpgradeRequired);
+  ASSERT_ERROR(checkPhase4Capability(kCachePhase4ProtocolVersion, false), CacheCode::kFeatureDisabled);
+}
+
 TEST(CacheCommonTypes, CacheErrorsHaveStableNames) {
   EXPECT_EQ(StatusCode::toString(CacheCode::kFeatureDisabled), "Cache::FeatureDisabled");
   EXPECT_EQ(StatusCode::toErrno(CacheCode::kReadOnlyOriginFile), EROFS);
