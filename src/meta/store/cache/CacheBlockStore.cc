@@ -14,6 +14,8 @@
 namespace hf3fs::meta::server {
 namespace {
 
+constexpr int32_t kRecoverableScanBatch = 1000;
+
 Result<CacheBlockRecord> decodeRecord(const kv::IReadOnlyTransaction::KeyValue &kv) {
   CacheBlockRecord record;
   auto deserialized = serde::deserialize(record, kv.value);
@@ -97,6 +99,43 @@ CoTryTask<CacheBlockPage> CacheBlockStore::snapshotList(kv::IReadOnlyTransaction
     CO_RETURN_ON_ERROR(record);
     page.records.push_back(std::move(*record));
   }
+  co_return page;
+}
+
+CoTryTask<CacheBlockPage> CacheBlockStore::snapshotListRecoverable(kv::IReadOnlyTransaction &txn,
+                                                                   std::optional<cache::CacheBlockKey> after,
+                                                                   uint32_t limit) {
+  if (limit == 0 || limit > cache::kMaxPhase2BatchItems) {
+    co_return makeError(StatusCode::kInvalidArg, "invalid recoverable cache block page limit");
+  }
+  if (after) CO_RETURN_ON_ERROR(after->valid());
+  const auto prefix = Serializer::serRawArgs(kv::KeyPrefix::CacheBlock, uint8_t{0});
+  const auto endKey = kv::TransactionHelper::prefixListEndKey(prefix);
+  auto beginKey = after ? recordKey(*after) : prefix;
+  bool inclusive = !after.has_value();
+  CacheBlockPage page;
+  while (page.records.size() <= limit) {
+    auto result = co_await txn.snapshotGetRange({beginKey, inclusive}, {endKey, false}, kRecoverableScanBatch);
+    CO_RETURN_ON_ERROR(result);
+    if (result->kvs.empty()) {
+      if (result->hasMore) co_return makeError(CacheCode::kInvalidResponse, "empty cache recovery scan has more data");
+      break;
+    }
+    for (const auto &value : result->kvs) {
+      auto record = decodeRecord(value);
+      CO_RETURN_ON_ERROR(record);
+      if ((record->state == cache::CacheBlockState::QUEUED || record->state == cache::CacheBlockState::LOADING) &&
+          record->permit) {
+        page.records.push_back(std::move(*record));
+        if (page.records.size() > limit) break;
+      }
+    }
+    if (page.records.size() > limit || !result->hasMore) break;
+    beginKey = result->kvs.back().key;
+    inclusive = false;
+  }
+  page.more = page.records.size() > limit;
+  if (page.more) page.records.resize(limit);
   co_return page;
 }
 

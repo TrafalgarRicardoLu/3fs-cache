@@ -71,14 +71,10 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
   META_SERVICE_METHOD(listCachePinsByOwner, ListCachePinsByOwnerReq, ListCachePinsByOwnerRsp);
   META_SERVICE_METHOD(queryCachePins, QueryCachePinsReq, QueryCachePinsRsp);
   META_SERVICE_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
+  META_SERVICE_METHOD(recoverExpiredCacheLoads, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
 #undef META_SERVICE_METHOD
 
   CoTryTask<ReconcileCacheBlocksRsp> reconcileCacheBlocks(serde::CallContext &, const ReconcileCacheBlocksReq &) {
-    co_return makeError(CacheCode::kFeatureDisabled, "cache phase four is disabled");
-  }
-
-  CoTryTask<RecoverExpiredCacheLoadsRsp> recoverExpiredCacheLoads(serde::CallContext &,
-                                                                  const RecoverExpiredCacheLoadsReq &) {
     co_return makeError(CacheCode::kFeatureDisabled, "cache phase four is disabled");
   }
 

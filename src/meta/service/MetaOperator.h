@@ -115,6 +115,7 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   CoTryTask<AcquireCacheBlocksRsp> acquireCacheBlocks(AcquireCacheBlocksReq req);
   CoTryTask<CommitCacheBlocksRsp> commitCacheBlocks(CommitCacheBlocksReq req);
   CoTryTask<FailCacheBlocksRsp> failCacheBlocks(FailCacheBlocksReq req);
+  CoTryTask<RecoverExpiredCacheLoadsRsp> recoverExpiredCacheLoads(RecoverExpiredCacheLoadsReq req);
   CoTryTask<BeginCleanCacheBlocksRsp> beginCleanCacheBlocks(BeginCleanCacheBlocksReq req);
   CoTryTask<FinishCleanCacheBlocksRsp> finishCleanCacheBlocks(FinishCleanCacheBlocksReq req);
   CoTryTask<GetCacheStatusRsp> getCacheStatus(GetCacheStatusReq req);
@@ -232,6 +233,7 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   Result<Void> checkCacheFeature(uint32_t protocolVersion) const;
   Result<Void> checkCachePhase2(uint32_t protocolVersion) const;
   Result<Void> checkCachePhase3(uint32_t protocolVersion) const;
+  Result<Void> checkCachePhase4(uint32_t protocolVersion) const;
   Result<Void> checkCacheTable(flat::ChainTableId tableId) const;
 
   const Config &config_;

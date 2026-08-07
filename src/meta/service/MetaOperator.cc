@@ -315,6 +315,13 @@ Result<Void> MetaOperator::checkCachePhase3(uint32_t protocolVersion) const {
   return checkCacheFeature(cache::kCacheProtocolVersion);
 }
 
+Result<Void> MetaOperator::checkCachePhase4(uint32_t protocolVersion) const {
+  RETURN_ON_ERROR(cache::checkPhase4Capability(protocolVersion, config_.enable_cache_phase4()));
+  RETURN_ON_ERROR(cache::checkPhase3Capability(cache::kCachePhase3ProtocolVersion, config_.enable_cache_phase3()));
+  RETURN_ON_ERROR(cache::checkPhase2Capability(cache::kCacheProtocolVersion, config_.enable_cache_phase2()));
+  return checkCacheFeature(cache::kCacheProtocolVersion);
+}
+
 Result<Void> MetaOperator::checkCacheService(const CacheServiceIdentity &service) const {
   RETURN_ON_ERROR(service.valid());
   if (config_.cache_service_token().empty() || service.name != config_.cache_service_name() ||
@@ -584,6 +591,13 @@ META_CACHE_MUTATION_METHOD(finishCleanCacheBlocks, FinishCleanCacheBlocksReq, Fi
 
 #undef META_CACHE_MUTATION_METHOD
 
+CoTryTask<RecoverExpiredCacheLoadsRsp> MetaOperator::recoverExpiredCacheLoads(RecoverExpiredCacheLoadsReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::recoverExpiredCacheLoads, req);
+}
+
 CoTryTask<GetCacheStatusRsp> MetaOperator::getCacheStatus(GetCacheStatusReq req) {
   AUTHENTICATE(req.user);
   CO_RETURN_ON_ERROR(req.valid());
@@ -651,20 +665,11 @@ CoTryTask<ListRecoverableCachePermitsRsp> MetaOperator::listRecoverableCachePerm
   CO_RETURN_ON_ERROR(checkCacheService(req.service));
   CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));
   auto handler = [req](kv::IReadOnlyTransaction &transaction) -> CoTryTask<ListRecoverableCachePermitsRsp> {
-    auto records = co_await CacheBlockStore::snapshotListAll(transaction);
-    CO_RETURN_ON_ERROR(records);
-    auto less = [](const cache::CacheBlockKey &lhs, const cache::CacheBlockKey &rhs) {
-      return lhs.inode != rhs.inode ? lhs.inode < rhs.inode : lhs.block < rhs.block;
-    };
-    std::sort(records->begin(), records->end(), [&](const auto &lhs, const auto &rhs) {
-      return less(lhs.key, rhs.key);
-    });
+    auto page = co_await CacheBlockStore::snapshotListRecoverable(transaction, req.after, req.limit);
+    CO_RETURN_ON_ERROR(page);
     std::vector<RecoverableCachePermit> recoverable;
-    for (const auto &record : *records) {
-      if ((record.state != cache::CacheBlockState::QUEUED && record.state != cache::CacheBlockState::LOADING) ||
-          !record.permit || (req.after && !less(*req.after, record.key))) {
-        continue;
-      }
+    recoverable.reserve(page->records.size());
+    for (const auto &record : page->records) {
       RecoverableCachePermit item{record.key,
                                   record.state,
                                   record.blockLength,
@@ -680,8 +685,7 @@ CoTryTask<ListRecoverableCachePermitsRsp> MetaOperator::listRecoverableCachePerm
       recoverable.push_back(std::move(item));
     }
     ListRecoverableCachePermitsRsp response;
-    response.more = recoverable.size() > req.limit;
-    if (response.more) recoverable.resize(req.limit);
+    response.more = page->more;
     response.items = std::move(recoverable);
     co_return response;
   };

@@ -26,6 +26,9 @@ class CacheBlockStore {
                                                 uint64_t inode,
                                                 cache::CacheBlockIndex begin,
                                                 uint32_t limit);
+  static CoTryTask<CacheBlockPage> snapshotListRecoverable(kv::IReadOnlyTransaction &txn,
+                                                           std::optional<cache::CacheBlockKey> after,
+                                                           uint32_t limit);
   static CoTryTask<std::vector<CacheBlockRecord>> snapshotListAll(kv::IReadOnlyTransaction &txn,
                                                                   std::optional<uint64_t> inode = std::nullopt);
   static CoTryTask<std::optional<CacheBlockRecord>> load(kv::IReadWriteTransaction &txn,

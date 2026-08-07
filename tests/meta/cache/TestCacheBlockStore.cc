@@ -105,5 +105,53 @@ TEST_F(TestCacheBlockStore, ValidatesPhase2PermitAndPlacementStateMatrix) {
   ASSERT_ERROR(record.valid(), StatusCode::kInvalidArg);
 }
 
+TEST_F(TestCacheBlockStore, PagesOnlyRecoverableCacheLoadsInStableOrder) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto storeRecord = [&](CacheBlockRecord record) -> CoTask<void> {
+      auto txn = engine_.createReadWriteTransaction();
+      CO_ASSERT_OK(co_await CacheBlockStore::store(*txn, record));
+      CO_ASSERT_OK(co_await txn->commit());
+    };
+
+    CacheBlockRecord failed;
+    failed.key = key(1, 0);
+    failed.state = cache::CacheBlockState::FAILED;
+    co_await storeRecord(failed);
+
+    CacheBlockRecord queued;
+    queued.key = key(2, 0);
+    queued.state = cache::CacheBlockState::QUEUED;
+    queued.chainId = flat::ChainId{1};
+    queued.blockLength = 4096;
+    queued.chargeKind = cache::ChargeKind::RESERVED;
+    queued.chargedBytes = 4096;
+    queued.permit = permit();
+    co_await storeRecord(queued);
+
+    CacheBlockRecord loading = queued;
+    loading.key = key(3, 0);
+    loading.state = cache::CacheBlockState::LOADING;
+    loading.loaderId = Uuid::from(5, 6);
+    loading.loadEpoch = 1;
+    loading.cacheGeneration = cache::CacheGeneration{1};
+    loading.leaseExpiresAt = UtcTime::fromMicroseconds(100);
+    co_await storeRecord(loading);
+
+    auto read = engine_.createReadonlyTransaction();
+    auto first = co_await CacheBlockStore::snapshotListRecoverable(*read, std::nullopt, 1);
+    CO_ASSERT_OK(first);
+    CO_ASSERT_TRUE(first->more);
+    CO_ASSERT_EQ(first->records.size(), size_t{1});
+    CO_ASSERT_EQ(first->records.front().key, queued.key);
+
+    auto second = co_await CacheBlockStore::snapshotListRecoverable(*read, first->records.front().key, 1);
+    CO_ASSERT_OK(second);
+    CO_ASSERT_FALSE(second->more);
+    CO_ASSERT_EQ(second->records.size(), size_t{1});
+    CO_ASSERT_EQ(second->records.front().key, loading.key);
+    CO_ASSERT_EQ(second->records.front().leaseExpiresAt, loading.leaseExpiresAt);
+  }());
+}
+
 }  // namespace
 }  // namespace hf3fs::meta::server

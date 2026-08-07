@@ -28,6 +28,8 @@ class TestCacheStateMachine : public MetaTestBase<kv::mem::MemKV> {
       value.mock_meta().set_cache_service_token(std::string{kServiceToken});
       value.mock_meta().set_cache_load_lease(10_ms);
       value.mock_meta().set_enable_cache_phase2(true);
+      value.mock_meta().set_enable_cache_phase3(true);
+      value.mock_meta().set_enable_cache_phase4(true);
       return value;
     }();
     return createMockCluster(config);
@@ -285,6 +287,84 @@ TEST_F(TestCacheStateMachine, FailMovesToCleaningWithoutReleasingCharge) {
     auto capacity = co_await CacheCapacityStore::snapshotLoad(*read);
     CO_ASSERT_OK(capacity);
     CO_ASSERT_EQ(capacity->reservedBytes, uint64_t{4096});
+  }());
+}
+
+TEST_F(TestCacheStateMachine, RecoversOnlyExpiredLoadingWithExactPersistedFence) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    auto inode = co_await prepare(cluster, "/expired-loading-recovery");
+    CO_ASSERT_OK(inode);
+    auto permit = permitFor(cluster, *inode, 0, Uuid::from(7, 20), Uuid::from(8, 20), 1);
+    CO_ASSERT_OK(permit);
+    auto enqueue = enqueueReq(*inode, {0});
+    enqueue.items[0].permit = *permit;
+    auto &meta = cluster.meta().getOperator();
+    CO_ASSERT_OK(co_await meta.enqueueCacheBlocks(enqueue));
+    auto acquired = co_await meta.acquireCacheBlocks(acquireReq(*inode, 0));
+    CO_ASSERT_OK(acquired);
+    CO_ASSERT_OK(acquired->results[0]);
+    const auto lease = acquired->results[0]->lease;
+
+    ListRecoverableCachePermitsReq list;
+    list.service = service();
+    list.limit = 1;
+    list.cacheProtocolVersion = cache::kCacheProtocolVersion;
+    auto page = co_await meta.listRecoverableCachePermits(list);
+    CO_ASSERT_OK(page);
+    CO_ASSERT_EQ(page->items.size(), size_t{1});
+    const auto &observed = page->items.front();
+
+    RecoverExpiredCacheLoadItem item;
+    item.key = observed.key;
+    item.loaderId = observed.loaderId;
+    item.loadEpoch = observed.loadEpoch;
+    item.expectedLeaseExpiresAt = observed.leaseExpiresAt;
+    item.expectedGeneration = observed.cacheGeneration;
+    item.expectedPermit = observed.permit;
+    item.expectedPlacement = *observed.placement;
+    item.terminalState = cache::CleanupTerminalState::REENQUEUE;
+    RecoverExpiredCacheLoadsReq recover;
+    recover.service = service();
+    recover.items.push_back(item);
+    recover.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+
+    auto notExpired = co_await meta.recoverExpiredCacheLoads(recover);
+    CO_ASSERT_OK(notExpired);
+    CO_ASSERT_ERROR(notExpired->results[0], CacheCode::kStateConflict);
+
+    auto stale = recover;
+    ++stale.items[0].expectedGeneration;
+    co_await folly::coro::sleep(20_ms);
+    auto staleResult = co_await meta.recoverExpiredCacheLoads(stale);
+    CO_ASSERT_OK(staleResult);
+    CO_ASSERT_ERROR(staleResult->results[0], CacheCode::kStateConflict);
+
+    auto recovered = co_await meta.recoverExpiredCacheLoads(recover);
+    CO_ASSERT_OK(recovered);
+    CO_ASSERT_OK(recovered->results[0]);
+    CO_ASSERT_EQ(recovered->results[0]->state, cache::CacheBlockState::CLEANING);
+    auto repeated = co_await meta.recoverExpiredCacheLoads(recover);
+    CO_ASSERT_OK(repeated);
+    CO_ASSERT_OK(repeated->results[0]);
+
+    auto oldFail = co_await meta.failCacheBlocks(failReq(*inode, 0, lease));
+    CO_ASSERT_OK(oldFail);
+    CO_ASSERT_ERROR(oldFail->results[0], CacheCode::kStateConflict);
+    auto oldCommit = co_await meta.commitCacheBlocks(commitReq(*inode, 0, lease));
+    CO_ASSERT_OK(oldCommit);
+    CO_ASSERT_ERROR(oldCommit->results[0], CacheCode::kStateConflict);
+
+    auto read = cluster.kvEngine()->createReadonlyTransaction();
+    auto record = co_await CacheBlockStore::snapshotLoad(*read, item.key);
+    CO_ASSERT_OK(record);
+    CO_ASSERT_TRUE(record->has_value());
+    CO_ASSERT_EQ((*record)->state, cache::CacheBlockState::CLEANING);
+    CO_ASSERT_EQ((*record)->terminalState, cache::CleanupTerminalState::REENQUEUE);
+    CO_ASSERT_EQ((*record)->loadEpoch, lease.loadEpoch + 1);
+    CO_ASSERT_EQ((*record)->deleteGeneration, lease.cacheGeneration);
+    CO_ASSERT_EQ((*record)->placement, std::optional<storage::PlacementIdentity>{lease.permit->placement});
+    CO_ASSERT_FALSE((*record)->permit.has_value());
   }());
 }
 
