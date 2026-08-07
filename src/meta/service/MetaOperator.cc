@@ -460,6 +460,27 @@ CoTryTask<CreateWriteStagingRsp> MetaOperator::createWriteStaging(CreateWriteSta
   co_return co_await runOp(&MetaStore::createWriteStaging, req);
 }
 
+CoTryTask<RenewWriteStagingLeaseRsp> MetaOperator::renewWriteStagingLease(RenewWriteStagingLeaseReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::renewWriteStagingLease, req);
+}
+
+CoTryTask<SealWriteStagingRsp> MetaOperator::sealWriteStaging(SealWriteStagingReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::sealWriteStaging, req);
+}
+
+CoTryTask<RecoverExpiredWriteStagingRsp> MetaOperator::recoverExpiredWriteStaging(RecoverExpiredWriteStagingReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::recoverExpiredWriteStaging, req);
+}
+
 CoTryTask<MkdirsRsp> MetaOperator::mkdirs(MkdirsReq req) {
   AUTHENTICATE(req.user);
   co_return co_await runOp(&MetaStore::mkdirs, req);

@@ -200,6 +200,9 @@ CoTryTask<bool> BatchedOp::sync(Inode &inode,
   if ((req.updateLength || req.truncated || req.lengthHint) && !inode.isFile()) {
     co_return makeError(MetaCode::kNotFile, "update length but not file");
   }
+  if ((req.updateLength || req.truncated || req.lengthHint) && (inode.acl.iflags & FS_IMMUTABLE_FL)) {
+    co_return makeError(MetaCode::kNoPermission, "cannot update a sealed or immutable file");
+  }
   if (req.lengthHint && req.lengthHint->truncateVer > inode.asFile().truncateVer) {
     auto msg = fmt::format("inode {} hint truncateVer {} > current truncateVer {}",
                            inodeId_,
@@ -239,6 +242,9 @@ CoTryTask<bool> BatchedOp::close(Inode &inode,
 
   if (req.updateLength && !inode.isFile()) {
     co_return makeError(MetaCode::kNotFile);
+  }
+  if (req.updateLength && (inode.acl.iflags & FS_IMMUTABLE_FL)) {
+    co_return makeError(MetaCode::kNoPermission, "cannot update a sealed or immutable file");
   }
   if (req.session && !inode.isRegularFileLike()) co_return makeError(MetaCode::kNotFile);
 

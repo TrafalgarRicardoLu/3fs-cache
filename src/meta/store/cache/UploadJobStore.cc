@@ -169,6 +169,9 @@ CoTryTask<cache::UploadJobRecord> UploadJobStore::update(kv::IReadWriteTransacti
   if (job.updatedAtMs < current.updatedAtMs || job.parts.size() < current.parts.size() ||
       !std::equal(current.parts.begin(), current.parts.end(), job.parts.begin()) ||
       (!current.multipartId.empty() && current.multipartId != job.multipartId) ||
+      (current.state == cache::UploadJobState::OPEN && job.state == cache::UploadJobState::OPEN &&
+       (job.stagingLength != current.stagingLength || job.writerLeaseId != current.writerLeaseId ||
+        job.writerLeaseExpiresAtMs < current.writerLeaseExpiresAtMs)) ||
       (current.state == cache::UploadJobState::OPEN && job.stagingLength < current.stagingLength) ||
       (current.state != cache::UploadJobState::OPEN && current.stagingLength != job.stagingLength)) {
     co_return makeError(CacheCode::kStateConflict, "upload job durable progress moved backwards");

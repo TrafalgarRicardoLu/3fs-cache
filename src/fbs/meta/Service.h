@@ -823,6 +823,72 @@ struct CreateWriteStagingRsp : RspBase {
   SERDE_STRUCT_FIELD(created, false);
 };
 
+struct RenewWriteStagingLeaseReq : ReqBase {
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(expectedStateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(writerLeaseId, Uuid::zero());
+  SERDE_STRUCT_FIELD(writerLeaseExpiresAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || writerLeaseId == Uuid::zero() ||
+        writerLeaseExpiresAtMs == 0) {
+      return INVALID("invalid write staging lease fence");
+    }
+    return VALID;
+  }
+};
+
+struct RenewWriteStagingLeaseRsp : RspBase {
+  SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
+};
+
+struct SealWriteStagingReq : ReqBase {
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(expectedStateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(stagingInode, InodeId{});
+  SERDE_STRUCT_FIELD(writerLeaseId, Uuid::zero());
+  SERDE_STRUCT_FIELD(finalLength, VersionedLength{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || stagingInode == InodeId{} ||
+        writerLeaseId == Uuid::zero()) {
+      return INVALID("invalid write staging seal fence");
+    }
+    return VALID;
+  }
+};
+
+struct SealWriteStagingRsp : RspBase {
+  SERDE_STRUCT_FIELD(inode, Inode{});
+  SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
+};
+
+struct RecoverExpiredWriteStagingReq : ReqBase {
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(expectedStateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(expectedWriterLeaseId, Uuid::zero());
+  SERDE_STRUCT_FIELD(expectedWriterLeaseExpiresAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || expectedWriterLeaseId == Uuid::zero() ||
+        expectedWriterLeaseExpiresAtMs == 0) {
+      return INVALID("invalid expired write staging fence");
+    }
+    return VALID;
+  }
+};
+
+struct RecoverExpiredWriteStagingRsp : RspBase {
+  SERDE_STRUCT_FIELD(inode, Inode{});
+  SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
+};
+
 struct ReadBlockPlan {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(fileRange, cache::ByteRange{});
@@ -1987,6 +2053,9 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(recoverExpiredCacheLoads, 59, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
   META_SERVICE_METHOD(listReconcileCacheBlocks, 60, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);
   META_SERVICE_METHOD(createWriteStaging, 61, CreateWriteStagingReq, CreateWriteStagingRsp);
+  META_SERVICE_METHOD(renewWriteStagingLease, 62, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
+  META_SERVICE_METHOD(sealWriteStaging, 63, SealWriteStagingReq, SealWriteStagingRsp);
+  META_SERVICE_METHOD(recoverExpiredWriteStaging, 64, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

@@ -141,6 +141,9 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   CoTryTask<AdvancePrefetchJobStateRsp> advancePrefetchJobState(AdvancePrefetchJobStateReq req);
   CoTryTask<CancelPrefetchJobRsp> cancelPrefetchJob(CancelPrefetchJobReq req);
   CoTryTask<CreateWriteStagingRsp> createWriteStaging(CreateWriteStagingReq req);
+  CoTryTask<RenewWriteStagingLeaseRsp> renewWriteStagingLease(RenewWriteStagingLeaseReq req);
+  CoTryTask<SealWriteStagingRsp> sealWriteStaging(SealWriteStagingReq req);
+  CoTryTask<RecoverExpiredWriteStagingRsp> recoverExpiredWriteStaging(RecoverExpiredWriteStagingReq req);
   CoTryTask<UpsertCachePinsRsp> upsertCachePins(UpsertCachePinsReq req);
   CoTryTask<RemoveCachePinsRsp> removeCachePins(RemoveCachePinsReq req);
   CoTryTask<ListCachePinsByOwnerRsp> listCachePinsByOwner(ListCachePinsByOwnerReq req);

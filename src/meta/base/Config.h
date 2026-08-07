@@ -126,6 +126,7 @@ struct Config : ConfigBase<Config> {
   CONFIG_HOT_UPDATED_ITEM(enable_cache_phase2, false);
   CONFIG_HOT_UPDATED_ITEM(enable_cache_phase3, false);
   CONFIG_HOT_UPDATED_ITEM(enable_cache_phase4, false);
+  CONFIG_HOT_UPDATED_ITEM(write_staging_expired_action, std::string("recover"));
 
   CONFIG_OBJ(retry_transaction, TransactionRetry);
   CONFIG_OBJ(retry_remove_chunks, storage::client::RetryOptions, [](auto &c) {

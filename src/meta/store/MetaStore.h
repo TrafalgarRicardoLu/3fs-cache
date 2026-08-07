@@ -178,6 +178,9 @@ class MetaStore {
   OpPtr<QueryCachePinsRsp> queryCachePins(const QueryCachePinsReq &req);
   OpPtr<ConvertActiveJobPinsRsp> convertActiveJobPins(const ConvertActiveJobPinsReq &req);
   OpPtr<CreateWriteStagingRsp> createWriteStaging(const CreateWriteStagingReq &req);
+  OpPtr<RenewWriteStagingLeaseRsp> renewWriteStagingLease(const RenewWriteStagingLeaseReq &req);
+  OpPtr<SealWriteStagingRsp> sealWriteStaging(const SealWriteStagingReq &req);
+  OpPtr<RecoverExpiredWriteStagingRsp> recoverExpiredWriteStaging(const RecoverExpiredWriteStagingReq &req);
 
  private:
   template <typename>
