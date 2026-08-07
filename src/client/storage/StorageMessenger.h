@@ -132,6 +132,10 @@ class StorageMessenger {
                                                     const QueryCachePermitsReq &request,
                                                     const net::UserRequestOptions *options = nullptr,
                                                     serde::Timestamp *timestamp = nullptr);
+  CoTryTask<ListCacheInventoryRsp> listCacheInventory(const hf3fs::net::Address &address,
+                                                      const ListCacheInventoryReq &request,
+                                                      const net::UserRequestOptions *options = nullptr,
+                                                      serde::Timestamp *timestamp = nullptr);
 
  private:
   hf3fs::net::Client client_;

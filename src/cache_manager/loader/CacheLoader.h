@@ -104,6 +104,9 @@ class CacheManagerBackend {
   virtual CoTryTask<bool> coordinateRetire(const meta::CacheEvictionIdentity &) {
     co_return makeError(StatusCode::kNotImplemented);
   }
+  virtual CoTryTask<storage::ListCacheInventoryRsp> listCacheInventory(storage::ListCacheInventoryReq) {
+    co_return makeError(StatusCode::kNotImplemented);
+  }
 };
 
 class RealCacheManagerBackend final : public CacheManagerBackend {
@@ -163,6 +166,7 @@ class RealCacheManagerBackend final : public CacheManagerBackend {
   CoTryTask<meta::ListEvictingCacheBlocksRsp> listEvicting(std::optional<cache::CacheBlockKey> after,
                                                            uint32_t limit) final;
   CoTryTask<bool> coordinateRetire(const meta::CacheEvictionIdentity &identity) final;
+  CoTryTask<storage::ListCacheInventoryRsp> listCacheInventory(storage::ListCacheInventoryReq request) final;
 
  private:
   meta::CacheServiceIdentity service() const;

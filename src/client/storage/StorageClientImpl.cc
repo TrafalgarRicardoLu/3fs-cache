@@ -2743,6 +2743,67 @@ CoTryTask<CoordinateCacheRetiresRsp> StorageClientImpl::coordinateCacheRetires(c
                                                                                     req);
 }
 
+CoTryTask<ListCacheInventoryRsp> StorageClientImpl::listCacheInventory(const ListCacheInventoryReq &req,
+                                                                       Duration timeout) {
+  CO_RETURN_ON_ERROR(req.valid());
+  if (timeout <= 0_ns) timeout = config_.retry().max_wait_time();
+  ClientRequestContext
+      requestCtx(MethodType::listCacheInventory, flat::UserInfo{}, DebugOptions(), config_, 1, 0, timeout);
+  Status lastError{StorageClientCode::kRoutingError, "cache inventory routing is unavailable"};
+  for (uint32_t attempt = 0; attempt != 2; ++attempt) {
+    auto routingInfo = getCurrentRoutingInfo();
+    if (!routingInfo || !routingInfo->raw()) {
+      lastError = Status(StorageClientCode::kRoutingError, "cache inventory routing info is unavailable");
+    } else {
+      auto targetInfo = getTargetInfo(routingInfo, req.targetId);
+      if (targetInfo.hasError()) {
+        lastError = targetInfo.error();
+      } else if (!targetInfo->nodeId) {
+        lastError = Status(StorageClientCode::kRoutingError, "cache inventory target has no storage node");
+      } else {
+        auto nodeInfo = getNodeInfo(routingInfo, *targetInfo->nodeId);
+        if (nodeInfo.hasError()) {
+          lastError = nodeInfo.error();
+        } else {
+          auto response = co_await callMessengerMethod<ListCacheInventoryReq,
+                                                       ListCacheInventoryRsp,
+                                                       &StorageMessenger::listCacheInventory>(messenger_,
+                                                                                              requestCtx,
+                                                                                              *nodeInfo,
+                                                                                              req);
+          if (response.hasError()) {
+            lastError = response.error();
+          } else {
+            if (auto valid = response->valid(); valid.hasError()) {
+              co_return makeError(CacheCode::kInvalidResponse, valid.error().message());
+            }
+            if (!response->nextCursor.empty() && response->nextCursor == req.cursor) {
+              co_return makeError(CacheCode::kInvalidResponse, "cache inventory cursor did not advance");
+            }
+            std::string previousKey;
+            for (const auto &entry : response->entries) {
+              if (entry.targetId != req.targetId) {
+                co_return makeError(CacheCode::kInvalidResponse, "cache inventory entry target mismatch");
+              }
+              auto key = serde::serialize(entry.key);
+              if (!previousKey.empty() && key <= previousKey) {
+                co_return makeError(CacheCode::kInvalidResponse, "cache inventory page is not strictly ordered");
+              }
+              previousKey = std::move(key);
+            }
+            co_return std::move(*response);
+          }
+        }
+      }
+    }
+    if (attempt == 0) {
+      auto refreshed = co_await mgmtdClient_.refreshRoutingInfo(true);
+      if (refreshed.hasError()) co_return makeError(refreshed.error());
+    }
+  }
+  co_return makeError(lastError);
+}
+
 CoTryTask<QueryCacheSpaceRsp> StorageClientImpl::queryCacheSpace(const QueryCacheSpaceReq &req) {
   CO_RETURN_ON_ERROR(req.valid());
   if (req.targetIds.empty() && req.footprints.empty()) co_return QueryCacheSpaceRsp{};

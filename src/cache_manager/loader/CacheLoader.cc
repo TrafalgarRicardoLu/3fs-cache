@@ -38,6 +38,15 @@ CoTryTask<storage::QueryCacheSpaceRsp> RealCacheManagerBackend::queryCacheSpace(
   co_return co_await storageClient_->queryCacheSpace(req);
 }
 
+CoTryTask<storage::ListCacheInventoryRsp> RealCacheManagerBackend::listCacheInventory(
+    storage::ListCacheInventoryReq request) {
+  request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  if (request.limit == 0 || request.limit > config_.reconcile_page_size()) {
+    co_return makeError(StatusCode::kInvalidArg, "cache inventory page exceeds configured limit");
+  }
+  co_return co_await storageClient_->listCacheInventory(request, config_.reconcile_request_timeout());
+}
+
 CoTryTask<storage::PermitIdentity> RealCacheManagerBackend::makePermit(const meta::Inode &inode,
                                                                        cache::CacheBlockIndex block,
                                                                        uint64_t blockLength,

@@ -367,6 +367,7 @@ class StorageClient : public folly::MoveOnly {
     queryCacheSpace,
     retireCacheReplicas,
     coordinateCacheRetires,
+    listCacheInventory,
   };
 
   class RetryConfig : public hf3fs::ConfigBase<RetryConfig> {
@@ -598,6 +599,9 @@ class StorageClient : public folly::MoveOnly {
     co_return makeError(CacheCode::kFeatureDisabled);
   }
   virtual CoTryTask<CoordinateCacheRetiresRsp> coordinateCacheRetires(const CoordinateCacheRetiresReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled);
+  }
+  virtual CoTryTask<ListCacheInventoryRsp> listCacheInventory(const ListCacheInventoryReq &, Duration) {
     co_return makeError(CacheCode::kFeatureDisabled);
   }
 
