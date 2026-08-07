@@ -32,6 +32,8 @@ static_assert(meta::MetaSerde<>::trackPrefetchReadyMethodId == 54);
 static_assert(meta::MetaSerde<>::advancePrefetchJobStateMethodId == 55);
 static_assert(meta::MetaSerde<>::cancelPrefetchJobMethodId == 56);
 static_assert(meta::MetaSerde<>::convertActiveJobPinsMethodId == 57);
+static_assert(storage::StorageSerde<>::listCacheInventoryMethodId == 28);
+static_assert(meta::MetaSerde<>::reconcileCacheBlocksMethodId == 58);
 
 struct LegacyPhase2DiskStatus {
   SERDE_STRUCT_FIELD(physicalDiskId, storage::PhysicalDiskId{});
@@ -169,6 +171,32 @@ TEST(ServiceContracts, Phase3ContractsRoundTripAndBoundPages) {
 
   ASSERT_ERROR(checkPhase3Capability(kCacheProtocolVersion, true), CacheCode::kUpgradeRequired);
   ASSERT_ERROR(checkPhase3Capability(kCachePhase3ProtocolVersion, false), CacheCode::kFeatureDisabled);
+}
+
+TEST(ServiceContracts, PhaseFourInventoryAndReconcileContracts) {
+  storage::ListCacheInventoryReq inventory;
+  inventory.targetId = flat::TargetId{1};
+  inventory.limit = 16;
+  inventory.cacheProtocolVersion = kCachePhase4ProtocolVersion;
+  ASSERT_OK(inventory.valid());
+  storage::ListCacheInventoryReq decodedInventory;
+  ASSERT_OK(serde::deserialize(decodedInventory, serde::serialize(inventory)));
+  EXPECT_EQ(decodedInventory.targetId, inventory.targetId);
+  EXPECT_EQ(decodedInventory.limit, 16u);
+
+  meta::ReconcileCacheBlocksReq reconcile;
+  reconcile.service = {"cache-manager", "token"};
+  reconcile.keys = {{42, CacheBlockIndex{3}}};
+  reconcile.cacheProtocolVersion = kCachePhase4ProtocolVersion;
+  ASSERT_OK(reconcile.valid());
+  meta::ReconcileCacheBlocksReq decodedReconcile;
+  ASSERT_OK(serde::deserialize(decodedReconcile, serde::serialize(reconcile)));
+  EXPECT_EQ(decodedReconcile.keys, reconcile.keys);
+
+  inventory.limit = 0;
+  EXPECT_TRUE(inventory.valid().hasError());
+  reconcile.keys.resize(meta::kMaxCacheBatchItems + 1);
+  ASSERT_ERROR(reconcile.valid(), CacheCode::kRequestTooLarge);
 }
 
 TEST(ServiceContracts, Phase2StatusRoundTripIncludesOperationalGates) {

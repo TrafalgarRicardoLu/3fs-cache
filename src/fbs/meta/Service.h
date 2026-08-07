@@ -1704,6 +1704,55 @@ struct ConvertActiveJobPinsRsp : RspBase {
   SERDE_STRUCT_FIELD(expiresAtMs, uint64_t{});
 };
 
+struct ReconcileCacheBlockStatus {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(state, cache::CacheBlockState::NONE);
+  SERDE_STRUCT_FIELD(blockLength, uint64_t{});
+  SERDE_STRUCT_FIELD(ready, std::optional<cache::ReadyIdentity>{});
+  SERDE_STRUCT_FIELD(placement, std::optional<storage::PlacementIdentity>{});
+  SERDE_STRUCT_FIELD(permit, std::optional<storage::PermitIdentity>{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    if (static_cast<uint8_t>(state) > static_cast<uint8_t>(cache::CacheBlockState::EVICTING)) {
+      return makeError(StatusCode::kInvalidArg, "invalid reconcile cache block state");
+    }
+    if (state == cache::CacheBlockState::NONE) {
+      if (blockLength != 0 || ready || placement || permit)
+        return makeError(StatusCode::kInvalidArg, "empty reconcile state has cache ownership");
+      return VALID;
+    }
+    if (blockLength == 0) return makeError(StatusCode::kInvalidArg, "reconcile cache block length not set");
+    if (ready) RETURN_ON_ERROR(ready->valid());
+    if (placement) RETURN_ON_ERROR(placement->valid());
+    if (permit) RETURN_ON_ERROR(permit->valid());
+    if (state == cache::CacheBlockState::READY && (!ready || !placement || !permit)) {
+      return makeError(CacheCode::kPlacementMismatch, "READY reconcile state is missing immutable placement");
+    }
+    return VALID;
+  }
+};
+
+struct ReconcileCacheBlocksReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(keys, std::vector<cache::CacheBlockKey>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (keys.empty() || keys.size() > kMaxCacheBatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "invalid reconcile cache block batch");
+    for (const auto &key : keys) RETURN_ON_ERROR(key.valid());
+    return VALID;
+  }
+};
+
+struct ReconcileCacheBlocksRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<ReconcileCacheBlockStatus>>{});
+};
+
 // testRpc
 struct TestRpcReq : ReqBase {
   SERDE_STRUCT_FIELD(path, PathAt());
@@ -1783,6 +1832,7 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(advancePrefetchJobState, 55, AdvancePrefetchJobStateReq, AdvancePrefetchJobStateRsp);
   META_SERVICE_METHOD(cancelPrefetchJob, 56, CancelPrefetchJobReq, CancelPrefetchJobRsp);
   META_SERVICE_METHOD(convertActiveJobPins, 57, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
+  META_SERVICE_METHOD(reconcileCacheBlocks, 58, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

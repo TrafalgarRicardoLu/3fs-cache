@@ -11,6 +11,7 @@
 namespace hf3fs::storage {
 
 inline constexpr size_t kMaxCacheStorageBatchItems = 1000;
+inline constexpr size_t kMaxCacheInventoryCursorBytes = 4096;
 
 struct CacheChunkKey {
   SERDE_STRUCT_FIELD(vChainId, VersionedChainId{});
@@ -236,6 +237,61 @@ struct ReleaseCachePermitsRsp {
 };
 struct QueryCachePermitsRsp {
   SERDE_STRUCT_FIELD(results, std::vector<Result<CachePermitResult>>{});
+};
+
+struct CacheInventoryEntry {
+  SERDE_STRUCT_FIELD(targetId, TargetId{});
+  SERDE_STRUCT_FIELD(physicalDiskId, PhysicalDiskId{});
+  SERDE_STRUCT_FIELD(key, CacheChunkKey{});
+  SERDE_STRUCT_FIELD(descriptor, CacheChunkDescriptor{});
+  SERDE_STRUCT_FIELD(generation, CacheChunkGenerationInfo{});
+
+ public:
+  Result<Void> valid() const {
+    if (targetId == TargetId{}) return makeError(StatusCode::kInvalidArg, "inventory target not set");
+    RETURN_ON_ERROR(physicalDiskId.valid());
+    RETURN_ON_ERROR(key.valid());
+    RETURN_ON_ERROR(descriptor.valid());
+    if (descriptor.targetId != targetId || descriptor.placement.versionedChain != key.vChainId ||
+        generation.cacheGeneration != descriptor.generation || generation.length == 0 ||
+        generation.checksum.type == ChecksumType::NONE) {
+      return makeError(CacheCode::kPlacementMismatch, "cache inventory identity is inconsistent");
+    }
+    return Void{};
+  }
+};
+
+struct ListCacheInventoryReq {
+  SERDE_STRUCT_FIELD(targetId, TargetId{});
+  SERDE_STRUCT_FIELD(cursor, std::string{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{1000});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (targetId == TargetId{} || limit == 0 || limit > kMaxCacheStorageBatchItems ||
+        cursor.size() > kMaxCacheInventoryCursorBytes) {
+      return makeError(StatusCode::kInvalidArg, "invalid cache inventory page request");
+    }
+    return Void{};
+  }
+};
+
+struct ListCacheInventoryRsp {
+  SERDE_STRUCT_FIELD(entries, std::vector<CacheInventoryEntry>{});
+  SERDE_STRUCT_FIELD(nextCursor, std::string{});
+  SERDE_STRUCT_FIELD(done, false);
+  SERDE_STRUCT_FIELD(inventoryEpoch, Uuid::zero());
+
+ public:
+  Result<Void> valid() const {
+    if (entries.size() > kMaxCacheStorageBatchItems || inventoryEpoch == Uuid::zero() || done != nextCursor.empty() ||
+        nextCursor.size() > kMaxCacheInventoryCursorBytes) {
+      return makeError(CacheCode::kInvalidResponse, "invalid cache inventory page response");
+    }
+    for (const auto &entry : entries) RETURN_ON_ERROR(entry.valid());
+    return Void{};
+  }
 };
 
 struct RetireCacheReplicaItem {

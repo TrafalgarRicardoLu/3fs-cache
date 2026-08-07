@@ -31,6 +31,7 @@ SERDE_SERVICE(StorageSerde, 3) {
   SERDE_SERVICE_METHOD(queryCachePermits, 25, QueryCachePermitsReq, QueryCachePermitsRsp);
   SERDE_SERVICE_METHOD(retireCacheReplicas, 26, RetireCacheReplicasReq, RetireCacheReplicasRsp);
   SERDE_SERVICE_METHOD(coordinateCacheRetires, 27, CoordinateCacheRetiresReq, CoordinateCacheRetiresRsp);
+  SERDE_SERVICE_METHOD(listCacheInventory, 28, ListCacheInventoryReq, ListCacheInventoryRsp);
 };
 
 }  // namespace hf3fs::storage
