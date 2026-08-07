@@ -34,6 +34,7 @@ static_assert(meta::MetaSerde<>::cancelPrefetchJobMethodId == 56);
 static_assert(meta::MetaSerde<>::convertActiveJobPinsMethodId == 57);
 static_assert(storage::StorageSerde<>::listCacheInventoryMethodId == 28);
 static_assert(meta::MetaSerde<>::reconcileCacheBlocksMethodId == 58);
+static_assert(meta::MetaSerde<>::recoverExpiredCacheLoadsMethodId == 59);
 
 struct LegacyPhase2DiskStatus {
   SERDE_STRUCT_FIELD(physicalDiskId, storage::PhysicalDiskId{});
@@ -197,6 +198,47 @@ TEST(ServiceContracts, PhaseFourInventoryAndReconcileContracts) {
   EXPECT_TRUE(inventory.valid().hasError());
   reconcile.keys.resize(meta::kMaxCacheBatchItems + 1);
   ASSERT_ERROR(reconcile.valid(), CacheCode::kRequestTooLarge);
+}
+
+TEST(ServiceContracts, PhaseFourLoadingRecoveryContracts) {
+  auto placement = storage::PlacementIdentity::create({flat::ChainId{1}, flat::ChainVersion{1}},
+                                                      {flat::TargetId{1}},
+                                                      flat::TargetId{1},
+                                                      Uuid::from(1, 2));
+  ASSERT_OK(placement);
+  storage::PermitIdentity permit{Uuid::from(3, 4), *placement, 1, {{flat::TargetId{1}, 4096}}};
+  meta::RecoverableCachePermit item{{42, CacheBlockIndex{3}},
+                                    CacheBlockState::LOADING,
+                                    4096,
+                                    permit,
+                                    Uuid::from(5, 6),
+                                    7,
+                                    UtcTime::fromMicroseconds(100),
+                                    CacheGeneration{8},
+                                    *placement};
+  ASSERT_OK(item.valid());
+
+  meta::RecoverExpiredCacheLoadsReq request;
+  request.service = {"cache-manager", "token"};
+  request.items.push_back({item.key,
+                           item.loaderId,
+                           item.loadEpoch,
+                           item.leaseExpiresAt,
+                           item.cacheGeneration,
+                           item.permit,
+                           *item.placement,
+                           CleanupTerminalState::REENQUEUE});
+  request.cacheProtocolVersion = kCachePhase4ProtocolVersion;
+  ASSERT_OK(request.valid());
+  meta::RecoverExpiredCacheLoadsReq decoded;
+  ASSERT_OK(serde::deserialize(decoded, serde::serialize(request)));
+  ASSERT_EQ(decoded.items.size(), size_t{1});
+  EXPECT_EQ(decoded.items.front().expectedGeneration, CacheGeneration{8});
+
+  item.placement.reset();
+  EXPECT_TRUE(item.valid().hasError());
+  request.items.front().expectedPlacement.coordinatorTargetId = flat::TargetId{2};
+  EXPECT_TRUE(request.valid().hasError());
 }
 
 TEST(ServiceContracts, Phase2StatusRoundTripIncludesOperationalGates) {

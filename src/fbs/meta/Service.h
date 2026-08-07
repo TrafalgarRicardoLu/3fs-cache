@@ -1072,6 +1072,11 @@ struct RecoverableCachePermit {
   SERDE_STRUCT_FIELD(permit, storage::PermitIdentity{});
   SERDE_STRUCT_FIELD(loaderId, Uuid::zero());
   SERDE_STRUCT_FIELD(loadEpoch, uint64_t{0});
+  // Phase-4 fields are appended for rolling decode compatibility. An older
+  // payload may leave all three empty; a Phase-4 recovery mutation may not.
+  SERDE_STRUCT_FIELD(leaseExpiresAt, UtcTime{});
+  SERDE_STRUCT_FIELD(cacheGeneration, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(placement, std::optional<storage::PlacementIdentity>{});
 
  public:
   Result<Void> valid() const {
@@ -1085,6 +1090,15 @@ struct RecoverableCachePermit {
     }
     if (state == cache::CacheBlockState::LOADING && (loaderId == Uuid::zero() || loadEpoch == 0)) {
       return INVALID("loading recovery item is missing its loader fence");
+    }
+    const bool hasPhase4Fence = !leaseExpiresAt.isZero() || cacheGeneration != cache::CacheGeneration{} || placement;
+    if (hasPhase4Fence) {
+      if (state != cache::CacheBlockState::LOADING || leaseExpiresAt.isZero() ||
+          cacheGeneration == cache::CacheGeneration{} || !placement) {
+        return INVALID("incomplete phase four loading recovery fence");
+      }
+      RETURN_ON_ERROR(placement->valid());
+      if (*placement != permit.placement) return INVALID("loading recovery placement differs from permit");
     }
     return VALID;
   }
@@ -1753,6 +1767,50 @@ struct ReconcileCacheBlocksRsp : RspBase {
   SERDE_STRUCT_FIELD(results, std::vector<Result<ReconcileCacheBlockStatus>>{});
 };
 
+struct RecoverExpiredCacheLoadItem {
+  SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
+  SERDE_STRUCT_FIELD(loaderId, Uuid::zero());
+  SERDE_STRUCT_FIELD(loadEpoch, uint64_t{});
+  SERDE_STRUCT_FIELD(expectedLeaseExpiresAt, UtcTime{});
+  SERDE_STRUCT_FIELD(expectedGeneration, cache::CacheGeneration{});
+  SERDE_STRUCT_FIELD(expectedPermit, storage::PermitIdentity{});
+  SERDE_STRUCT_FIELD(expectedPlacement, storage::PlacementIdentity{});
+  SERDE_STRUCT_FIELD(terminalState, cache::CleanupTerminalState::REENQUEUE);
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(key.valid());
+    RETURN_ON_ERROR(expectedPermit.valid());
+    RETURN_ON_ERROR(expectedPlacement.valid());
+    if (loaderId == Uuid::zero() || loadEpoch == 0 || expectedLeaseExpiresAt.isZero() ||
+        expectedGeneration == cache::CacheGeneration{} || expectedPermit.placement != expectedPlacement ||
+        (terminalState != cache::CleanupTerminalState::REENQUEUE &&
+         terminalState != cache::CleanupTerminalState::FAILED)) {
+      return makeError(StatusCode::kInvalidArg, "invalid expired loading recovery fence");
+    }
+    return VALID;
+  }
+};
+
+struct RecoverExpiredCacheLoadsReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(items, std::vector<RecoverExpiredCacheLoadItem>{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (items.empty() || items.size() > kMaxCacheBatchItems)
+      return makeError(CacheCode::kRequestTooLarge, "invalid expired loading recovery batch");
+    for (const auto &item : items) RETURN_ON_ERROR(item.valid());
+    return VALID;
+  }
+};
+
+struct RecoverExpiredCacheLoadsRsp : RspBase {
+  SERDE_STRUCT_FIELD(results, std::vector<Result<CacheBlockMutationResult>>{});
+};
+
 // testRpc
 struct TestRpcReq : ReqBase {
   SERDE_STRUCT_FIELD(path, PathAt());
@@ -1833,6 +1891,7 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(cancelPrefetchJob, 56, CancelPrefetchJobReq, CancelPrefetchJobRsp);
   META_SERVICE_METHOD(convertActiveJobPins, 57, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
   META_SERVICE_METHOD(reconcileCacheBlocks, 58, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
+  META_SERVICE_METHOD(recoverExpiredCacheLoads, 59, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

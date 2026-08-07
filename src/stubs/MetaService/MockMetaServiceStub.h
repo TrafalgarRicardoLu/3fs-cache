@@ -85,6 +85,8 @@ class DummyMetaServiceStub : public IMetaServiceStub {
   NOT_IMPLEMENTED_FUNC(advancePrefetchJobState, AdvancePrefetchJobStateReq, AdvancePrefetchJobStateRsp);
   NOT_IMPLEMENTED_FUNC(cancelPrefetchJob, CancelPrefetchJobReq, CancelPrefetchJobRsp);
   NOT_IMPLEMENTED_FUNC(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
+  NOT_IMPLEMENTED_FUNC(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
+  NOT_IMPLEMENTED_FUNC(recoverExpiredCacheLoads, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
 
   virtual CoTryTask<AuthRsp> authenticate(const AuthReq &req) { co_return AuthRsp{req.user}; }
   CoTryTask<AuthRsp> authenticate(const AuthReq &req, const net::UserRequestOptions &, serde::Timestamp *) override {
@@ -208,6 +210,8 @@ class MetaServiceStub<hf3fs::stubs::StubMockContext<IMetaServiceStub>> : public 
   FORWARD_RPC_FUNC(advancePrefetchJobState, AdvancePrefetchJobStateReq, AdvancePrefetchJobStateRsp);
   FORWARD_RPC_FUNC(cancelPrefetchJob, CancelPrefetchJobReq, CancelPrefetchJobRsp);
   FORWARD_RPC_FUNC(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
+  FORWARD_RPC_FUNC(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
+  FORWARD_RPC_FUNC(recoverExpiredCacheLoads, RecoverExpiredCacheLoadsReq, RecoverExpiredCacheLoadsRsp);
 
 #undef FORWARD_RPC_FUNC
 

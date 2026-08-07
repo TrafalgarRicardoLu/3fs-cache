@@ -665,8 +665,19 @@ CoTryTask<ListRecoverableCachePermitsRsp> MetaOperator::listRecoverableCachePerm
           !record.permit || (req.after && !less(*req.after, record.key))) {
         continue;
       }
-      recoverable.push_back(
-          {record.key, record.state, record.blockLength, *record.permit, record.loaderId, record.loadEpoch});
+      RecoverableCachePermit item{record.key,
+                                  record.state,
+                                  record.blockLength,
+                                  *record.permit,
+                                  record.loaderId,
+                                  record.loadEpoch};
+      if (record.state == cache::CacheBlockState::LOADING) {
+        item.leaseExpiresAt = record.leaseExpiresAt;
+        item.cacheGeneration = record.cacheGeneration;
+        item.placement = record.permit->placement;
+      }
+      CO_RETURN_ON_ERROR(item.valid());
+      recoverable.push_back(std::move(item));
     }
     ListRecoverableCachePermitsRsp response;
     response.more = recoverable.size() > req.limit;

@@ -77,6 +77,11 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
     co_return makeError(CacheCode::kFeatureDisabled, "cache phase four is disabled");
   }
 
+  CoTryTask<RecoverExpiredCacheLoadsRsp> recoverExpiredCacheLoads(serde::CallContext &,
+                                                                  const RecoverExpiredCacheLoadsReq &) {
+    co_return makeError(CacheCode::kFeatureDisabled, "cache phase four is disabled");
+  }
+
  private:
   MetaOperator &meta_;
 };
