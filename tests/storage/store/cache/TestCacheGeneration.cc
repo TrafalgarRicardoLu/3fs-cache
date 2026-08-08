@@ -59,6 +59,7 @@ void addPhase2Identity(ReplaceCacheChunkItem &item, uint64_t generation, uint32_
 Result<cache::CacheGeneration> prepareCacheRead(StorageTarget &target, ChunkId chunkId, uint32_t length) {
   BatchReadReq request;
   request.payloads.emplace_back();
+  request.payloads.front().key.vChainId = VersionedChainId{ChainId{1}, ChainVer{1}};
   request.payloads.front().key.chunkId = chunkId;
   request.payloads.front().length = length;
   BatchReadRsp response;
@@ -164,6 +165,7 @@ TEST(TestCacheGeneration, TombstoneWithoutData) {
   auto targetResult = targetMap.snapshot()->getTarget(TargetId{2});
   ASSERT_OK(targetResult);
   auto target = (*targetResult)->storageTarget;
+  ASSERT_OK(target->setChainId(ChainId{1}));
   folly::CPUThreadPoolExecutor background(2);
 
   const ChunkId chunkId{0xCA, 2};
