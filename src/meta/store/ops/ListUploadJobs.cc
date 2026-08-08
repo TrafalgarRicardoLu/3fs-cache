@@ -32,4 +32,33 @@ MetaStore::OpPtr<ListUploadJobsRsp> MetaStore::listUploadJobs(const ListUploadJo
   return std::make_unique<ListUploadJobsOp>(*this, req);
 }
 
+class GetUploadJobOp : public ReadOnlyOperation<GetUploadJobRsp> {
+ public:
+  GetUploadJobOp(MetaStore &meta, const GetUploadJobReq &req)
+      : ReadOnlyOperation<GetUploadJobRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<GetUploadJobRsp> run(IReadOnlyTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto job = co_await UploadJobStore::snapshotLoad(txn, req_.jobId);
+    CO_RETURN_ON_ERROR(job);
+    if (!job->has_value()) co_return makeError(CacheCode::kNotFound, "upload job not found");
+    if (!req_.user.isRoot() && (**job).ownerUid != req_.user.uid) {
+      co_return makeError(MetaCode::kNoPermission, "upload job belongs to another user");
+    }
+    GetUploadJobRsp response;
+    response.job = std::move(**job);
+    co_return response;
+  }
+
+ private:
+  const GetUploadJobReq &req_;
+};
+
+MetaStore::OpPtr<GetUploadJobRsp> MetaStore::getUploadJob(const GetUploadJobReq &req) {
+  return std::make_unique<GetUploadJobOp>(*this, req);
+}
+
 }  // namespace hf3fs::meta::server

@@ -83,6 +83,7 @@ class MockMetaService : public serde::ServiceWrapper<MockMetaService, MetaSerde>
                            PublishOriginFileFromStagingReq,
                            PublishOriginFileFromStagingRsp);
   META_MOCK_SERVICE_METHOD(listUploadJobs, ListUploadJobsReq, ListUploadJobsRsp);
+  META_MOCK_SERVICE_METHOD(getUploadJob, GetUploadJobReq, GetUploadJobRsp);
   META_MOCK_SERVICE_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
   META_MOCK_SERVICE_METHOD(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
   META_MOCK_SERVICE_METHOD(listReconcileCacheBlocks, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);

@@ -681,5 +681,33 @@ TEST_F(TestWriteStaging, ListsUploadJobsWithServiceAuthOwnerFilterAndPagination)
   }());
 }
 
+TEST_F(TestWriteStaging, GetsUploadJobWithOwnerIsolationAndProtocolGate) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    enableWriteStaging(cluster);
+    auto &meta = cluster.meta().getOperator();
+    auto id = cache::UploadJobId{Uuid::from(49, 50)};
+    auto created = co_await meta.createWriteStaging(stagingReq("/queried", id));
+    CO_ASSERT_OK(created);
+
+    GetUploadJobReq request;
+    request.jobId = id;
+    request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto loaded = co_await meta.getUploadJob(request);
+    CO_ASSERT_OK(loaded);
+    CO_ASSERT_EQ(loaded->job.jobId, id);
+    CO_ASSERT_EQ(loaded->job.ownerUid, flat::Uid{0});
+
+    request.user = flat::UserInfo{flat::Uid{123}, flat::Gid{123}};
+    CO_ASSERT_ERROR(co_await meta.getUploadJob(request), MetaCode::kNoPermission);
+    request.user = SUPER_USER;
+    request.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+    CO_ASSERT_ERROR(co_await meta.getUploadJob(request), CacheCode::kUpgradeRequired);
+    request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    request.jobId = cache::UploadJobId{Uuid::from(51, 52)};
+    CO_ASSERT_ERROR(co_await meta.getUploadJob(request), CacheCode::kNotFound);
+  }());
+}
+
 }  // namespace
 }  // namespace hf3fs::meta::server

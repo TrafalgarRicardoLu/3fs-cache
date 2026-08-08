@@ -25,6 +25,7 @@
 #include <sys/types.h>
 #include <utility>
 
+#include "client/cache/UploadJobWaiter.h"
 #include "common/monitor/Recorder.h"
 #include "common/monitor/Sample.h"
 #include "common/serde/Serde.h"
@@ -677,6 +678,40 @@ bool sealWriteStaging(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi
   staging->job = result->job;
   staging->sealed = true;
   handle->inodeSnapshot = result->inode;
+  return true;
+}
+
+bool awaitWriteStagingPublish(fuse_req_t req, struct fuse_file_info *fi) {
+  auto handle = fi && fi->fh ? (FileHandle *)fi->fh : nullptr;
+  if (!handle || !handle->writeStaging) return true;
+
+  hf3fs::cache::UploadJobId jobId;
+  {
+    std::lock_guard lock(handle->writeStaging->mutex);
+    if (!handle->writeStaging->sealed) {
+      fuse_reply_err(req, EIO);
+      return false;
+    }
+    if (handle->writeStaging->job.state == hf3fs::cache::UploadJobState::PUBLISHED) return true;
+    jobId = handle->writeStaging->job.jobId;
+  }
+
+  auto userInfo = UserInfo(flat::Uid(fuse_req_ctx(req)->uid), flat::Gid(fuse_req_ctx(req)->gid), d.fuseToken);
+  auto backend = std::make_shared<client::cache::MetaUploadJobWaiterBackend>(d.metaClient);
+  client::cache::UploadJobWaiter waiter(backend, {.pollInterval = d.config->write_through().publish_poll_interval()});
+  auto deadline = backend->now() + d.config->write_through().publish_timeout().asUs();
+  auto result = withRequestInfo(req, waiter.awaitTerminal(userInfo, jobId, deadline, [] {
+    auto request = hf3fs::RequestInfo::get();
+    return request && request->canceled();
+  }));
+  if (result.hasError()) {
+    handle_error(req, result);
+    return false;
+  }
+  {
+    std::lock_guard lock(handle->writeStaging->mutex);
+    handle->writeStaging->job = std::move(*result);
+  }
   return true;
 }
 
@@ -1813,7 +1848,7 @@ void hf3fs_fsync(fuse_req_t req, fuse_ino_t fino, int datasync, struct fuse_file
   } else {
     record("fsync", fuse_req_ctx(req)->uid);
   }
-  if (sealWriteStaging(req, fino, fi) &&
+  if (sealWriteStaging(req, fino, fi) && awaitWriteStagingPublish(req, fi) &&
       (((FileHandle *)fi->fh)->writeStaging ||
        flushAndSync(req, fino, datasync && !d.config->fdatasync_update_length(), SyncType::Fsync, fi))) {
     fuse_reply_err(req, 0);
@@ -1883,7 +1918,7 @@ void hf3fs_release(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
 
   auto userInfo = UserInfo(flat::Uid(fuse_req_ctx(req)->uid), flat::Gid(fuse_req_ctx(req)->gid), d.fuseToken);
   if (handle->writeStaging) {
-    if (!sealWriteStaging(req, fino, fi)) return;
+    if (!sealWriteStaging(req, fino, fi) || !awaitWriteStagingPublish(req, fi)) return;
   } else if (handle->inodeSnapshot.isOriginFile()) {
     {
       std::lock_guard lock(d.originReadSessionsMutex);

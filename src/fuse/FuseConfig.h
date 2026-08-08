@@ -46,6 +46,8 @@ struct FuseConfig : public ConfigBase<FuseConfig> {
     CONFIG_ITEM(chunk_size, uint32_t{4_MB}, ConfigCheckers::checkPositive);
     CONFIG_ITEM(stripe_size, uint32_t{1}, ConfigCheckers::checkPositive);
     CONFIG_ITEM(writer_lease, 1_min, [](Duration value) { return value > 0_ns; });
+    CONFIG_ITEM(publish_timeout, 5_min, [](Duration value) { return value > 0_ns; });
+    CONFIG_ITEM(publish_poll_interval, 100_ms, [](Duration value) { return value > 0_ns; });
   };
 
 #ifdef ENABLE_FUSE_APPLICATION

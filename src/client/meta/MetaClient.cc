@@ -1028,6 +1028,7 @@ META_CACHE_CLIENT_METHOD(publishOriginFileFromStaging,
                          PublishOriginFileFromStagingReq,
                          PublishOriginFileFromStagingRsp);
 META_CACHE_CLIENT_METHOD(listUploadJobs, ListUploadJobsReq, ListUploadJobsRsp);
+META_CACHE_CLIENT_METHOD(getUploadJob, GetUploadJobReq, GetUploadJobRsp);
 #undef META_CACHE_CLIENT_METHOD
 
 }  // namespace hf3fs::meta::client

@@ -1040,6 +1040,21 @@ struct ListUploadJobsRsp : RspBase {
   SERDE_STRUCT_FIELD(more, false);
 };
 
+struct GetUploadJobReq : ReqBase {
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    if (jobId == cache::UploadJobId{}) return INVALID("upload job id not set");
+    return VALID;
+  }
+};
+
+struct GetUploadJobRsp : RspBase {
+  SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
+};
+
 struct ReadBlockPlan {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(fileRange, cache::ByteRange{});
@@ -2203,6 +2218,7 @@ SERDE_SERVICE(MetaSerde, 4) {
                       PublishOriginFileFromStagingReq,
                       PublishOriginFileFromStagingRsp);
   META_SERVICE_METHOD(listUploadJobs, 69, ListUploadJobsReq, ListUploadJobsRsp);
+  META_SERVICE_METHOD(getUploadJob, 70, GetUploadJobReq, GetUploadJobRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 
