@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <set>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "cache_manager/upload/WritePublishController.h"
 #include "tests/GtestHelpers.h"
 
@@ -142,6 +143,7 @@ class FakeBackend : public WritePublishControllerBackend {
 };
 
 TEST(TestWritePublishController, RecoversEveryDurableStateAcrossPages) {
+  cache::metrics::resetForTest();
   auto backend = std::make_shared<FakeBackend>();
   backend->jobs = {job(1, cache::UploadJobState::SEALED),
                    job(2, cache::UploadJobState::UPLOADING),
@@ -163,6 +165,12 @@ TEST(TestWritePublishController, RecoversEveryDurableStateAcrossPages) {
   EXPECT_EQ(backend->published.size(), 4);
   EXPECT_EQ(backend->warmed.size(), 5);
   EXPECT_EQ(backend->aborted.size(), 1);
+  EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_RUN), 1);
+  EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_SCANNED), 7);
+  EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_SCHEDULED), 6);
+  EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_COMPLETED), 6);
+  EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_FAILED), 0);
+  EXPECT_EQ(cache::metrics::lastTagsForTest(cache::metrics::Event::MANAGER_UPLOAD_RUN).reason, "complete");
 }
 
 TEST(TestWritePublishController, AppliesGlobalOwnerAndOriginLimitsFairly) {

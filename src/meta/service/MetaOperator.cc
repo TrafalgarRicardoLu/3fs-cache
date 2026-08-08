@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "common/app/NodeId.h"
 #include "common/kv/ITransaction.h"
 #include "common/kv/WithTransaction.h"
@@ -508,7 +509,12 @@ CoTryTask<PublishOriginFileFromStagingRsp> MetaOperator::publishOriginFileFromSt
   CO_RETURN_ON_ERROR(checkCacheService(req.service));
   CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
   CO_RETURN_ON_ERROR(checkCacheTable(req.metadata.tableId));
-  co_return co_await runOp(&MetaStore::publishOriginFileFromStaging, req);
+  auto result = co_await runOp(&MetaStore::publishOriginFileFromStaging, req);
+  CO_RETURN_ON_ERROR(result);
+  if (result->outcome == PublishOriginFileOutcome::PUBLISHED) {
+    cache::metrics::recordCount(cache::metrics::Event::META_STAGING_GC, 1, {.reason = "queued"});
+  }
+  co_return result;
 }
 
 CoTryTask<ListUploadJobsRsp> MetaOperator::listUploadJobs(ListUploadJobsReq req) {

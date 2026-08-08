@@ -74,6 +74,13 @@ monitor::CountRecorder &countRecorder(Event event) {
     CACHE_COUNT_RECORDER(MANAGER_RECONCILE_CONFLICT, "cache.manager.reconcile.conflict");
     CACHE_COUNT_RECORDER(MANAGER_RECONCILE_REPAIRED, "cache.manager.reconcile.repaired");
     CACHE_COUNT_RECORDER(MANAGER_RECONCILE_RETRYABLE, "cache.manager.reconcile.retryable");
+    CACHE_COUNT_RECORDER(MANAGER_UPLOAD_RUN, "cache.manager.upload.run");
+    CACHE_COUNT_RECORDER(MANAGER_UPLOAD_SCANNED, "cache.manager.upload.scanned");
+    CACHE_COUNT_RECORDER(MANAGER_UPLOAD_SCHEDULED, "cache.manager.upload.scheduled");
+    CACHE_COUNT_RECORDER(MANAGER_UPLOAD_COMPLETED, "cache.manager.upload.completed");
+    CACHE_COUNT_RECORDER(MANAGER_UPLOAD_FAILED, "cache.manager.upload.failed");
+    CACHE_COUNT_RECORDER(MANAGER_PUBLISH_RESULT, "cache.manager.publish.result");
+    CACHE_COUNT_RECORDER(META_STAGING_GC, "cache.meta.staging_gc");
     CACHE_COUNT_RECORDER(STORAGE_PERMIT_RESULT, "cache.storage.permit_result");
     CACHE_COUNT_RECORDER(STORAGE_EVENT_PREPARED, "cache.storage.event_prepared");
     CACHE_COUNT_RECORDER(STORAGE_EVENT_DELIVERABLE, "cache.storage.event_deliverable");
@@ -163,6 +170,32 @@ Tags lastTagsForTest(Event event) {
   if (!valid(event)) return {};
   auto lock = std::unique_lock(tagsMutex);
   return lastTags[index(event)];
+}
+
+std::string metricNameForTest(Event event) {
+  if (!valid(event)) return {};
+  switch (event) {
+    case Event::CLIENT_READ_PLAN:
+    case Event::CLIENT_STORAGE_READ:
+    case Event::CLIENT_ORIGIN_READ:
+      return latencyRecorder(event).name();
+    case Event::MANAGER_QUEUE:
+    case Event::MANAGER_INFLIGHT_BYTES:
+    case Event::MANAGER_PHYSICAL_USED_BYTES:
+    case Event::MANAGER_ALLOCATABLE_BYTES:
+    case Event::MANAGER_RESERVED_BYTES:
+    case Event::MANAGER_SNAPSHOT_AGE_NS:
+    case Event::MANAGER_ACTIVE_JOBS:
+    case Event::MANAGER_JOB_INFLIGHT:
+    case Event::MANAGER_JOB_READY_BPS:
+    case Event::MANAGER_PINNED_BYTES:
+    case Event::MANAGER_RECONCILE_LAST_START_MS:
+    case Event::MANAGER_RECONCILE_LAST_SUCCESS_MS:
+    case Event::STORAGE_EVENT_BACKLOG:
+      return gaugeRecorder(event).name();
+    default:
+      return countRecorder(event).name();
+  }
 }
 
 void resetForTest() {

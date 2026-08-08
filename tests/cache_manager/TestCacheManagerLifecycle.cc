@@ -82,6 +82,13 @@ TEST(TestCacheManagerConfig, PhaseFourRequiresEarlierPhasesAndDefaultsOff) {
   ASSERT_OK(config.validateRuntime());
   config.set_phase4_publish_prefetch_priority(std::numeric_limits<uint32_t>::max());
   EXPECT_EQ(config.phase4_publish_prefetch_priority(), static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
+
+  config.set_upload_part_size(5_MB - 1);
+  ASSERT_ERROR(config.validateRuntime(), StatusCode::kInvalidConfig);
+  config.set_upload_part_size(5_MB);
+  config.set_phase4_upload_global_concurrency(1);
+  config.set_phase4_upload_per_owner_concurrency(2);
+  ASSERT_ERROR(config.validateRuntime(), StatusCode::kInvalidConfig);
 }
 
 TEST(TestCacheManagerLifecycle, StartStopAndRepeatedStop) {

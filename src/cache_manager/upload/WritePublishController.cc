@@ -6,6 +6,7 @@
 #include <folly/experimental/coro/Collect.h>
 #include <utility>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "client/meta/MetaClient.h"
 #include "common/utils/UtcTime.h"
 
@@ -97,6 +98,13 @@ CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::complete(ca
 }
 
 CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::publish(cache::UploadJobRecord job) {
+  bool succeeded = false;
+  auto publishMetric = folly::makeGuard([&] {
+    cache::metrics::recordCount(
+        cache::metrics::Event::MANAGER_PUBLISH_RESULT,
+        1,
+        {.originId = job.destination.originId.toUnderType(), .reason = succeeded ? "published" : "failed"});
+  });
   if (stopping_.load(std::memory_order_acquire)) {
     co_return makeError(MetaCode::kRequestCanceled, "write publish controller stopped");
   }
@@ -128,6 +136,7 @@ CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::publish(cac
   job.state = cache::UploadJobState::PUBLISHED;
   ++job.stateVersion;
   job.publishedInode = published->inode.id.u64();
+  succeeded = true;
   co_return job;
 }
 
@@ -327,6 +336,15 @@ CoTryTask<WritePublishRunResult> WritePublishController::runOnce() {
     if (terminal(job->state)) ++result.completed;
   }
   result.stopped = stopping_.load(std::memory_order_acquire);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_UPLOAD_RUN,
+                              1,
+                              {.reason = result.stopped  ? "stopped"
+                                         : result.failed ? "degraded"
+                                                         : "complete"});
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_UPLOAD_SCANNED, result.scanned);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_UPLOAD_SCHEDULED, result.scheduled);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_UPLOAD_COMPLETED, result.completed);
+  cache::metrics::recordCount(cache::metrics::Event::MANAGER_UPLOAD_FAILED, result.failed);
   co_return result;
 }
 

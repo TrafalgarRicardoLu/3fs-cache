@@ -2,6 +2,7 @@
 #include <folly/experimental/coro/Sleep.h>
 #include <gtest/gtest.h>
 
+#include "cache/metrics/CacheMetrics.h"
 #include "meta/store/FileSession.h"
 #include "meta/store/cache/PrefetchJobStore.h"
 #include "meta/store/cache/UploadJobStore.h"
@@ -528,6 +529,7 @@ TEST_F(TestWriteStaging, AbortsMultipartProgressIdempotently) {
 
 TEST_F(TestWriteStaging, PublishesOriginAndUploadJobAtomicallyAndRetriesSameInode) {
   folly::coro::blockingWait([&]() -> CoTask<void> {
+    cache::metrics::resetForTest();
     auto cluster = createCluster();
     enableWriteStaging(cluster);
     auto request = co_await preparePublish(cluster, "/published", cache::UploadJobId{Uuid::from(39, 40)});
@@ -549,6 +551,8 @@ TEST_F(TestWriteStaging, PublishesOriginAndUploadJobAtomicallyAndRetriesSameInod
     CO_ASSERT_OK(retry);
     CO_ASSERT_EQ(retry->outcome, PublishOriginFileOutcome::ALREADY_PUBLISHED);
     CO_ASSERT_EQ(retry->inode.id, published->inode.id);
+    CO_ASSERT_EQ(cache::metrics::countForTest(cache::metrics::Event::META_STAGING_GC), 1);
+    CO_ASSERT_EQ(cache::metrics::lastTagsForTest(cache::metrics::Event::META_STAGING_GC).reason, "queued");
 
     auto read = this->kvEngine()->createReadonlyTransaction();
     auto job = co_await UploadJobStore::snapshotLoad(*read, request->jobId);

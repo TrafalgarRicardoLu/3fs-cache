@@ -76,6 +76,12 @@ remote_ip = ''
 
 [server]
 use_memkv = false
+cache_service_name = 'cache-manager'
+cache_service_token = ''
+enable_cache_phase2 = false
+enable_cache_phase3 = false
+enable_cache_phase4 = false
+write_staging_expired_action = 'recover'
 
 [server.background_client]
 default_compression_level = 0

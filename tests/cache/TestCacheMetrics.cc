@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <set>
 
 #include "cache/metrics/CacheMetrics.h"
 
@@ -67,6 +68,15 @@ TEST_F(TestCacheMetrics, BoundsOrchestrationLabels) {
   auto tags = lastTagsForTest(Event::MANAGER_ORCHESTRATION_TICK);
   EXPECT_EQ(tags.sourceId.size(), 64u);
   EXPECT_EQ(tags.reason.size(), 64u);
+}
+
+TEST_F(TestCacheMetrics, RegistersEveryMetricNameExactlyOnce) {
+  std::set<std::string> names;
+  for (uint8_t value = 0; value < static_cast<uint8_t>(Event::COUNT); ++value) {
+    auto name = metricNameForTest(static_cast<Event>(value));
+    ASSERT_FALSE(name.empty()) << static_cast<unsigned>(value);
+    EXPECT_TRUE(names.emplace(name).second) << name;
+  }
 }
 
 }  // namespace

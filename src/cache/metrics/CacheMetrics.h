@@ -50,6 +50,13 @@ enum class Event : uint8_t {
   MANAGER_RECONCILE_RETRYABLE,
   MANAGER_RECONCILE_LAST_START_MS,
   MANAGER_RECONCILE_LAST_SUCCESS_MS,
+  MANAGER_UPLOAD_RUN,
+  MANAGER_UPLOAD_SCANNED,
+  MANAGER_UPLOAD_SCHEDULED,
+  MANAGER_UPLOAD_COMPLETED,
+  MANAGER_UPLOAD_FAILED,
+  MANAGER_PUBLISH_RESULT,
+  META_STAGING_GC,
   STORAGE_PERMIT_RESULT,
   STORAGE_EVENT_PREPARED,
   STORAGE_EVENT_DELIVERABLE,
@@ -81,6 +88,7 @@ void setGauge(Event event, int64_t value, const Tags &tags = {});
 
 uint64_t countForTest(Event event);
 Tags lastTagsForTest(Event event);
+std::string metricNameForTest(Event event);
 void resetForTest();
 
 }  // namespace hf3fs::cache::metrics
