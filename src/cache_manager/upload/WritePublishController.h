@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -28,6 +29,7 @@ struct WritePublishControllerConfig {
   flat::ChainTableId cacheTableId{};
   uint32_t cacheBlockSize{4U << 20};
   uint32_t cacheStripeSize{1};
+  uint32_t publishedPrefetchPriority{static_cast<uint32_t>(std::numeric_limits<int32_t>::max())};
   MultipartUploaderConfig uploader;
   MultipartUploadFinalizerConfig finalizer;
 
@@ -49,6 +51,7 @@ class WritePublishControllerBackend {
   virtual CoTryTask<cache::UploadJobRecord> upload(cache::UploadJobRecord job) = 0;
   virtual CoTryTask<cache::UploadJobRecord> complete(cache::UploadJobRecord job) = 0;
   virtual CoTryTask<cache::UploadJobRecord> publish(cache::UploadJobRecord job) = 0;
+  virtual CoTryTask<cache::UploadJobRecord> warm(cache::UploadJobRecord job) = 0;
   virtual CoTryTask<cache::UploadJobRecord> abort(cache::UploadJobRecord job) = 0;
   virtual void stop() = 0;
 };
@@ -66,6 +69,7 @@ class RealWritePublishControllerBackend final : public WritePublishControllerBac
   CoTryTask<cache::UploadJobRecord> upload(cache::UploadJobRecord job) final;
   CoTryTask<cache::UploadJobRecord> complete(cache::UploadJobRecord job) final;
   CoTryTask<cache::UploadJobRecord> publish(cache::UploadJobRecord job) final;
+  CoTryTask<cache::UploadJobRecord> warm(cache::UploadJobRecord job) final;
   CoTryTask<cache::UploadJobRecord> abort(cache::UploadJobRecord job) final;
   void stop() final;
 
@@ -92,7 +96,7 @@ class WritePublishController {
   void stop();
 
  private:
-  static bool actionable(cache::UploadJobState state);
+  static bool actionable(const cache::UploadJobRecord &job);
   static bool terminal(cache::UploadJobState state);
   CoTryTask<std::vector<cache::UploadJobRecord>> scan();
   std::vector<cache::UploadJobRecord> select(std::vector<cache::UploadJobRecord> jobs);

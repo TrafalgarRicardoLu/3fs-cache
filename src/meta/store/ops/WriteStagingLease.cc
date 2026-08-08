@@ -3,7 +3,6 @@
 #include <string_view>
 #include <sys/stat.h>
 
-#include "meta/store/FileSession.h"
 #include "meta/store/Inode.h"
 #include "meta/store/MetaStore.h"
 #include "meta/store/Operation.h"
@@ -60,7 +59,6 @@ CoTryTask<Void> freeze(IReadWriteTransaction &txn,
   job.updatedAtMs = std::max(job.updatedAtMs, updatedAtMs);
   job.writerLeaseId = Uuid::zero();
   job.writerLeaseExpiresAtMs = 0;
-  CO_RETURN_ON_ERROR(co_await FileSession::removeAll(txn, inode.id));
   CO_RETURN_ON_ERROR(co_await inode.store(txn));
   co_return Void{};
 }

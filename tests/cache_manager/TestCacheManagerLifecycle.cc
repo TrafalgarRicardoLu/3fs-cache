@@ -1,6 +1,7 @@
 #include <array>
 #include <folly/experimental/coro/BlockingWait.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -73,11 +74,14 @@ TEST(TestCacheManagerConfig, PhaseThreeRequiresPhaseTwoAndDefaultsOff) {
 TEST(TestCacheManagerConfig, PhaseFourRequiresEarlierPhasesAndDefaultsOff) {
   auto config = makeConfig();
   EXPECT_FALSE(config.enable_phase4());
+  EXPECT_EQ(config.phase4_publish_prefetch_priority(), static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
   config.set_enable_phase4(true);
   ASSERT_ERROR(config.validateRuntime(), StatusCode::kInvalidConfig);
   config.set_enable_phase2(true);
   config.set_enable_phase3(true);
   ASSERT_OK(config.validateRuntime());
+  config.set_phase4_publish_prefetch_priority(std::numeric_limits<uint32_t>::max());
+  EXPECT_EQ(config.phase4_publish_prefetch_priority(), static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
 }
 
 TEST(TestCacheManagerLifecycle, StartStopAndRepeatedStop) {

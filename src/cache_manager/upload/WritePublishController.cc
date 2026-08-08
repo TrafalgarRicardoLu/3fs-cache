@@ -7,12 +7,13 @@
 #include <utility>
 
 #include "client/meta/MetaClient.h"
+#include "common/utils/UtcTime.h"
 
 namespace hf3fs::cache_manager {
-
 Result<Void> WritePublishControllerConfig::valid() const {
   if (pageSize == 0 || pageSize > cache::kMaxPhase2BatchItems || globalConcurrency == 0 || perOwnerConcurrency == 0 ||
-      perOriginConcurrency == 0 || !cacheTableId || cacheBlockSize == 0 || cacheStripeSize == 0) {
+      perOriginConcurrency == 0 || !cacheTableId || cacheBlockSize == 0 || cacheStripeSize == 0 ||
+      publishedPrefetchPriority > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {
     return makeError(StatusCode::kInvalidConfig, "invalid write publish controller limits or layout");
   }
   RETURN_ON_ERROR(uploader.valid());
@@ -41,7 +42,7 @@ CoTryTask<UploadJobPage> RealWritePublishControllerBackend::list(std::optional<c
   if (!metaClient_) co_return makeError(StatusCode::kInvalidConfig, "upload metadata client is missing");
   meta::ListUploadJobsReq request;
   request.service = service_;
-  request.includeTerminal = false;
+  request.includeTerminal = true;
   request.after = after;
   request.limit = limit;
   request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
@@ -130,6 +131,34 @@ CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::publish(cac
   co_return job;
 }
 
+CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::warm(cache::UploadJobRecord job) {
+  if (stopping_.load(std::memory_order_acquire)) {
+    co_return makeError(MetaCode::kRequestCanceled, "write publish controller stopped");
+  }
+  if (!metaClient_ || job.state != cache::UploadJobState::PUBLISHED || job.publishedInode == 0) {
+    co_return makeError(StatusCode::kInvalidConfig, "published upload warming metadata is missing");
+  }
+  auto prefetchId = cache::publishedPrefetchJobId(job.jobId);
+  auto nowMs = static_cast<uint64_t>(UtcClock::now().toMicroseconds() / 1000);
+  if (nowMs == 0) co_return makeError(StatusCode::kInvalidArg, "cache manager clock is invalid");
+  cache::PrefetchJobRecord prefetch;
+  prefetch.spec.jobId = prefetchId;
+  prefetch.spec.ownerUid = job.ownerUid;
+  cache::DatasetSource source;
+  source.source = cache::NamespacePathSource{job.path, false};
+  prefetch.spec.sources = {std::move(source)};
+  prefetch.spec.priority = config_.publishedPrefetchPriority;
+  prefetch.state = cache::PrefetchJobState::PENDING;
+  prefetch.stateVersion = 1;
+  prefetch.createdAtMs = prefetch.updatedAtMs = nowMs;
+  meta::CreatePrefetchJobReq create;
+  create.service = service_;
+  create.job = std::move(prefetch);
+  create.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+  CO_RETURN_ON_ERROR(co_await metaClient_->createPrefetchJob(std::move(create)));
+  co_return job;
+}
+
 CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::abort(cache::UploadJobRecord job) {
   if (stopping_.load(std::memory_order_acquire)) {
     co_return makeError(MetaCode::kRequestCanceled, "write publish controller stopped");
@@ -164,10 +193,10 @@ WritePublishController::WritePublishController(std::shared_ptr<WritePublishContr
 
 WritePublishController::~WritePublishController() { stop(); }
 
-bool WritePublishController::actionable(cache::UploadJobState state) {
-  return state == cache::UploadJobState::SEALED || state == cache::UploadJobState::UPLOADING ||
-         state == cache::UploadJobState::COMPLETING || state == cache::UploadJobState::PUBLISHING ||
-         state == cache::UploadJobState::ABORTING;
+bool WritePublishController::actionable(const cache::UploadJobRecord &job) {
+  return job.state == cache::UploadJobState::SEALED || job.state == cache::UploadJobState::UPLOADING ||
+         job.state == cache::UploadJobState::COMPLETING || job.state == cache::UploadJobState::PUBLISHING ||
+         job.state == cache::UploadJobState::ABORTING || job.state == cache::UploadJobState::PUBLISHED;
 }
 
 bool WritePublishController::terminal(cache::UploadJobState state) {
@@ -199,9 +228,12 @@ CoTryTask<std::vector<cache::UploadJobRecord>> WritePublishController::scan() {
 }
 
 std::vector<cache::UploadJobRecord> WritePublishController::select(std::vector<cache::UploadJobRecord> jobs) {
+  std::stable_partition(jobs.begin(), jobs.end(), [](const auto &job) {
+    return job.state != cache::UploadJobState::PUBLISHED;
+  });
   std::map<flat::Uid, std::deque<cache::UploadJobRecord>> byOwner;
   for (auto &job : jobs) {
-    if (actionable(job.state)) byOwner[job.ownerUid].push_back(std::move(job));
+    if (actionable(job)) byOwner[job.ownerUid].push_back(std::move(job));
   }
   std::vector<flat::Uid> owners;
   owners.reserve(byOwner.size());
@@ -261,6 +293,11 @@ CoTryTask<cache::UploadJobRecord> WritePublishController::advance(cache::UploadJ
     auto aborted = co_await backend_->abort(std::move(job));
     CO_RETURN_ON_ERROR(aborted);
     job = std::move(*aborted);
+  }
+  if (!stopping_.load(std::memory_order_acquire) && job.state == cache::UploadJobState::PUBLISHED) {
+    auto warmed = co_await backend_->warm(std::move(job));
+    CO_RETURN_ON_ERROR(warmed);
+    job = std::move(*warmed);
   }
   co_return job;
 }

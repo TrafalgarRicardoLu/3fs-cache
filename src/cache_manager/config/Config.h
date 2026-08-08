@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <set>
 
@@ -50,7 +51,8 @@ class Config : public ConfigBase<Config> {
     }
     if (enable_phase4() &&
         (upload_part_size() < 5_MB || phase4_upload_per_owner_concurrency() > phase4_upload_global_concurrency() ||
-         phase4_upload_per_origin_concurrency() > phase4_upload_global_concurrency())) {
+         phase4_upload_per_origin_concurrency() > phase4_upload_global_concurrency() ||
+         phase4_publish_prefetch_priority() > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()))) {
       return makeError(StatusCode::kInvalidConfig, "invalid cache phase four upload limits");
     }
     if (phase3_active_pin_ttl() <= phase3_pin_renew_interval()) {
@@ -133,6 +135,9 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(phase4_cache_table_id, uint32_t{2}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(phase4_cache_block_size, uint32_t{4_MB}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(phase4_cache_stripe_size, uint32_t{1}, ConfigCheckers::checkPositive);
+  CONFIG_ITEM(phase4_publish_prefetch_priority,
+              uint32_t{static_cast<uint32_t>(std::numeric_limits<int32_t>::max())},
+              [](uint32_t value) { return value <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max()); });
   CONFIG_ITEM(upload_part_size, uint64_t{16_MB}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(upload_retry_limit, uint32_t{8}, [](uint32_t value) { return value <= 100; });
   CONFIG_ITEM(admission_policy, std::string{"second_miss"});

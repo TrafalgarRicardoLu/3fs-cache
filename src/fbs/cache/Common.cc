@@ -1,5 +1,6 @@
 #include "fbs/cache/Common.h"
 
+#include <cstring>
 #include <type_traits>
 
 #include "common/utils/MagicEnum.hpp"
@@ -172,6 +173,15 @@ Result<Void> UploadJobRecord::valid() const {
     return makeError(StatusCode::kInvalidArg, "published inode does not match upload job state");
   }
   return Void{};
+}
+
+PrefetchJobId publishedPrefetchJobId(UploadJobId uploadJobId) {
+  uint64_t low;
+  uint64_t high;
+  auto id = uploadJobId.toUnderType();
+  std::memcpy(&low, id.data, sizeof(low));
+  std::memcpy(&high, id.data + sizeof(low), sizeof(high));
+  return PrefetchJobId{Uuid::from(low ^ 0x5741524D50524546ULL, high ^ 0x455443484A4F4231ULL)};
 }
 
 Result<Void> ReconcileProgress::valid() const {

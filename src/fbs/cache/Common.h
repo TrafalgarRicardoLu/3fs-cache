@@ -141,6 +141,24 @@ enum class UploadJobState : uint8_t {
   CANCELLED = 9,
 };
 
+enum class StagingCleanupState : uint8_t {
+  RETAINED = 0,
+  WAITING_FOR_HANDLES = 1,
+  QUEUED = 2,
+  COMPLETE = 3,
+};
+
+enum class UploadCleanupPolicy : uint8_t {
+  RETAIN_UNTIL_TERMINAL = 0,
+  DELETE_STAGING_AFTER_LAST_HANDLE = 1,
+  RETAIN_ORPHAN_FOR_OPERATOR = 2,
+};
+
+enum class UploadWarmState : uint8_t {
+  PENDING = 0,
+  SUBMITTED = 1,
+};
+
 enum class ReconcileRunState : uint8_t {
   INVALID = 0,
   RUNNING = 1,
@@ -321,6 +339,8 @@ struct UploadJobRecord {
   Result<Void> valid() const;
   bool operator==(const UploadJobRecord &) const = default;
 };
+
+PrefetchJobId publishedPrefetchJobId(UploadJobId uploadJobId);
 
 struct ReconcileProgress {
   SERDE_STRUCT_FIELD(runId, ReconcileRunId{});

@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "meta/store/FileSession.h"
+#include "meta/store/cache/PrefetchJobStore.h"
 #include "meta/store/cache/UploadJobStore.h"
 #include "tests/GtestHelpers.h"
 #include "tests/meta/MetaTestBase.h"
@@ -317,7 +318,7 @@ TEST_F(TestWriteStaging, SealsExactLengthAndRejectsFurtherMetadataWrites) {
     auto read = this->kvEngine()->createReadonlyTransaction();
     auto session = co_await FileSession::snapshotCheckExists(*read, created->inode.id);
     CO_ASSERT_OK(session);
-    CO_ASSERT_FALSE(session->has_value());
+    CO_ASSERT_TRUE(session->has_value());
   }());
 }
 
@@ -562,6 +563,39 @@ TEST_F(TestWriteStaging, PublishesOriginAndUploadJobAtomicallyAndRetriesSameInod
     auto openSession = co_await FileSession::load(*read, request->expectedStagingInode, session.session);
     CO_ASSERT_OK(openSession);
     CO_ASSERT_TRUE(openSession->has_value());
+
+    GetUploadJobReq get;
+    get.jobId = request->jobId;
+    get.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto queried = co_await meta.getUploadJob(get);
+    CO_ASSERT_OK(queried);
+    CO_ASSERT_EQ(queried->stagingCleanupState, cache::StagingCleanupState::WAITING_FOR_HANDLES);
+    CO_ASSERT_EQ(queried->cleanupPolicy, cache::UploadCleanupPolicy::DELETE_STAGING_AFTER_LAST_HANDLE);
+    CO_ASSERT_EQ(queried->warmState, cache::UploadWarmState::PENDING);
+
+    cache::PrefetchJobRecord warm;
+    warm.spec.jobId = cache::publishedPrefetchJobId(request->jobId);
+    warm.spec.ownerUid = SUPER_USER.uid;
+    cache::DatasetSource warmSource;
+    warmSource.source = cache::NamespacePathSource{"/published", false};
+    warm.spec.sources = {std::move(warmSource)};
+    warm.state = cache::PrefetchJobState::PENDING;
+    warm.stateVersion = 1;
+    warm.createdAtMs = warm.updatedAtMs = 1;
+    auto warmTxn = this->kvEngine()->createReadWriteTransaction();
+    CO_ASSERT_OK(co_await PrefetchJobStore::create(*warmTxn, warm));
+    CO_ASSERT_OK(co_await warmTxn->commit());
+    queried = co_await meta.getUploadJob(get);
+    CO_ASSERT_OK(queried);
+    CO_ASSERT_EQ(queried->prefetchJobId, warm.spec.jobId);
+    CO_ASSERT_EQ(queried->warmState, cache::UploadWarmState::SUBMITTED);
+
+    auto closeTxn = this->kvEngine()->createReadWriteTransaction();
+    CO_ASSERT_OK(co_await FileSession::removeAll(*closeTxn, request->expectedStagingInode));
+    CO_ASSERT_OK(co_await closeTxn->commit());
+    queried = co_await meta.getUploadJob(get);
+    CO_ASSERT_OK(queried);
+    CO_ASSERT_EQ(queried->stagingCleanupState, cache::StagingCleanupState::QUEUED);
 
     ListUploadJobsReq active;
     active.service = {std::string{kServiceName}, std::string{kServiceToken}};

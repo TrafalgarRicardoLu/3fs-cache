@@ -1,7 +1,11 @@
+#include <folly/experimental/coro/Collect.h>
 #include <memory>
 
+#include "meta/store/FileSession.h"
+#include "meta/store/Inode.h"
 #include "meta/store/MetaStore.h"
 #include "meta/store/Operation.h"
+#include "meta/store/cache/PrefetchJobStore.h"
 #include "meta/store/cache/UploadJobStore.h"
 
 namespace hf3fs::meta::server {
@@ -50,6 +54,36 @@ class GetUploadJobOp : public ReadOnlyOperation<GetUploadJobRsp> {
     }
     GetUploadJobRsp response;
     response.job = std::move(**job);
+    auto [inode, session] =
+        co_await folly::coro::collectAll(Inode::snapshotLoad(txn, InodeId{response.job.stagingInode}),
+                                         FileSession::snapshotCheckExists(txn, InodeId{response.job.stagingInode}));
+    CO_RETURN_ON_ERROR(inode);
+    CO_RETURN_ON_ERROR(session);
+    if (!inode->has_value()) {
+      response.stagingCleanupState = cache::StagingCleanupState::COMPLETE;
+    } else if (session->has_value()) {
+      response.stagingCleanupState = cache::StagingCleanupState::WAITING_FOR_HANDLES;
+    } else if (response.job.state == cache::UploadJobState::PUBLISHED && (**inode).nlink == 0) {
+      response.stagingCleanupState = cache::StagingCleanupState::QUEUED;
+    } else {
+      response.stagingCleanupState = cache::StagingCleanupState::RETAINED;
+    }
+    if (response.job.state == cache::UploadJobState::PUBLISHED) {
+      response.cleanupPolicy = cache::UploadCleanupPolicy::DELETE_STAGING_AFTER_LAST_HANDLE;
+    } else if (response.job.completedObject) {
+      response.cleanupPolicy = cache::UploadCleanupPolicy::RETAIN_ORPHAN_FOR_OPERATOR;
+    } else {
+      response.cleanupPolicy = cache::UploadCleanupPolicy::RETAIN_UNTIL_TERMINAL;
+    }
+    if (response.job.state == cache::UploadJobState::PUBLISHED) {
+      auto prefetchId = cache::publishedPrefetchJobId(response.job.jobId);
+      auto prefetch = co_await PrefetchJobStore::snapshotLoad(txn, prefetchId);
+      CO_RETURN_ON_ERROR(prefetch);
+      if (prefetch->has_value()) {
+        response.prefetchJobId = prefetchId;
+        response.warmState = cache::UploadWarmState::SUBMITTED;
+      }
+    }
     co_return response;
   }
 

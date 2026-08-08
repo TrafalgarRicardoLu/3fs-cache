@@ -1919,6 +1919,13 @@ void hf3fs_release(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
   auto userInfo = UserInfo(flat::Uid(fuse_req_ctx(req)->uid), flat::Gid(fuse_req_ctx(req)->gid), d.fuseToken);
   if (handle->writeStaging) {
     if (!sealWriteStaging(req, fino, fi) || !awaitWriteStagingPublish(req, fi)) return;
+    auto res = withRequestInfo(
+        req,
+        d.metaClient->close(userInfo, handle->inodeSnapshot.id, sessionId, false, std::nullopt, std::nullopt));
+    if (res.hasError()) {
+      handle_error(req, res);
+      return;
+    }
   } else if (handle->inodeSnapshot.isOriginFile()) {
     {
       std::lock_guard lock(d.originReadSessionsMutex);

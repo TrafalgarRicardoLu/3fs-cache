@@ -1053,6 +1053,10 @@ struct GetUploadJobReq : ReqBase {
 
 struct GetUploadJobRsp : RspBase {
   SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
+  SERDE_STRUCT_FIELD(stagingCleanupState, cache::StagingCleanupState::RETAINED);
+  SERDE_STRUCT_FIELD(cleanupPolicy, cache::UploadCleanupPolicy::RETAIN_UNTIL_TERMINAL);
+  SERDE_STRUCT_FIELD(prefetchJobId, cache::PrefetchJobId{});
+  SERDE_STRUCT_FIELD(warmState, cache::UploadWarmState::PENDING);
 };
 
 struct ReadBlockPlan {

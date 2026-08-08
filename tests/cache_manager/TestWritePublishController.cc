@@ -109,6 +109,12 @@ class FakeBackend : public WritePublishControllerBackend {
     co_return value;
   }
 
+  CoTryTask<cache::UploadJobRecord> warm(cache::UploadJobRecord value) final {
+    warmed.push_back(value.jobId);
+    if (failWarm && value.jobId == *failWarm) co_return makeError(CacheCode::kUnavailable, "injected prefetch failure");
+    co_return value;
+  }
+
   CoTryTask<cache::UploadJobRecord> abort(cache::UploadJobRecord value) final {
     aborted.push_back(value.jobId);
     value.state = cache::UploadJobState::CANCELLED;
@@ -125,9 +131,11 @@ class FakeBackend : public WritePublishControllerBackend {
   std::vector<cache::UploadJobId> uploaded;
   std::vector<cache::UploadJobId> completed;
   std::vector<cache::UploadJobId> published;
+  std::vector<cache::UploadJobId> warmed;
   std::vector<cache::UploadJobId> aborted;
   std::function<void()> onUpload;
   std::optional<cache::UploadJobId> failUpload;
+  std::optional<cache::UploadJobId> failWarm;
   uint32_t listCalls{0};
   uint32_t stopCalls{0};
   bool stopped{false};
@@ -146,13 +154,14 @@ TEST(TestWritePublishController, RecoversEveryDurableStateAcrossPages) {
   auto result = folly::coro::blockingWait(controller.recover());
   ASSERT_OK(result);
   EXPECT_EQ(result->scanned, 7);
-  EXPECT_EQ(result->scheduled, 5);
-  EXPECT_EQ(result->completed, 5);
+  EXPECT_EQ(result->scheduled, 6);
+  EXPECT_EQ(result->completed, 6);
   EXPECT_EQ(result->failed, 0);
   EXPECT_EQ(backend->listCalls, 4);
   EXPECT_EQ(backend->uploaded.size(), 2);
   EXPECT_EQ(backend->completed.size(), 3);
   EXPECT_EQ(backend->published.size(), 4);
+  EXPECT_EQ(backend->warmed.size(), 5);
   EXPECT_EQ(backend->aborted.size(), 1);
 }
 
@@ -218,6 +227,26 @@ TEST(TestWritePublishController, IsolatesJobFailureAndContinuesOtherOwners) {
   EXPECT_EQ(result->failed, 1);
   EXPECT_EQ(result->completed, 1);
   EXPECT_EQ(backend->published, std::vector<cache::UploadJobId>{backend->jobs.back().jobId});
+}
+
+TEST(TestWritePublishController, PublishedPrefetchFailureDoesNotRepublishAndRestartRetriesWarmCheckpoint) {
+  auto backend = std::make_shared<FakeBackend>();
+  backend->jobs = {job(8, cache::UploadJobState::PUBLISHED)};
+  backend->failWarm = backend->jobs.front().jobId;
+  WritePublishController first(backend, config());
+  auto failed = folly::coro::blockingWait(first.runOnce());
+  ASSERT_OK(failed);
+  EXPECT_EQ(failed->failed, 1);
+  EXPECT_TRUE(backend->published.empty());
+  EXPECT_EQ(backend->warmed.size(), 1);
+
+  backend->failWarm.reset();
+  WritePublishController restarted(backend, config());
+  auto recovered = folly::coro::blockingWait(restarted.recover());
+  ASSERT_OK(recovered);
+  EXPECT_EQ(recovered->completed, 1);
+  EXPECT_TRUE(backend->published.empty());
+  EXPECT_EQ(backend->warmed.size(), 2);
 }
 
 TEST(TestWritePublishController, ValidatesLimitsAndRejectsBrokenPagination) {

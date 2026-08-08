@@ -201,6 +201,7 @@ Result<Void> CacheManagerOperator::start(CPUExecutorGroup &executor) {
       uploadConfig.cacheTableId = flat::ChainTableId{config_.phase4_cache_table_id()};
       uploadConfig.cacheBlockSize = config_.phase4_cache_block_size();
       uploadConfig.cacheStripeSize = config_.phase4_cache_stripe_size();
+      uploadConfig.publishedPrefetchPriority = config_.phase4_publish_prefetch_priority();
       uploadConfig.uploader.partSize = config_.upload_part_size();
       uploadConfig.uploader.maxRetries = config_.upload_retry_limit();
       uploadConfig.finalizer.maxRetries = config_.upload_retry_limit();
