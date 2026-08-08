@@ -89,6 +89,10 @@ class FakeBackend : public MultipartUploaderBackend {
                                                          std::string multipartId,
                                                          cache::CompletedUploadPart part) final {
     ++checkpointCalls;
+    if (failCheckpointPart && part.partNumber == *failCheckpointPart) {
+      failCheckpointPart.reset();
+      co_return makeError(CacheCode::kInvalidResponse, "injected checkpoint crash");
+    }
     if (!checkpointFailures.empty()) {
       auto failure = checkpointFailures.front();
       checkpointFailures.pop_front();
@@ -126,6 +130,7 @@ class FakeBackend : public MultipartUploaderBackend {
   std::deque<Status> uploadFailures;
   std::deque<Status> beginFailures;
   std::deque<Status> checkpointFailures;
+  std::optional<uint32_t> failCheckpointPart;
   size_t cancelAfterCheckpoints{0};
   bool stopped{false};
   int creates{0};
@@ -178,6 +183,27 @@ TEST(TestMultipartUploader, ReuploadsSamePartAfterCrashBeforeCheckpoint) {
   ASSERT_OK(result);
   EXPECT_EQ(backend->uploadNumbers, (std::vector<uint32_t>{1, 1}));
   EXPECT_EQ(backend->creates, 1);
+}
+
+TEST(TestMultipartUploader, RecoversFromCheckpointCrashAtEveryPartBoundary) {
+  for (uint32_t failedPart = 1; failedPart <= 3; ++failedPart) {
+    SCOPED_TRACE(failedPart);
+    auto backend = std::make_shared<FakeBackend>(sealedJob());
+    backend->failCheckpointPart = failedPart;
+    MultipartUploader first(backend, {.partSize = 4});
+    ASSERT_ERROR(folly::coro::blockingWait(first.upload(backend->job)), CacheCode::kInvalidResponse);
+    ASSERT_EQ(backend->job.parts.size(), failedPart - 1);
+
+    MultipartUploader resumed(backend, {.partSize = 4});
+    auto result = folly::coro::blockingWait(resumed.upload(backend->job));
+    ASSERT_OK(result);
+    ASSERT_EQ(result->parts.size(), 3);
+    std::vector<uint32_t> expected;
+    for (uint32_t part = 1; part <= failedPart; ++part) expected.push_back(part);
+    for (uint32_t part = failedPart; part <= 3; ++part) expected.push_back(part);
+    EXPECT_EQ(backend->uploadNumbers, expected);
+    EXPECT_EQ(backend->creates, 1);
+  }
 }
 
 TEST(TestMultipartUploader, RetryUsesSamePartAndHonorsBudget) {

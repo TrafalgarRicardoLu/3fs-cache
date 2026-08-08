@@ -107,6 +107,12 @@ class FakeBackend : public WritePublishControllerBackend {
     value.state = cache::UploadJobState::PUBLISHED;
     value.publishedInode = value.stagingInode + 1000;
     ++value.stateVersion;
+    if (failPublishAfterCommit && value.jobId == *failPublishAfterCommit) {
+      auto found = std::find_if(jobs.begin(), jobs.end(), [&](const auto &job) { return job.jobId == value.jobId; });
+      if (found != jobs.end()) *found = value;
+      failPublishAfterCommit.reset();
+      co_return makeError(CacheCode::kTimeout, "injected lost publish response");
+    }
     co_return value;
   }
 
@@ -137,6 +143,7 @@ class FakeBackend : public WritePublishControllerBackend {
   std::function<void()> onUpload;
   std::optional<cache::UploadJobId> failUpload;
   std::optional<cache::UploadJobId> failWarm;
+  std::optional<cache::UploadJobId> failPublishAfterCommit;
   uint32_t listCalls{0};
   uint32_t stopCalls{0};
   bool stopped{false};
@@ -255,6 +262,26 @@ TEST(TestWritePublishController, PublishedPrefetchFailureDoesNotRepublishAndRest
   EXPECT_EQ(recovered->completed, 1);
   EXPECT_TRUE(backend->published.empty());
   EXPECT_EQ(backend->warmed.size(), 2);
+}
+
+TEST(TestWritePublishController, LostPublishResponseRecoversWithoutRepublishing) {
+  auto backend = std::make_shared<FakeBackend>();
+  backend->jobs = {job(9, cache::UploadJobState::PUBLISHING)};
+  backend->failPublishAfterCommit = backend->jobs.front().jobId;
+  WritePublishController first(backend, config());
+  auto ambiguous = folly::coro::blockingWait(first.runOnce());
+  ASSERT_OK(ambiguous);
+  EXPECT_EQ(ambiguous->failed, 1);
+  ASSERT_EQ(backend->jobs.front().state, cache::UploadJobState::PUBLISHED);
+  EXPECT_EQ(backend->published.size(), 1);
+  EXPECT_TRUE(backend->warmed.empty());
+
+  WritePublishController restarted(backend, config());
+  auto recovered = folly::coro::blockingWait(restarted.recover());
+  ASSERT_OK(recovered);
+  EXPECT_EQ(recovered->completed, 1);
+  EXPECT_EQ(backend->published.size(), 1);
+  EXPECT_EQ(backend->warmed, std::vector<cache::UploadJobId>{backend->jobs.front().jobId});
 }
 
 TEST(TestWritePublishController, ValidatesLimitsAndRejectsBrokenPagination) {

@@ -2,7 +2,8 @@
 
 The `test_cache_minio` suite exercises the real AWS SDK transport against an isolated MinIO bucket. It uploads a fixed
 boundary matrix (0, 1, block-1, block, block+1, and multi-block objects), then covers cold reads, background fill,
-zero-origin-request warm reads, mixed reads, refresh fencing, version mismatch, capacity bypass, and cleanup fallback.
+zero-origin-request warm reads, mixed reads, refresh fencing, version mismatch, capacity bypass, cleanup fallback, and
+the Phase 4 multipart create/part/complete/HEAD-recovery/abort/read-after-publish lifecycle.
 
 ## Prerequisites
 
@@ -34,6 +35,7 @@ export HF3FS_CACHE_MINIO_USE_TLS=0
 ctest --test-dir build -R '^test_cache_minio$' --output-on-failure
 ```
 
-When integration tests are enabled, missing endpoint or credentials are a test failure, not a skip. Keep the option off
-for ordinary builds that do not provision MinIO. The test output never prints credentials, bucket contents, or signed
-requests.
+When the target is present but endpoint credentials are absent, every scenario reports `SKIPPED` explicitly. This is
+not release evidence: Phase 4 qualification requires all scenarios to execute against a credentialed disposable MinIO
+bucket. Endpoint or protocol failures after credentials are supplied remain hard test failures. The test output never
+prints credentials, bucket contents, or signed requests.

@@ -12,6 +12,7 @@
 #include <aws/s3/model/CreateBucketRequest.h>
 #include <aws/s3/model/DeleteBucketRequest.h>
 #include <aws/s3/model/DeleteObjectRequest.h>
+#include <aws/s3/model/ListMultipartUploadsRequest.h>
 #include <aws/s3/model/PutObjectRequest.h>
 #include <cstdlib>
 #include <folly/experimental/coro/BlockingWait.h>
@@ -250,6 +251,7 @@ class MinIOIntegration : public ::testing::Test {
     accessKey_ = environment("HF3FS_CACHE_MINIO_ACCESS_KEY");
     secretKey_ = environment("HF3FS_CACHE_MINIO_SECRET_KEY");
     if (endpoint_.empty() || accessKey_.empty() || secretKey_.empty()) {
+      credentialsMissing_ = true;
       configurationError_ =
           "HF3FS_CACHE_MINIO_ENDPOINT, HF3FS_CACHE_MINIO_ACCESS_KEY and HF3FS_CACHE_MINIO_SECRET_KEY are required";
       return;
@@ -347,6 +349,7 @@ class MinIOIntegration : public ::testing::Test {
   static std::string secretKey_;
   static std::string bucket_;
   static std::string configurationError_;
+  static bool credentialsMissing_;
   static std::map<std::string, std::vector<uint8_t>> objects_;
   static std::shared_ptr<origin::s3::S3ObjectStore> store_;
   static std::unique_ptr<CountingObjectStore> countingStore_;
@@ -358,12 +361,14 @@ std::string MinIOIntegration::accessKey_;
 std::string MinIOIntegration::secretKey_;
 std::string MinIOIntegration::bucket_;
 std::string MinIOIntegration::configurationError_;
+bool MinIOIntegration::credentialsMissing_{false};
 std::map<std::string, std::vector<uint8_t>> MinIOIntegration::objects_;
 std::shared_ptr<origin::s3::S3ObjectStore> MinIOIntegration::store_;
 std::unique_ptr<CountingObjectStore> MinIOIntegration::countingStore_;
 std::unique_ptr<Aws::S3::S3Client> MinIOIntegration::client_;
 
 TEST_F(MinIOIntegration, ReadsFixedObjectBoundaryMatrix) {
+  if (credentialsMissing_) GTEST_SKIP() << configurationError_;
   ASSERT_TRUE(configurationError_.empty()) << configurationError_;
   for (const auto &[key, expected] : objects_) {
     auto metadata = folly::coro::blockingWait(countingStore_->head({OriginId{1}, bucket_, key}));
@@ -377,6 +382,7 @@ TEST_F(MinIOIntegration, ReadsFixedObjectBoundaryMatrix) {
 }
 
 TEST_F(MinIOIntegration, ColdFillWarmMixedRefreshCapacityAndCleanup) {
+  if (credentialsMissing_) GTEST_SKIP() << configurationError_;
   ASSERT_TRUE(configurationError_.empty()) << configurationError_;
   const auto &initial = objects_.at("multi");
   auto metadata = folly::coro::blockingWait(countingStore_->head({OriginId{1}, bucket_, "multi"}));
@@ -491,6 +497,7 @@ TEST_F(MinIOIntegration, ColdFillWarmMixedRefreshCapacityAndCleanup) {
 }
 
 TEST_F(MinIOIntegration, Phase3PlansAndControlsRealObjects) {
+  if (credentialsMissing_) GTEST_SKIP() << configurationError_;
   ASSERT_TRUE(configurationError_.empty()) << configurationError_;
   objects_["phase3/data/a"] = sequence(5, 41);
   objects_["phase3/data/b"] = sequence(3, 61);
@@ -633,6 +640,62 @@ TEST_F(MinIOIntegration, Phase3PlansAndControlsRealObjects) {
   EXPECT_TRUE(hints.cancel(prefixPlan.front().key, lowJob));
   EXPECT_EQ(completions, (std::vector<status_code_t>{MetaCode::kRequestCanceled}));
   EXPECT_EQ(hints.size(), size_t{0});
+}
+
+TEST_F(MinIOIntegration, MultipartCompleteHeadRecoveryAbortRereadAndStagingCleanup) {
+  if (credentialsMissing_) GTEST_SKIP() << configurationError_;
+  ASSERT_TRUE(configurationError_.empty()) << configurationError_;
+
+  constexpr size_t minMultipartPartSize = 5 * 1024 * 1024;
+  auto staging = sequence(minMultipartPartSize + 17, 73);
+  const auto expected = staging;
+  const std::string completedKey = "phase4/multipart-completed";
+  ObjectRef destination{OriginId{1}, bucket_, completedKey};
+  auto upload = folly::coro::blockingWait(store_->createMultipartUpload({destination}));
+  ASSERT_OK(upload);
+
+  std::vector<CompletedUploadPart> parts;
+  auto first = folly::coro::blockingWait(store_->uploadPart(
+      {*upload, 1, std::vector<uint8_t>(staging.begin(), staging.begin() + minMultipartPartSize), {}}));
+  ASSERT_OK(first);
+  parts.push_back(first->part);
+  auto second = folly::coro::blockingWait(store_->uploadPart(
+      {*upload, 2, std::vector<uint8_t>(staging.begin() + minMultipartPartSize, staging.end()), {}}));
+  ASSERT_OK(second);
+  parts.push_back(second->part);
+
+  auto completed = folly::coro::blockingWait(
+      store_->completeMultipartUpload({*upload, std::move(parts), static_cast<uint64_t>(staging.size())}));
+  ASSERT_OK(completed);
+  objects_[completedKey] = expected;
+
+  auto recovered = folly::coro::blockingWait(store_->headCompletedUpload({destination, expected.size()}));
+  ASSERT_OK(recovered);
+  EXPECT_EQ(recovered->identity, completed->identity);
+  auto reread = folly::coro::blockingWait(store_->getRange(recovered->identity, {0, expected.size()}));
+  ASSERT_OK(reread);
+  EXPECT_EQ(*reread, expected);
+
+  staging.clear();
+  staging.shrink_to_fit();
+  EXPECT_TRUE(staging.empty());
+
+  ObjectRef abortedDestination{OriginId{1}, bucket_, "phase4/multipart-aborted"};
+  auto aborted = folly::coro::blockingWait(store_->createMultipartUpload({abortedDestination}));
+  ASSERT_OK(aborted);
+  auto abortedPart =
+      folly::coro::blockingWait(store_->uploadPart({*aborted, 1, std::vector<uint8_t>(minMultipartPartSize, 7), {}}));
+  ASSERT_OK(abortedPart);
+  ASSERT_OK(folly::coro::blockingWait(store_->abortMultipartUpload({*aborted})));
+  Aws::S3::Model::ListMultipartUploadsRequest listUploads;
+  listUploads.SetBucket(bucket_.c_str());
+  listUploads.SetPrefix(abortedDestination.key.c_str());
+  auto remaining = client_->ListMultipartUploads(listUploads);
+  ASSERT_TRUE(remaining.IsSuccess()) << remaining.GetError().GetMessage();
+  EXPECT_TRUE(std::none_of(remaining.GetResult().GetUploads().begin(),
+                           remaining.GetResult().GetUploads().end(),
+                           [&](const auto &entry) { return entry.GetUploadId() == aborted->uploadId.c_str(); }));
+  ASSERT_ERROR(folly::coro::blockingWait(store_->head(abortedDestination)), CacheCode::kNotFound);
 }
 
 }  // namespace
