@@ -177,15 +177,14 @@ TEST(TestCacheReconciler, BoundsMutationsAndSupportsDryRun) {
   EXPECT_TRUE(limited->stopped);
   EXPECT_EQ(backend->storageMutations, 1);
 
-  auto dryConfig = config(1);
-  dryConfig.dryRun = true;
-  CacheReconciler dryRun(backend, cleanup, dryConfig);
-  auto reported = folly::coro::blockingWait(dryRun.run(targets));
+  auto reported = folly::coro::blockingWait(reconciler.run(targets, true));
   ASSERT_OK(reported);
   ASSERT_TRUE(reported->storageToMetadata.has_value());
   EXPECT_EQ(reported->storageToMetadata->orphans, 1);
   EXPECT_EQ(reported->storageToMetadata->deferred, 1);
   EXPECT_EQ(backend->storageMutations, 1);
+  ASSERT_TRUE(reconciler.lastRunDryRun().has_value());
+  EXPECT_TRUE(*reconciler.lastRunDryRun());
 }
 
 TEST(TestCacheReconciler, RetriesChangedEpochAndPreservesPartialTargetFailure) {

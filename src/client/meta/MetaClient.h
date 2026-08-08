@@ -269,6 +269,8 @@ class MetaClient {
   CoTryTask<PublishOriginFileFromStagingRsp> publishOriginFileFromStaging(PublishOriginFileFromStagingReq req);
   CoTryTask<ListUploadJobsRsp> listUploadJobs(ListUploadJobsReq req);
   CoTryTask<GetUploadJobRsp> getUploadJob(GetUploadJobReq req);
+  CoTryTask<ListUploadJobsRsp> adminListUploadJobs(AdminListUploadJobsReq req);
+  CoTryTask<AdminMutateUploadJobRsp> adminMutateUploadJob(AdminMutateUploadJobReq req);
 
   CoTryTask<Inode> extendStripe(const UserInfo &userInfo, InodeId inodeId, uint32_t stripe);
 

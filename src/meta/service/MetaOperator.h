@@ -150,6 +150,8 @@ class MetaOperator : public folly::NonCopyableNonMovable {
   CoTryTask<PublishOriginFileFromStagingRsp> publishOriginFileFromStaging(PublishOriginFileFromStagingReq req);
   CoTryTask<ListUploadJobsRsp> listUploadJobs(ListUploadJobsReq req);
   CoTryTask<GetUploadJobRsp> getUploadJob(GetUploadJobReq req);
+  CoTryTask<ListUploadJobsRsp> adminListUploadJobs(AdminListUploadJobsReq req);
+  CoTryTask<AdminMutateUploadJobRsp> adminMutateUploadJob(AdminMutateUploadJobReq req);
   CoTryTask<UpsertCachePinsRsp> upsertCachePins(UpsertCachePinsReq req);
   CoTryTask<RemoveCachePinsRsp> removeCachePins(RemoveCachePinsReq req);
   CoTryTask<ListCachePinsByOwnerRsp> listCachePinsByOwner(ListCachePinsByOwnerReq req);

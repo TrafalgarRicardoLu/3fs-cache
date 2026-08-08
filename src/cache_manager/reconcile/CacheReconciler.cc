@@ -143,7 +143,7 @@ CoTask<void> CacheReconciler::runStorage(std::span<const storage::TargetId> targ
     }
   }
   if (control->shouldStop() || inventories.empty()) co_return;
-  StorageToMetadataChecker checker(backend_, config_.pageSize, config_.dryRun, control);
+  StorageToMetadataChecker checker(backend_, config_.pageSize, control->dryRun(), control);
   auto checked = co_await checker.run(inventories);
   if (checked.hasError()) {
     result.storageError = checked.error();
@@ -152,7 +152,8 @@ CoTask<void> CacheReconciler::runStorage(std::span<const storage::TargetId> targ
   }
 }
 
-CoTryTask<CacheReconcileRunResult> CacheReconciler::run(std::span<const storage::TargetId> targetIds) {
+CoTryTask<CacheReconcileRunResult> CacheReconciler::run(std::span<const storage::TargetId> targetIds,
+                                                        std::optional<bool> dryRunOverride) {
   CO_RETURN_ON_ERROR(config_.valid());
   if (!backend_) co_return makeError(StatusCode::kInvalidConfig, "cache reconciler backend is missing");
   if (stopping_.load(std::memory_order_acquire)) {
@@ -186,11 +187,12 @@ CoTryTask<CacheReconcileRunResult> CacheReconciler::run(std::span<const storage:
     progress_.startedAtMs = startedAtMs;
     progress_.updatedAtMs = startedAtMs;
     progress_.lastSuccessAtMs = lastSuccessAtMs;
+    lastRunDryRun_ = dryRunOverride.value_or(config_.dryRun);
   }
   cache::metrics::setGauge(cache::metrics::Event::MANAGER_RECONCILE_LAST_START_MS, startedAtMs);
-  XLOGF(INFO, "Cache reconcile started: run_id={}, targets={}, dry_run={}", runId, targetIds.size(), config_.dryRun);
-  auto control =
-      std::make_shared<ReconcileRunControl>(config_.maxMutations, config_.maxRuntime, config_.dryRun, clock_);
+  const auto dryRun = dryRunOverride.value_or(config_.dryRun);
+  XLOGF(INFO, "Cache reconcile started: run_id={}, targets={}, dry_run={}", runId, targetIds.size(), dryRun);
+  auto control = std::make_shared<ReconcileRunControl>(config_.maxMutations, config_.maxRuntime, dryRun, clock_);
   {
     std::scoped_lock lock(mutex_);
     activeControl_ = control;
@@ -245,6 +247,11 @@ void CacheReconciler::stop() {
 std::optional<CacheReconcileRunResult> CacheReconciler::lastResult() const {
   std::scoped_lock lock(mutex_);
   return lastResult_;
+}
+
+std::optional<bool> CacheReconciler::lastRunDryRun() const {
+  std::scoped_lock lock(mutex_);
+  return lastRunDryRun_;
 }
 
 cache::ReconcileProgress CacheReconciler::status() const {

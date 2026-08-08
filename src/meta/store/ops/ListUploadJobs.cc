@@ -36,6 +36,40 @@ MetaStore::OpPtr<ListUploadJobsRsp> MetaStore::listUploadJobs(const ListUploadJo
   return std::make_unique<ListUploadJobsOp>(*this, req);
 }
 
+class AdminListUploadJobsOp : public ReadOnlyOperation<ListUploadJobsRsp> {
+ public:
+  AdminListUploadJobsOp(MetaStore &meta, const AdminListUploadJobsReq &req)
+      : ReadOnlyOperation<ListUploadJobsRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<ListUploadJobsRsp> run(IReadOnlyTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    if (req_.jobId) {
+      auto job = co_await UploadJobStore::snapshotLoad(txn, *req_.jobId);
+      CO_RETURN_ON_ERROR(job);
+      if (!job->has_value()) co_return makeError(CacheCode::kNotFound, "upload job not found");
+      ListUploadJobsRsp response;
+      response.jobs.push_back(std::move(**job));
+      co_return response;
+    }
+    auto page = co_await UploadJobStore::snapshotList(txn, req_.ownerUid, req_.after, req_.limit, req_.includeTerminal);
+    CO_RETURN_ON_ERROR(page);
+    ListUploadJobsRsp response;
+    response.jobs = std::move(page->jobs);
+    response.more = page->more;
+    co_return response;
+  }
+
+ private:
+  const AdminListUploadJobsReq &req_;
+};
+
+MetaStore::OpPtr<ListUploadJobsRsp> MetaStore::adminListUploadJobs(const AdminListUploadJobsReq &req) {
+  return std::make_unique<AdminListUploadJobsOp>(*this, req);
+}
+
 class GetUploadJobOp : public ReadOnlyOperation<GetUploadJobRsp> {
  public:
   GetUploadJobOp(MetaStore &meta, const GetUploadJobReq &req)

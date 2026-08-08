@@ -22,6 +22,7 @@ CACHE_MANAGER_STUB_METHOD(cancelPrefetchJob, CancelPrefetchJobReq, CancelPrefetc
 CACHE_MANAGER_STUB_METHOD(pinDataset, PinDatasetReq, PinDatasetRsp);
 CACHE_MANAGER_STUB_METHOD(unpinDataset, UnpinDatasetReq, UnpinDatasetRsp);
 CACHE_MANAGER_STUB_METHOD(getPinStatus, GetPinStatusReq, GetPinStatusRsp);
+CACHE_MANAGER_STUB_METHOD(runCacheReconcile, RunCacheReconcileReq, RunCacheReconcileRsp);
 #undef CACHE_MANAGER_STUB_METHOD
 
 template class CacheManagerServiceStub<serde::ClientContext>;

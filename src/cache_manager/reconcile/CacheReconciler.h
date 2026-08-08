@@ -49,10 +49,12 @@ class CacheReconciler {
       ReconcileRunControl::Clock clock = SteadyClock::now,
       WallClock wallClock = [] { return static_cast<uint64_t>(UtcClock::now().toMicroseconds()) / 1000; });
 
-  CoTryTask<CacheReconcileRunResult> run(std::span<const storage::TargetId> targetIds);
+  CoTryTask<CacheReconcileRunResult> run(std::span<const storage::TargetId> targetIds,
+                                         std::optional<bool> dryRun = std::nullopt);
   void stop();
   bool running() const { return running_.load(std::memory_order_acquire); }
   std::optional<CacheReconcileRunResult> lastResult() const;
+  std::optional<bool> lastRunDryRun() const;
   cache::ReconcileProgress status() const;
 
  private:
@@ -72,6 +74,7 @@ class CacheReconciler {
   mutable std::mutex mutex_;
   std::shared_ptr<ReconcileRunControl> activeControl_;
   std::optional<CacheReconcileRunResult> lastResult_;
+  std::optional<bool> lastRunDryRun_;
   cache::ReconcileProgress progress_;
 };
 

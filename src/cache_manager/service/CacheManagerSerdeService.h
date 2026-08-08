@@ -25,6 +25,7 @@ class CacheManagerSerdeService : public serde::ServiceWrapper<CacheManagerSerdeS
   CoTryTask<PinDatasetRsp> pinDataset(serde::CallContext &, const PinDatasetReq &req);
   CoTryTask<UnpinDatasetRsp> unpinDataset(serde::CallContext &, const UnpinDatasetReq &req);
   CoTryTask<GetPinStatusRsp> getPinStatus(serde::CallContext &, const GetPinStatusReq &req);
+  CoTryTask<RunCacheReconcileRsp> runCacheReconcile(serde::CallContext &, const RunCacheReconcileReq &req);
 
  private:
   CacheManagerOperator &operator_;

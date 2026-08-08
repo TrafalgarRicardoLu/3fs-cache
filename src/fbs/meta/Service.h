@@ -1059,6 +1059,50 @@ struct GetUploadJobRsp : RspBase {
   SERDE_STRUCT_FIELD(warmState, cache::UploadWarmState::PENDING);
 };
 
+struct AdminListUploadJobsReq : ReqBase {
+  SERDE_STRUCT_FIELD(ownerUid, std::optional<flat::Uid>{});
+  SERDE_STRUCT_FIELD(includeTerminal, true);
+  SERDE_STRUCT_FIELD(after, std::optional<cache::UploadJobId>{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{100});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+  SERDE_STRUCT_FIELD(jobId, std::optional<cache::UploadJobId>{});
+
+ public:
+  Result<Void> valid() const {
+    if (limit == 0 || limit > cache::kMaxPhase2BatchItems || (after && *after == cache::UploadJobId{}) ||
+        (jobId && *jobId == cache::UploadJobId{}) || (jobId && after)) {
+      return INVALID("invalid admin upload job page");
+    }
+    return VALID;
+  }
+};
+
+enum class AdminUploadMutation : uint8_t {
+  INVALID = 0,
+  CANCEL = 1,
+  RETRY = 2,
+};
+
+struct AdminMutateUploadJobReq : ReqBase {
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(expectedStateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(mutation, AdminUploadMutation::INVALID);
+  SERDE_STRUCT_FIELD(confirm, false);
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || mutation == AdminUploadMutation::INVALID ||
+        mutation > AdminUploadMutation::RETRY || !confirm) {
+      return INVALID("invalid or unconfirmed admin upload mutation");
+    }
+    return VALID;
+  }
+};
+struct AdminMutateUploadJobRsp : RspBase {
+  SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
+};
+
 struct ReadBlockPlan {
   SERDE_STRUCT_FIELD(key, cache::CacheBlockKey{});
   SERDE_STRUCT_FIELD(fileRange, cache::ByteRange{});
@@ -2223,6 +2267,8 @@ SERDE_SERVICE(MetaSerde, 4) {
                       PublishOriginFileFromStagingRsp);
   META_SERVICE_METHOD(listUploadJobs, 69, ListUploadJobsReq, ListUploadJobsRsp);
   META_SERVICE_METHOD(getUploadJob, 70, GetUploadJobReq, GetUploadJobRsp);
+  META_SERVICE_METHOD(adminListUploadJobs, 71, AdminListUploadJobsReq, ListUploadJobsRsp);
+  META_SERVICE_METHOD(adminMutateUploadJob, 72, AdminMutateUploadJobReq, AdminMutateUploadJobRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

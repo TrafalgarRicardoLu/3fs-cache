@@ -1,6 +1,7 @@
 #include "CacheOrchestration.h"
 
 #include <algorithm>
+#include <chrono>
 
 #include "AdminEnv.h"
 #include "client/cli/common/Dispatcher.h"
@@ -164,6 +165,120 @@ auto pinParser() {
   return parser;
 }
 
+auto reconcileParser() {
+  argparse::ArgumentParser parser("cache-reconcile");
+  parser.add_argument("action");
+  parser.add_argument("--confirm").default_value(false).implicit_value(true);
+  parser.add_argument("--timeout-ms").default_value(uint64_t{30000}).scan<'u', uint64_t>();
+  return parser;
+}
+
+CoTryTask<Dispatcher::OutputTable> handleReconcile(IEnv &ienv,
+                                                   const argparse::ArgumentParser &parser,
+                                                   const Dispatcher::Args &args) {
+  auto &env = dynamic_cast<AdminEnv &>(ienv);
+  ENSURE_USAGE(args.empty());
+  const auto action = parser.get<std::string>("action");
+  ENSURE_USAGE(action == "run" || action == "dry-run" || action == "status", "action must be run, dry-run or status");
+  if (action == "status") {
+    cache_manager::GetCacheStatusReq request;
+    request.user = env.userInfo;
+    request.cacheProtocolVersion = cache::kCacheProtocolVersion;
+    auto result = co_await env.cacheManagerStubGetter()->getCacheStatus(request);
+    CO_RETURN_ON_ERROR(result);
+    co_return cacheReconcileTable(result->reconcile, result->reconcileDryRun);
+  }
+  const bool dryRun = action == "dry-run";
+  const bool confirm = parser.get<bool>("--confirm");
+  ENSURE_USAGE(dryRun || confirm, "repair reconcile requires --confirm");
+  const auto timeoutMs = parser.get<uint64_t>("--timeout-ms");
+  ENSURE_USAGE(timeoutMs != 0, "--timeout-ms must be positive");
+  cache_manager::RunCacheReconcileReq request{env.userInfo, dryRun, confirm, cache::kCachePhase4ProtocolVersion};
+  net::UserRequestOptions options;
+  options.timeout = Duration(std::chrono::milliseconds(timeoutMs));
+  auto result = co_await env.cacheManagerStubGetter()->runCacheReconcile(request, options);
+  CO_RETURN_ON_ERROR(result);
+  co_return cacheReconcileTable(result->progress, result->dryRun);
+}
+
+auto uploadParser() {
+  argparse::ArgumentParser parser("cache-upload");
+  parser.add_argument("action");
+  parser.add_argument("--job-id");
+  parser.add_argument("--owner-uid").scan<'u', uint32_t>();
+  parser.add_argument("--after");
+  parser.add_argument("--limit").default_value(uint32_t{100}).scan<'u', uint32_t>();
+  parser.add_argument("--active-only").default_value(false).implicit_value(true);
+  parser.add_argument("--confirm").default_value(false).implicit_value(true);
+  return parser;
+}
+
+CoTryTask<Dispatcher::OutputTable> handleUpload(IEnv &ienv,
+                                                const argparse::ArgumentParser &parser,
+                                                const Dispatcher::Args &args) {
+  auto &env = dynamic_cast<AdminEnv &>(ienv);
+  ENSURE_USAGE(args.empty());
+  const auto action = parser.get<std::string>("action");
+  ENSURE_USAGE(action == "status" || action == "cancel" || action == "retry", "action must be status, cancel or retry");
+  Dispatcher::OutputTable table{{"JobId",
+                                 "OwnerUid",
+                                 "Path",
+                                 "State",
+                                 "StateVersion",
+                                 "StagingBytes",
+                                 "UploadedParts",
+                                 "UpdatedAtMs",
+                                 "HasError",
+                                 "More"}};
+  auto idText = parser.present<std::string>("--job-id");
+  if (action == "status" && !idText) {
+    meta::AdminListUploadJobsReq request;
+    request.user = env.userInfo;
+    if (auto owner = parser.present<uint32_t>("--owner-uid")) request.ownerUid = flat::Uid{*owner};
+    if (auto after = parser.present<std::string>("--after")) {
+      auto parsed = Uuid::fromHexString(*after);
+      CO_RETURN_ON_ERROR(parsed);
+      request.after = cache::UploadJobId{*parsed};
+    }
+    request.includeTerminal = !parser.get<bool>("--active-only");
+    request.limit = parser.get<uint32_t>("--limit");
+    request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto result = co_await env.metaClientGetter()->adminListUploadJobs(std::move(request));
+    CO_RETURN_ON_ERROR(result);
+    for (const auto &job : result->jobs) table.push_back(cacheUploadJobRow(job, result->more));
+    co_return table;
+  }
+  ENSURE_USAGE(idText.has_value(), "--job-id is required");
+  if (action != "status") {
+    ENSURE_USAGE(parser.get<bool>("--confirm"), fmt::format("{} requires --confirm", action));
+  }
+  auto parsed = Uuid::fromHexString(*idText);
+  CO_RETURN_ON_ERROR(parsed);
+  meta::AdminListUploadJobsReq get;
+  get.user = env.userInfo;
+  get.jobId = cache::UploadJobId{*parsed};
+  get.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto current = co_await env.metaClientGetter()->adminListUploadJobs(std::move(get));
+  CO_RETURN_ON_ERROR(current);
+  if (current->jobs.size() != 1) co_return makeError(CacheCode::kInvalidResponse, "invalid upload job response");
+  auto &job = current->jobs.front();
+  if (action == "status") {
+    table.push_back(cacheUploadJobRow(job, false));
+    co_return table;
+  }
+  meta::AdminMutateUploadJobReq mutate;
+  mutate.user = env.userInfo;
+  mutate.jobId = job.jobId;
+  mutate.expectedStateVersion = job.stateVersion;
+  mutate.mutation = action == "cancel" ? meta::AdminUploadMutation::CANCEL : meta::AdminUploadMutation::RETRY;
+  mutate.confirm = true;
+  mutate.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto result = co_await env.metaClientGetter()->adminMutateUploadJob(std::move(mutate));
+  CO_RETURN_ON_ERROR(result);
+  table.push_back(cacheUploadJobRow(result->job, false));
+  co_return table;
+}
+
 CoTryTask<Dispatcher::OutputTable> handlePin(IEnv &ienv,
                                              const argparse::ArgumentParser &parser,
                                              const Dispatcher::Args &args) {
@@ -219,12 +334,60 @@ uint32_t cacheReadyBps(uint64_t readyBytes, uint64_t plannedBytes) {
   return static_cast<uint32_t>(std::min<__uint128_t>(scaled, cache::kReadyRatioScaleBps));
 }
 
+Dispatcher::OutputTable cacheReconcileTable(const cache::ReconcileProgress &progress, bool dryRun) {
+  return {{"RunId",
+           "State",
+           "DryRun",
+           "Scanned",
+           "Repaired",
+           "Orphaned",
+           "Missing",
+           "Conflicts",
+           "Retryable",
+           "StartedAtMs",
+           "UpdatedAtMs",
+           "HasError"},
+          {progress.runId == cache::ReconcileRunId{} ? "" : progress.runId.toUnderType().toHexString(),
+           std::string(magic_enum::enum_name(progress.state)),
+           dryRun ? "true" : "false",
+           std::to_string(progress.scanned),
+           std::to_string(progress.repaired),
+           std::to_string(progress.orphaned),
+           std::to_string(progress.missing),
+           std::to_string(progress.conflicts),
+           std::to_string(progress.retryable),
+           std::to_string(progress.startedAtMs),
+           std::to_string(progress.updatedAtMs),
+           progress.error.empty() ? "false" : "true"}};
+}
+
+Dispatcher::OutputRow cacheUploadJobRow(const cache::UploadJobRecord &job, bool more) {
+  return {job.jobId.toUnderType().toHexString(),
+          std::to_string(job.ownerUid.toUnderType()),
+          job.path,
+          std::string(magic_enum::enum_name(job.state)),
+          std::to_string(job.stateVersion),
+          std::to_string(job.stagingLength),
+          std::to_string(job.parts.size()),
+          std::to_string(job.updatedAtMs),
+          job.error.empty() ? "false" : "true",
+          more ? "true" : "false"};
+}
+
 CoTryTask<void> registerCachePrefetchHandler(Dispatcher &dispatcher) {
   co_return co_await dispatcher.registerHandler(prefetchParser, handlePrefetch);
 }
 
 CoTryTask<void> registerCachePinHandler(Dispatcher &dispatcher) {
   co_return co_await dispatcher.registerHandler(pinParser, handlePin);
+}
+
+CoTryTask<void> registerCacheReconcileHandler(Dispatcher &dispatcher) {
+  co_return co_await dispatcher.registerHandler(reconcileParser, handleReconcile);
+}
+
+CoTryTask<void> registerCacheUploadHandler(Dispatcher &dispatcher) {
+  co_return co_await dispatcher.registerHandler(uploadParser, handleUpload);
 }
 
 }  // namespace hf3fs::client::cli

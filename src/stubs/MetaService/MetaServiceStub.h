@@ -86,6 +86,8 @@ class MetaServiceStub : public IMetaServiceStub {
   META_STUB_METHOD(publishOriginFileFromStaging, PublishOriginFileFromStagingReq, PublishOriginFileFromStagingRsp);
   META_STUB_METHOD(listUploadJobs, ListUploadJobsReq, ListUploadJobsRsp);
   META_STUB_METHOD(getUploadJob, GetUploadJobReq, GetUploadJobRsp);
+  META_STUB_METHOD(adminListUploadJobs, AdminListUploadJobsReq, ListUploadJobsRsp);
+  META_STUB_METHOD(adminMutateUploadJob, AdminMutateUploadJobReq, AdminMutateUploadJobRsp);
 
 #undef META_STUB_METHOD
 

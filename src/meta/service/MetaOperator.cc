@@ -525,6 +525,22 @@ CoTryTask<GetUploadJobRsp> MetaOperator::getUploadJob(GetUploadJobReq req) {
   co_return co_await runOp(&MetaStore::getUploadJob, req);
 }
 
+CoTryTask<ListUploadJobsRsp> MetaOperator::adminListUploadJobs(AdminListUploadJobsReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(co_await requireCacheAdmin(req.user));
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::adminListUploadJobs, req);
+}
+
+CoTryTask<AdminMutateUploadJobRsp> MetaOperator::adminMutateUploadJob(AdminMutateUploadJobReq req) {
+  AUTHENTICATE(req.user);
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(co_await requireCacheAdmin(req.user));
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::adminMutateUploadJob, req);
+}
+
 CoTryTask<MkdirsRsp> MetaOperator::mkdirs(MkdirsReq req) {
   AUTHENTICATE(req.user);
   co_return co_await runOp(&MetaStore::mkdirs, req);

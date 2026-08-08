@@ -145,6 +145,8 @@ class MetaStore {
 
   OpPtr<ListUploadJobsRsp> listUploadJobs(const ListUploadJobsReq &req);
   OpPtr<GetUploadJobRsp> getUploadJob(const GetUploadJobReq &req);
+  OpPtr<ListUploadJobsRsp> adminListUploadJobs(const AdminListUploadJobsReq &req);
+  OpPtr<AdminMutateUploadJobRsp> adminMutateUploadJob(const AdminMutateUploadJobReq &req);
 
   OpPtr<GetFileReadPlanRsp> getFileReadPlan(const GetFileReadPlanReq &req);
 

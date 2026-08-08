@@ -65,6 +65,7 @@ class CacheManagerOperator {
   CoTryTask<PinDatasetRsp> pinDataset(const PinDatasetReq &req);
   CoTryTask<UnpinDatasetRsp> unpinDataset(const UnpinDatasetReq &req);
   CoTryTask<GetPinStatusRsp> getPinStatus(const GetPinStatusReq &req);
+  CoTryTask<RunCacheReconcileRsp> runCacheReconcile(const RunCacheReconcileReq &req);
 
  private:
   Result<Void> checkProtocol(uint32_t version) const;

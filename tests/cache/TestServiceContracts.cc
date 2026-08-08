@@ -229,6 +229,46 @@ TEST(ServiceContracts, ReconcileStatusExtensionsRoundTrip) {
   ASSERT_OK(neverRun.valid());
 }
 
+TEST(ServiceContracts, AdminPhaseFourOperationsRequireConfirmationAndRoundTrip) {
+  cache_manager::RunCacheReconcileReq repair;
+  repair.user.uid = flat::Uid{0};
+  repair.dryRun = false;
+  repair.cacheProtocolVersion = kCachePhase4ProtocolVersion;
+  ASSERT_ERROR(repair.valid(), StatusCode::kInvalidArg);
+  repair.confirmRepair = true;
+  ASSERT_OK(repair.valid());
+  cache_manager::RunCacheReconcileReq decodedRepair;
+  ASSERT_OK(serde::deserialize(decodedRepair, serde::serialize(repair)));
+  EXPECT_TRUE(decodedRepair.confirmRepair);
+
+  meta::AdminListUploadJobsReq list;
+  list.user.uid = flat::Uid{0};
+  list.limit = 100;
+  list.cacheProtocolVersion = kCachePhase4ProtocolVersion;
+  ASSERT_OK(list.valid());
+  list.jobId = UploadJobId{Uuid::from(7, 8)};
+  ASSERT_OK(list.valid());
+  list.after = UploadJobId{Uuid::from(9, 10)};
+  EXPECT_TRUE(list.valid().hasError());
+  list.after.reset();
+  list.jobId.reset();
+  list.limit = cache::kMaxPhase2BatchItems + 1;
+  EXPECT_TRUE(list.valid().hasError());
+
+  meta::AdminMutateUploadJobReq mutate;
+  mutate.user.uid = flat::Uid{0};
+  mutate.jobId = UploadJobId{Uuid::from(5, 6)};
+  mutate.expectedStateVersion = 7;
+  mutate.mutation = meta::AdminUploadMutation::RETRY;
+  mutate.cacheProtocolVersion = kCachePhase4ProtocolVersion;
+  ASSERT_ERROR(mutate.valid(), StatusCode::kInvalidArg);
+  mutate.confirm = true;
+  ASSERT_OK(mutate.valid());
+  meta::AdminMutateUploadJobReq decodedMutate;
+  ASSERT_OK(serde::deserialize(decodedMutate, serde::serialize(mutate)));
+  EXPECT_EQ(decodedMutate.mutation, meta::AdminUploadMutation::RETRY);
+}
+
 TEST(ServiceContracts, Phase3ContractsRoundTripAndBoundPages) {
   cache_manager::CreatePrefetchJobReq create;
   create.user.uid = flat::Uid{1000};

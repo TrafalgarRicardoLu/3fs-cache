@@ -743,5 +743,68 @@ TEST_F(TestWriteStaging, GetsUploadJobWithOwnerIsolationAndProtocolGate) {
   }());
 }
 
+TEST_F(TestWriteStaging, AdminListsCancelsAndRetriesUploadsWithFences) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    enableWriteStaging(cluster);
+    auto &meta = cluster.meta().getOperator();
+    auto cancelledId = cache::UploadJobId{Uuid::from(53, 54)};
+    auto cancelled = co_await meta.createWriteStaging(stagingReq("/admin-cancel", cancelledId));
+    CO_ASSERT_OK(cancelled);
+
+    AdminListUploadJobsReq list;
+    list.user = flat::UserInfo{flat::Uid{123}, flat::Gid{123}};
+    list.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    CO_ASSERT_ERROR(co_await meta.adminListUploadJobs(list), MetaCode::kNoPermission);
+    list.user = SUPER_USER;
+    list.limit = 1;
+    auto page = co_await meta.adminListUploadJobs(list);
+    CO_ASSERT_OK(page);
+    CO_ASSERT_EQ(page->jobs.size(), 1);
+    list.jobId = cancelledId;
+    auto exact = co_await meta.adminListUploadJobs(list);
+    CO_ASSERT_OK(exact);
+    CO_ASSERT_EQ(exact->jobs.size(), 1);
+    CO_ASSERT_EQ(exact->jobs.front().jobId, cancelledId);
+    list.jobId = cache::UploadJobId{Uuid::from(99, 100)};
+    CO_ASSERT_ERROR(co_await meta.adminListUploadJobs(list), CacheCode::kNotFound);
+
+    AdminMutateUploadJobReq mutate;
+    mutate.user = SUPER_USER;
+    mutate.jobId = cancelledId;
+    mutate.expectedStateVersion = cancelled->job.stateVersion;
+    mutate.mutation = AdminUploadMutation::CANCEL;
+    mutate.confirm = true;
+    mutate.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto cancelledResult = co_await meta.adminMutateUploadJob(mutate);
+    CO_ASSERT_OK(cancelledResult);
+    CO_ASSERT_EQ(cancelledResult->job.state, cache::UploadJobState::CANCELLED);
+    CO_ASSERT_EQ(cancelledResult->job.writerLeaseId, Uuid::zero());
+    CO_ASSERT_ERROR(co_await meta.adminMutateUploadJob(mutate), CacheCode::kStateConflict);
+
+    auto failedId = cache::UploadJobId{Uuid::from(55, 56)};
+    auto created = co_await meta.createWriteStaging(stagingReq("/admin-retry", failedId));
+    CO_ASSERT_OK(created);
+    CO_ASSERT_OK(co_await setStagingLength(cluster.kvEngine(), created->inode.id, VersionedLength{4096, 0}));
+    auto sealed = co_await meta.sealWriteStaging(sealReq(*created, VersionedLength{4096, 0}));
+    CO_ASSERT_OK(sealed);
+    auto failed = sealed->job;
+    failed.state = cache::UploadJobState::FAILED;
+    failed.error = "credential failure";
+    ++failed.stateVersion;
+    auto txn = cluster.kvEngine()->createReadWriteTransaction();
+    CO_ASSERT_OK(co_await UploadJobStore::update(*txn, sealed->job.stateVersion, failed));
+    CO_ASSERT_OK(co_await txn->commit());
+
+    mutate.jobId = failedId;
+    mutate.expectedStateVersion = failed.stateVersion;
+    mutate.mutation = AdminUploadMutation::RETRY;
+    auto retried = co_await meta.adminMutateUploadJob(mutate);
+    CO_ASSERT_OK(retried);
+    CO_ASSERT_EQ(retried->job.state, cache::UploadJobState::SEALED);
+    CO_ASSERT_TRUE(retried->job.error.empty());
+  }());
+}
+
 }  // namespace
 }  // namespace hf3fs::meta::server

@@ -567,6 +567,7 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
   response.reconcileDryRun = config_.reconcile_dry_run();
   if (reconciler_) {
     response.reconcile = reconciler_->status();
+    response.reconcileDryRun = reconciler_->lastRunDryRun().value_or(response.reconcileDryRun);
   } else {
     response.reconcile.state = cache::ReconcileRunState::NEVER_RUN;
   }
@@ -649,6 +650,21 @@ CoTryTask<GetCacheStatusRsp> CacheManagerOperator::getCacheStatus(const GetCache
   response.nonterminalRecoveryWork +=
       std::min(response.activeJobs, std::numeric_limits<uint64_t>::max() - response.nonterminalRecoveryWork);
   co_return response;
+}
+
+CoTryTask<RunCacheReconcileRsp> CacheManagerOperator::runCacheReconcile(const RunCacheReconcileReq &req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(cache::checkPhase4Capability(req.cacheProtocolVersion, config_.enable_phase4()));
+  if (backend_) CO_RETURN_ON_ERROR(co_await backend_->authorizeAdmin(req.user, std::nullopt));
+  if (!reconciler_ || !backend_) co_return makeError(CacheCode::kFeatureDisabled, "cache reconciler is not enabled");
+  auto routing = backend_->routingInfo();
+  if (!routing || !routing->raw()) co_return makeError(CacheCode::kUnavailable, "routing information is unavailable");
+  std::vector<storage::TargetId> targets;
+  for (const auto &[targetId, target] : routing->raw()->targets) {
+    if (target.storageRole == storage::StorageRole::CACHE_ONLY) targets.push_back(targetId);
+  }
+  CO_RETURN_ON_ERROR(co_await reconciler_->run(targets, req.dryRun));
+  co_return RunCacheReconcileRsp{reconciler_->status(), req.dryRun};
 }
 
 CoTryTask<ReportCacheAccessRsp> CacheManagerOperator::reportCacheAccess(const ReportCacheAccessReq &req) {

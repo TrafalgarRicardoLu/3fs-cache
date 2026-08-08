@@ -89,6 +89,8 @@ class IMetaServiceStub {
   IMETA_STUB_METHOD(publishOriginFileFromStaging, PublishOriginFileFromStagingReq, PublishOriginFileFromStagingRsp);
   IMETA_STUB_METHOD(listUploadJobs, ListUploadJobsReq, ListUploadJobsRsp);
   IMETA_STUB_METHOD(getUploadJob, GetUploadJobReq, GetUploadJobRsp);
+  IMETA_STUB_METHOD(adminListUploadJobs, AdminListUploadJobsReq, ListUploadJobsRsp);
+  IMETA_STUB_METHOD(adminMutateUploadJob, AdminMutateUploadJobReq, AdminMutateUploadJobRsp);
 
 #undef IMETA_STUB_METHOD
 };

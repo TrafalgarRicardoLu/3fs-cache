@@ -396,6 +396,72 @@ class MutateMultipartUploadOp : public Operation<MutateMultipartUploadRsp> {
   const MutateMultipartUploadReq &req_;
 };
 
+class AdminMutateUploadJobOp : public Operation<AdminMutateUploadJobRsp> {
+ public:
+  AdminMutateUploadJobOp(MetaStore &meta, const AdminMutateUploadJobReq &req)
+      : Operation<AdminMutateUploadJobRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<AdminMutateUploadJobRsp> run(IReadWriteTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto loaded = co_await UploadJobStore::load(txn, req_.jobId);
+    CO_RETURN_ON_ERROR(loaded);
+    if (!loaded->has_value()) co_return makeError(CacheCode::kNotFound, "upload job not found");
+    auto job = std::move(**loaded);
+    if (job.stateVersion != req_.expectedStateVersion) {
+      co_return makeError(CacheCode::kStateConflict, "admin upload mutation fence changed");
+    }
+    CO_RETURN_ON_ERROR(apply(job));
+    auto now = nowMs();
+    if (now == 0) co_return makeError(StatusCode::kDataCorruption, "invalid metadata clock");
+    auto expectedVersion = job.stateVersion++;
+    job.updatedAtMs = std::max(job.updatedAtMs, now);
+    auto updated = co_await UploadJobStore::update(txn, expectedVersion, job);
+    CO_RETURN_ON_ERROR(updated);
+    AdminMutateUploadJobRsp response;
+    response.job = std::move(*updated);
+    co_return response;
+  }
+
+ private:
+  Result<Void> apply(cache::UploadJobRecord &job) const {
+    if (req_.mutation == AdminUploadMutation::CANCEL) {
+      if (job.state == cache::UploadJobState::PUBLISHED || job.state == cache::UploadJobState::PUBLISHING) {
+        return makeError(CacheCode::kStateConflict, "published upload cannot be cancelled");
+      }
+      if (job.state == cache::UploadJobState::CANCELLED || job.state == cache::UploadJobState::ABORTING) {
+        return makeError(CacheCode::kStateConflict, "upload cancellation is already terminal or in progress");
+      }
+      job.writerLeaseId = Uuid::zero();
+      job.writerLeaseExpiresAtMs = 0;
+      job.error = "cancelled by cache administrator";
+      job.state = job.multipartId.empty() ? cache::UploadJobState::CANCELLED : cache::UploadJobState::ABORTING;
+      return Void{};
+    }
+    if (req_.mutation == AdminUploadMutation::RETRY) {
+      if (job.state != cache::UploadJobState::FAILED) {
+        return makeError(CacheCode::kStateConflict, "only failed uploads can be retried");
+      }
+      uint64_t uploaded = 0;
+      for (const auto &part : job.parts) uploaded += part.size;
+      job.error.clear();
+      if (job.multipartId.empty()) {
+        job.state = cache::UploadJobState::SEALED;
+      } else if (uploaded == job.stagingLength) {
+        job.state = cache::UploadJobState::COMPLETING;
+      } else {
+        job.state = cache::UploadJobState::UPLOADING;
+      }
+      return Void{};
+    }
+    return makeError(StatusCode::kInvalidArg, "invalid admin upload mutation");
+  }
+
+  const AdminMutateUploadJobReq &req_;
+};
+
 MetaStore::OpPtr<RenewWriteStagingLeaseRsp> MetaStore::renewWriteStagingLease(const RenewWriteStagingLeaseReq &req) {
   return std::make_unique<RenewWriteStagingLeaseOp>(*this, req);
 }
@@ -419,6 +485,10 @@ MetaStore::OpPtr<CheckpointUploadPartRsp> MetaStore::checkpointUploadPart(const 
 
 MetaStore::OpPtr<MutateMultipartUploadRsp> MetaStore::mutateMultipartUpload(const MutateMultipartUploadReq &req) {
   return std::make_unique<MutateMultipartUploadOp>(*this, req);
+}
+
+MetaStore::OpPtr<AdminMutateUploadJobRsp> MetaStore::adminMutateUploadJob(const AdminMutateUploadJobReq &req) {
+  return std::make_unique<AdminMutateUploadJobOp>(*this, req);
 }
 
 }  // namespace hf3fs::meta::server

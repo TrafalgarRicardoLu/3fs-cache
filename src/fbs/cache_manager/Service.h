@@ -301,6 +301,25 @@ struct GetPinStatusRsp {
   SERDE_STRUCT_FIELD(expiresAtMs, uint64_t{});
 };
 
+struct RunCacheReconcileReq {
+  SERDE_STRUCT_FIELD(user, flat::UserInfo{});
+  SERDE_STRUCT_FIELD(dryRun, true);
+  SERDE_STRUCT_FIELD(confirmRepair, false);
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    if (!dryRun && !confirmRepair) {
+      return makeError(StatusCode::kInvalidArg, "repair reconcile requires explicit confirmation");
+    }
+    return Void{};
+  }
+};
+struct RunCacheReconcileRsp {
+  SERDE_STRUCT_FIELD(progress, cache::ReconcileProgress{});
+  SERDE_STRUCT_FIELD(dryRun, true);
+};
+
 SERDE_SERVICE(CacheManagerSerde, 1) {
   SERDE_SERVICE_METHOD(ensureCached, 1, EnsureCachedReq, EnsureCachedRsp);
   SERDE_SERVICE_METHOD(reportCacheBlockInvalid, 2, ReportCacheBlockInvalidReq, ReportCacheBlockInvalidRsp);
@@ -315,6 +334,7 @@ SERDE_SERVICE(CacheManagerSerde, 1) {
   SERDE_SERVICE_METHOD(pinDataset, 11, PinDatasetReq, PinDatasetRsp);
   SERDE_SERVICE_METHOD(unpinDataset, 12, UnpinDatasetReq, UnpinDatasetRsp);
   SERDE_SERVICE_METHOD(getPinStatus, 13, GetPinStatusReq, GetPinStatusRsp);
+  SERDE_SERVICE_METHOD(runCacheReconcile, 14, RunCacheReconcileReq, RunCacheReconcileRsp);
 };
 
 }  // namespace hf3fs::cache_manager

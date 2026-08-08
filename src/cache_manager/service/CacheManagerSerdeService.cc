@@ -44,6 +44,7 @@ FORWARD_PHASE3_METHOD(cancelPrefetchJob, CancelPrefetchJobReq, CancelPrefetchJob
 FORWARD_PHASE3_METHOD(pinDataset, PinDatasetReq, PinDatasetRsp);
 FORWARD_PHASE3_METHOD(unpinDataset, UnpinDatasetReq, UnpinDatasetRsp);
 FORWARD_PHASE3_METHOD(getPinStatus, GetPinStatusReq, GetPinStatusRsp);
+FORWARD_PHASE3_METHOD(runCacheReconcile, RunCacheReconcileReq, RunCacheReconcileRsp);
 #undef FORWARD_PHASE3_METHOD
 
 }  // namespace hf3fs::cache_manager

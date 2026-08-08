@@ -2,12 +2,14 @@
 #include <gtest/gtest.h>
 #include <limits>
 
+#include "client/cli/admin/AdminEnv.h"
 #include "client/cli/admin/CacheOrchestration.h"
 #include "client/cli/admin/CacheOriginCli.h"
 #include "client/cli/admin/CachePhase2Rollout.h"
 #include "client/cli/admin/CachePhase3Rollout.h"
 #include "client/cli/admin/CachePhase4Rollout.h"
 #include "client/cli/admin/registerAdminCommands.h"
+#include "tests/GtestHelpers.h"
 
 namespace hf3fs::client::cli::test {
 namespace {
@@ -64,9 +66,60 @@ TEST(CacheAdminCli, RegistersLifecycleCommands) {
                               "cache-phase2-rollout",
                               "cache-prefetch",
                               "cache-pin",
+                              "cache-reconcile",
+                              "cache-upload",
                               "cache-phase3-rollout",
                               "cache-phase4-rollout"}) {
     EXPECT_TRUE(usages.contains(command)) << command;
+  }
+}
+
+TEST(CacheAdminCli, RequiresConfirmationBeforeDestructiveOperations) {
+  Dispatcher dispatcher;
+  ASSERT_OK(folly::coro::blockingWait(registerCacheReconcileHandler(dispatcher)));
+  ASSERT_OK(folly::coro::blockingWait(registerCacheUploadHandler(dispatcher)));
+  AdminEnv env;
+
+  auto reconcile = folly::coro::blockingWait(dispatcher.run(env, {"cache-reconcile", "run"}));
+  ASSERT_ERROR(reconcile, CliCode::kWrongUsage);
+  auto timeout = folly::coro::blockingWait(dispatcher.run(env, {"cache-reconcile", "dry-run", "--timeout-ms", "0"}));
+  ASSERT_ERROR(timeout, CliCode::kWrongUsage);
+  auto upload = folly::coro::blockingWait(
+      dispatcher.run(env, {"cache-upload", "cancel", "--job-id", Uuid::from(1, 2).toHexString()}));
+  ASSERT_ERROR(upload, CliCode::kWrongUsage);
+}
+
+TEST(CacheAdminCli, OperationalTablesRedactBackendDetails) {
+  cache::ReconcileProgress reconcile;
+  reconcile.runId = cache::ReconcileRunId{Uuid::from(1, 2)};
+  reconcile.state = cache::ReconcileRunState::FAILED;
+  reconcile.startedAtMs = reconcile.updatedAtMs = 10;
+  reconcile.error = "credential=secret";
+  auto reconcileTable = cacheReconcileTable(reconcile, true);
+  ASSERT_EQ(reconcileTable.size(), 2u);
+  EXPECT_EQ(reconcileTable[1].back(), "true");
+  for (const auto &column : reconcileTable[1]) EXPECT_EQ(column.find("secret"), std::string::npos);
+
+  cache::UploadJobRecord upload;
+  upload.jobId = cache::UploadJobId{Uuid::from(3, 4)};
+  upload.ownerUid = flat::Uid{1000};
+  upload.path = "/dataset/output";
+  upload.stagingInode = 42;
+  upload.stagingLength = 4096;
+  upload.destination = {cache::OriginId{1}, "bucket", "object"};
+  upload.state = cache::UploadJobState::FAILED;
+  upload.stateVersion = 5;
+  upload.createdAtMs = 10;
+  upload.updatedAtMs = 20;
+  upload.multipartId = "credential-bearing-upload-id";
+  upload.error = "access-key=secret";
+  auto row = cacheUploadJobRow(upload, true);
+  EXPECT_EQ(row.size(), 10u);
+  EXPECT_EQ(row[8], "true");
+  EXPECT_EQ(row[9], "true");
+  for (const auto &column : row) {
+    EXPECT_EQ(column.find("credential"), std::string::npos);
+    EXPECT_EQ(column.find("secret"), std::string::npos);
   }
 }
 

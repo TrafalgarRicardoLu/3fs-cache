@@ -136,6 +136,8 @@ CoTryTask<void> registerAdminCommands(Dispatcher &dispatcher) {
   CO_RETURN_ON_ERROR(co_await registerCachePhase4RolloutHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerCachePrefetchHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerCachePinHandler(dispatcher));
+  CO_RETURN_ON_ERROR(co_await registerCacheReconcileHandler(dispatcher));
+  CO_RETURN_ON_ERROR(co_await registerCacheUploadHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerRotateLastSrvHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerRotateAsPreferredOrderHandler(dispatcher));
   CO_RETURN_ON_ERROR(co_await registerDumpSessionHandler(dispatcher));

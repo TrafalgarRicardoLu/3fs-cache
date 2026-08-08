@@ -42,6 +42,10 @@ bool validTransition(cache::UploadJobState from, cache::UploadJobState to) {
       return to == cache::UploadJobState::PUBLISHED || to == cache::UploadJobState::FAILED;
     case cache::UploadJobState::ABORTING:
       return to == cache::UploadJobState::CANCELLED || to == cache::UploadJobState::FAILED;
+    case cache::UploadJobState::FAILED:
+      return to == cache::UploadJobState::SEALED || to == cache::UploadJobState::UPLOADING ||
+             to == cache::UploadJobState::COMPLETING || to == cache::UploadJobState::ABORTING ||
+             to == cache::UploadJobState::CANCELLED;
     default:
       return false;
   }
