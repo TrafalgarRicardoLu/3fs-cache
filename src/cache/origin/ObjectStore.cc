@@ -63,6 +63,8 @@ Result<Void> AbortMultipartUploadRequest::valid() const { return upload.valid();
 
 Result<Void> HeadCompletedUploadRequest::valid() const { return destination.valid(); }
 
+Result<Void> DeleteObjectRequest::valid() const { return object.valid(); }
+
 CoTryTask<ListObjectsPage> ObjectStore::listObjects(const ListObjectsRequest &) {
   co_return makeError(StatusCode::kNotImplemented, "object listing is not implemented");
 }
@@ -85,6 +87,10 @@ CoTryTask<Void> ObjectStore::abortMultipartUpload(const AbortMultipartUploadRequ
 
 CoTryTask<ObjectMetadata> ObjectStore::headCompletedUpload(const HeadCompletedUploadRequest &) {
   co_return makeError(StatusCode::kNotImplemented, "completed multipart HEAD is not implemented");
+}
+
+CoTryTask<Void> ObjectStore::deleteObject(const DeleteObjectRequest &) {
+  co_return makeError(StatusCode::kNotImplemented, "object deletion is not implemented");
 }
 
 }  // namespace hf3fs::cache::origin

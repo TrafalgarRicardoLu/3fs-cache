@@ -79,6 +79,12 @@ struct HeadCompletedUploadRequest {
   Result<Void> valid() const;
 };
 
+struct DeleteObjectRequest {
+  ImmutableObjectIdentity object;
+
+  Result<Void> valid() const;
+};
+
 class ObjectStore {
  public:
   virtual ~ObjectStore() = default;
@@ -91,6 +97,7 @@ class ObjectStore {
   virtual CoTryTask<ObjectMetadata> completeMultipartUpload(CompleteMultipartUploadRequest request);
   virtual CoTryTask<Void> abortMultipartUpload(const AbortMultipartUploadRequest &request);
   virtual CoTryTask<ObjectMetadata> headCompletedUpload(const HeadCompletedUploadRequest &request);
+  virtual CoTryTask<Void> deleteObject(const DeleteObjectRequest &request);
 };
 
 }  // namespace hf3fs::cache::origin

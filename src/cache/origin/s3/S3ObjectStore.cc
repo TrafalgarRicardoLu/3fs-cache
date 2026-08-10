@@ -303,6 +303,36 @@ Result<ObjectMetadata> S3ObjectStore::headCompletedUploadSync(const HeadComplete
   return result;
 }
 
+Result<Void> S3ObjectStore::deleteObjectSync(const DeleteObjectRequest &request) {
+  RETURN_ON_ERROR(request.valid());
+  if (request.object.version.type == VersionSelectorType::STRONG_ETAG) {
+    auto current = headSync({request.object.originId, request.object.bucket, request.object.key});
+    if (current.hasError() && current.error().code() == CacheCode::kNotFound) return Void{};
+    RETURN_ON_ERROR(current);
+    if (current->identity.version.type != VersionSelectorType::STRONG_ETAG ||
+        current->identity.version.value != request.object.version.value) {
+      return makeError(CacheCode::kVersionMismatch, "S3 orphan object identity changed before deletion");
+    }
+  }
+  auto permit = acquire(0);
+  RETURN_ON_ERROR(permit);
+  auto start = std::chrono::steady_clock::now();
+  for (uint32_t attempt = 0;; ++attempt) {
+    std::optional<std::string> versionId;
+    if (request.object.version.type == VersionSelectorType::VERSION_ID) versionId = request.object.version.value;
+    auto outcome = executor_->deleteObject({request.object.bucket, request.object.key, std::move(versionId)});
+    if (std::holds_alternative<S3DeleteObjectResponse>(outcome)) return Void{};
+    auto &failure = std::get<S3Failure>(outcome);
+    if (failure.kind == S3FailureKind::NOT_FOUND) return Void{};
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    auto retryDelay = config_.retryDelay * (attempt + 1);
+    if (!retryable(failure) || attempt >= config_.maxRetries || elapsed + retryDelay >= config_.totalTimeout) {
+      return mapFailure(failure);
+    }
+    std::this_thread::sleep_for(retryDelay);
+  }
+}
+
 CoTryTask<ObjectMetadata> S3ObjectStore::head(const ObjectRef &object) {
   auto task = folly::coro::co_invoke([this, object]() -> CoTryTask<ObjectMetadata> { co_return headSync(object); });
   co_return co_await std::move(task).scheduleOn(&ioExecutor_);
@@ -349,6 +379,11 @@ CoTryTask<Void> S3ObjectStore::abortMultipartUpload(const AbortMultipartUploadRe
 CoTryTask<ObjectMetadata> S3ObjectStore::headCompletedUpload(const HeadCompletedUploadRequest &request) {
   auto task = folly::coro::co_invoke(
       [this, request]() -> CoTryTask<ObjectMetadata> { co_return headCompletedUploadSync(request); });
+  co_return co_await std::move(task).scheduleOn(&ioExecutor_);
+}
+
+CoTryTask<Void> S3ObjectStore::deleteObject(const DeleteObjectRequest &request) {
+  auto task = folly::coro::co_invoke([this, request]() -> CoTryTask<Void> { co_return deleteObjectSync(request); });
   co_return co_await std::move(task).scheduleOn(&ioExecutor_);
 }
 

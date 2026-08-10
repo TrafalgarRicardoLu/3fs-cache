@@ -115,6 +115,14 @@ struct S3AbortMultipartRequest {
 
 struct S3AbortMultipartResponse {};
 
+struct S3DeleteObjectRequest {
+  std::string bucket;
+  std::string key;
+  std::optional<std::string> versionId;
+};
+
+struct S3DeleteObjectResponse {};
+
 template <typename T>
 using S3Outcome = std::variant<T, S3Failure>;
 
@@ -129,6 +137,7 @@ class S3RequestExecutor {
   virtual S3Outcome<S3UploadPartResponse> uploadPart(const S3UploadPartRequest &request) = 0;
   virtual S3Outcome<S3CompleteMultipartResponse> completeMultipartUpload(const S3CompleteMultipartRequest &request) = 0;
   virtual S3Outcome<S3AbortMultipartResponse> abortMultipartUpload(const S3AbortMultipartRequest &request) = 0;
+  virtual S3Outcome<S3DeleteObjectResponse> deleteObject(const S3DeleteObjectRequest &request) = 0;
 };
 
 }  // namespace hf3fs::cache::origin::s3

@@ -114,9 +114,11 @@ TEST(CacheAdminCli, OperationalTablesRedactBackendDetails) {
   upload.multipartId = "credential-bearing-upload-id";
   upload.error = "access-key=secret";
   auto row = cacheUploadJobRow(upload, true);
-  EXPECT_EQ(row.size(), 10u);
-  EXPECT_EQ(row[8], "true");
-  EXPECT_EQ(row[9], "true");
+  EXPECT_EQ(row.size(), 12u);
+  EXPECT_EQ(row[8], "NONE");
+  EXPECT_EQ(row[9], "0");
+  EXPECT_EQ(row[10], "true");
+  EXPECT_EQ(row[11], "true");
   for (const auto &column : row) {
     EXPECT_EQ(column.find("credential"), std::string::npos);
     EXPECT_EQ(column.find("secret"), std::string::npos);

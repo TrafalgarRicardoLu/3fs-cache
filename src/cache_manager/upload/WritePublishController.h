@@ -12,6 +12,7 @@
 #include "cache_manager/upload/MultipartUploadFinalizer.h"
 #include "cache_manager/upload/MultipartUploader.h"
 #include "common/utils/Coroutine.h"
+#include "common/utils/Duration.h"
 #include "fbs/meta/Service.h"
 
 namespace hf3fs::cache_manager {
@@ -30,6 +31,7 @@ struct WritePublishControllerConfig {
   uint32_t cacheBlockSize{4U << 20};
   uint32_t cacheStripeSize{1};
   uint32_t publishedPrefetchPriority{static_cast<uint32_t>(std::numeric_limits<int32_t>::max())};
+  Duration orphanCleanupRetention{24_h};
   MultipartUploaderConfig uploader;
   MultipartUploadFinalizerConfig finalizer;
 
@@ -58,6 +60,8 @@ class WritePublishControllerBackend {
   virtual CoTryTask<cache::UploadJobRecord> upload(cache::UploadJobRecord job) = 0;
   virtual CoTryTask<cache::UploadJobRecord> complete(cache::UploadJobRecord job) = 0;
   virtual CoTryTask<cache::UploadJobRecord> publish(cache::UploadJobRecord job) = 0;
+  virtual CoTryTask<cache::UploadJobRecord> failPublish(cache::UploadJobRecord job, const Status &failure) = 0;
+  virtual CoTryTask<cache::UploadJobRecord> cleanupOrphan(cache::UploadJobRecord job) = 0;
   virtual CoTryTask<cache::UploadJobRecord> warm(cache::UploadJobRecord job) = 0;
   virtual CoTryTask<cache::UploadJobRecord> abort(cache::UploadJobRecord job) = 0;
   virtual void stop() = 0;
@@ -81,6 +85,8 @@ class RealWritePublishControllerBackend final : public WritePublishControllerBac
   CoTryTask<cache::UploadJobRecord> upload(cache::UploadJobRecord job) final;
   CoTryTask<cache::UploadJobRecord> complete(cache::UploadJobRecord job) final;
   CoTryTask<cache::UploadJobRecord> publish(cache::UploadJobRecord job) final;
+  CoTryTask<cache::UploadJobRecord> failPublish(cache::UploadJobRecord job, const Status &failure) final;
+  CoTryTask<cache::UploadJobRecord> cleanupOrphan(cache::UploadJobRecord job) final;
   CoTryTask<cache::UploadJobRecord> warm(cache::UploadJobRecord job) final;
   CoTryTask<cache::UploadJobRecord> abort(cache::UploadJobRecord job) final;
   void stop() final;

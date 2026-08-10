@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <string_view>
 #include <sys/stat.h>
@@ -371,12 +372,12 @@ class MutateMultipartUploadOp : public WriteStagingOperation<MutateMultipartUplo
     if (job.stateVersion != req_.expectedStateVersion) {
       co_return makeError(CacheCode::kStateConflict, "multipart upload mutation fence changed");
     }
-    CO_RETURN_ON_ERROR(apply(job));
+    auto now = nowMs();
+    if (now == 0) co_return makeError(StatusCode::kDataCorruption, "invalid metadata clock");
+    CO_RETURN_ON_ERROR(apply(job, now));
     if (req_.mutation == MultipartUploadMutation::FINISH_ABORT) {
       CO_RETURN_ON_ERROR(co_await cleanupStaging(txn, job));
     }
-    auto now = nowMs();
-    if (now == 0) co_return makeError(StatusCode::kDataCorruption, "invalid metadata clock");
     auto expectedVersion = job.stateVersion;
     job.stateVersion++;
     job.updatedAtMs = std::max(job.updatedAtMs, now);
@@ -403,12 +404,27 @@ class MutateMultipartUploadOp : public WriteStagingOperation<MutateMultipartUplo
         return job.state == cache::UploadJobState::CANCELLED;
       case MultipartUploadMutation::MARK_PREFETCH_SUBMITTED:
         return job.state == cache::UploadJobState::PUBLISHED;
+      case MultipartUploadMutation::FAIL_PUBLISH:
+        return job.state == cache::UploadJobState::FAILED && job.error == req_.error &&
+               job.orphanCleanupState == cache::OrphanCleanupState::PENDING &&
+               job.orphanCleanupEligibleAtMs == req_.orphanCleanupEligibleAtMs;
+      case MultipartUploadMutation::BEGIN_ORPHAN_DELETE:
+        return (job.orphanCleanupState == cache::OrphanCleanupState::PENDING &&
+                job.orphanCleanupEligibleAtMs == req_.orphanCleanupEligibleAtMs) ||
+               (job.orphanCleanupState == cache::OrphanCleanupState::DELETING &&
+                job.orphanCleanupOperationId == req_.orphanCleanupOperationId);
+      case MultipartUploadMutation::FINISH_ORPHAN_DELETE:
+        return job.orphanCleanupState == cache::OrphanCleanupState::COMPLETE &&
+               job.orphanCleanupOperationId == req_.orphanCleanupOperationId;
+      case MultipartUploadMutation::FAIL_ORPHAN_DELETE:
+        return job.orphanCleanupState == cache::OrphanCleanupState::CONFLICT &&
+               job.orphanCleanupOperationId == req_.orphanCleanupOperationId;
       default:
         return false;
     }
   }
 
-  Result<Void> apply(cache::UploadJobRecord &job) const {
+  Result<Void> apply(cache::UploadJobRecord &job, uint64_t now) const {
     uint64_t uploaded = 0;
     for (const auto &part : job.parts) uploaded += part.size;
     switch (req_.mutation) {
@@ -445,6 +461,55 @@ class MutateMultipartUploadOp : public WriteStagingOperation<MutateMultipartUplo
         if (job.state != cache::UploadJobState::PUBLISHED) {
           return makeError(CacheCode::kStateConflict, "upload is not published");
         }
+        return Void{};
+      case MultipartUploadMutation::FAIL_PUBLISH:
+        if (job.state != cache::UploadJobState::PUBLISHING || !job.completedObject || job.publishedInode != 0) {
+          return makeError(CacheCode::kStateConflict, "only an unpublished completed object can fail publishing");
+        }
+        job.state = cache::UploadJobState::FAILED;
+        job.error = req_.error;
+        job.orphanCleanupState = cache::OrphanCleanupState::PENDING;
+        job.orphanCleanupEligibleAtMs = req_.orphanCleanupEligibleAtMs;
+        return Void{};
+      case MultipartUploadMutation::BEGIN_ORPHAN_DELETE:
+        if ((job.state != cache::UploadJobState::FAILED && job.state != cache::UploadJobState::CANCELLED) ||
+            !job.completedObject || job.publishedInode != 0 ||
+            (job.orphanCleanupState != cache::OrphanCleanupState::NONE &&
+             job.orphanCleanupState != cache::OrphanCleanupState::PENDING)) {
+          return makeError(CacheCode::kStateConflict, "upload object is not eligible for orphan cleanup");
+        }
+        if (job.orphanCleanupState == cache::OrphanCleanupState::NONE) {
+          job.orphanCleanupState = cache::OrphanCleanupState::PENDING;
+          job.orphanCleanupEligibleAtMs = req_.orphanCleanupEligibleAtMs;
+        } else if (job.orphanCleanupEligibleAtMs != req_.orphanCleanupEligibleAtMs) {
+          return makeError(CacheCode::kStateConflict, "orphan cleanup eligibility changed");
+        }
+        if (now >= job.orphanCleanupEligibleAtMs) {
+          if (job.orphanCleanupAttempts == std::numeric_limits<uint32_t>::max()) {
+            return makeError(CacheCode::kStateConflict, "orphan cleanup attempt counter exhausted");
+          }
+          job.orphanCleanupState = cache::OrphanCleanupState::DELETING;
+          job.orphanCleanupOperationId = req_.orphanCleanupOperationId;
+          ++job.orphanCleanupAttempts;
+        }
+        return Void{};
+      case MultipartUploadMutation::FINISH_ORPHAN_DELETE:
+        if ((job.state != cache::UploadJobState::FAILED && job.state != cache::UploadJobState::CANCELLED) ||
+            job.orphanCleanupState != cache::OrphanCleanupState::DELETING ||
+            job.orphanCleanupOperationId != req_.orphanCleanupOperationId || !job.completedObject ||
+            job.publishedInode != 0) {
+          return makeError(CacheCode::kStateConflict, "orphan cleanup completion fence changed");
+        }
+        job.orphanCleanupState = cache::OrphanCleanupState::COMPLETE;
+        return Void{};
+      case MultipartUploadMutation::FAIL_ORPHAN_DELETE:
+        if ((job.state != cache::UploadJobState::FAILED && job.state != cache::UploadJobState::CANCELLED) ||
+            job.orphanCleanupState != cache::OrphanCleanupState::DELETING ||
+            job.orphanCleanupOperationId != req_.orphanCleanupOperationId) {
+          return makeError(CacheCode::kStateConflict, "orphan cleanup failure fence changed");
+        }
+        job.orphanCleanupState = cache::OrphanCleanupState::CONFLICT;
+        job.error = req_.error;
         return Void{};
       default:
         return makeError(StatusCode::kInvalidArg, "invalid multipart upload mutation");
@@ -505,10 +570,21 @@ class AdminMutateUploadJobOp : public WriteStagingOperation<AdminMutateUploadJob
       if (job.state != cache::UploadJobState::FAILED) {
         return makeError(CacheCode::kStateConflict, "only failed uploads can be retried");
       }
+      if (job.orphanCleanupState == cache::OrphanCleanupState::DELETING ||
+          job.orphanCleanupState == cache::OrphanCleanupState::COMPLETE ||
+          job.orphanCleanupState == cache::OrphanCleanupState::CONFLICT) {
+        return makeError(CacheCode::kStateConflict, "failed upload object cleanup has already started");
+      }
       uint64_t uploaded = 0;
       for (const auto &part : job.parts) uploaded += part.size;
       job.error.clear();
-      if (job.multipartId.empty()) {
+      job.orphanCleanupState = cache::OrphanCleanupState::NONE;
+      job.orphanCleanupOperationId = Uuid::zero();
+      job.orphanCleanupEligibleAtMs = 0;
+      job.orphanCleanupAttempts = 0;
+      if (job.completedObject) {
+        job.state = cache::UploadJobState::PUBLISHING;
+      } else if (job.multipartId.empty()) {
         job.state = cache::UploadJobState::SEALED;
       } else if (uploaded == job.stagingLength) {
         job.state = cache::UploadJobState::COMPLETING;

@@ -228,6 +228,8 @@ CoTryTask<Dispatcher::OutputTable> handleUpload(IEnv &ienv,
                                  "StagingBytes",
                                  "UploadedParts",
                                  "UpdatedAtMs",
+                                 "OrphanCleanupState",
+                                 "OrphanCleanupAttempts",
                                  "HasError",
                                  "More"}};
   auto idText = parser.present<std::string>("--job-id");
@@ -370,6 +372,8 @@ Dispatcher::OutputRow cacheUploadJobRow(const cache::UploadJobRecord &job, bool 
           std::to_string(job.stagingLength),
           std::to_string(job.parts.size()),
           std::to_string(job.updatedAtMs),
+          std::string(magic_enum::enum_name(job.orphanCleanupState)),
+          std::to_string(job.orphanCleanupAttempts),
           job.error.empty() ? "false" : "true",
           more ? "true" : "false"};
 }

@@ -149,6 +149,9 @@ class FakeBackend : public WritePublishControllerBackend {
 
   CoTryTask<cache::UploadJobRecord> publish(cache::UploadJobRecord value) final {
     published.push_back(value.jobId);
+    if (failPublishPermanent && value.jobId == *failPublishPermanent) {
+      co_return makeError(CacheCode::kAccessDenied, "injected permanent publish failure");
+    }
     value.state = cache::UploadJobState::PUBLISHED;
     value.publishedInode = value.stagingInode + 1000;
     ++value.stateVersion;
@@ -158,6 +161,29 @@ class FakeBackend : public WritePublishControllerBackend {
       failPublishAfterCommit.reset();
       co_return makeError(CacheCode::kTimeout, "injected lost publish response");
     }
+    co_return value;
+  }
+
+  CoTryTask<cache::UploadJobRecord> failPublish(cache::UploadJobRecord value, const Status &) final {
+    value.state = cache::UploadJobState::FAILED;
+    value.error = "publish failed";
+    value.orphanCleanupState = cache::OrphanCleanupState::PENDING;
+    value.orphanCleanupEligibleAtMs = 1;
+    ++value.stateVersion;
+    auto found = std::find_if(jobs.begin(), jobs.end(), [&](const auto &job) { return job.jobId == value.jobId; });
+    if (found != jobs.end()) *found = value;
+    co_return value;
+  }
+
+  CoTryTask<cache::UploadJobRecord> cleanupOrphan(cache::UploadJobRecord value) final {
+    cleanedOrphans.push_back(value.jobId);
+    value.orphanCleanupState = cache::OrphanCleanupState::COMPLETE;
+    value.orphanCleanupOperationId = Uuid::from(1, 1);
+    value.orphanCleanupEligibleAtMs = value.orphanCleanupEligibleAtMs == 0 ? 1 : value.orphanCleanupEligibleAtMs;
+    ++value.orphanCleanupAttempts;
+    ++value.stateVersion;
+    auto found = std::find_if(jobs.begin(), jobs.end(), [&](const auto &job) { return job.jobId == value.jobId; });
+    if (found != jobs.end()) *found = value;
     co_return value;
   }
 
@@ -191,11 +217,13 @@ class FakeBackend : public WritePublishControllerBackend {
   std::vector<cache::UploadJobId> aborted;
   std::vector<cache::UploadJobId> recoveredOpen;
   std::vector<cache::UploadJobId> finalizedCancelled;
+  std::vector<cache::UploadJobId> cleanedOrphans;
   std::vector<cache::UploadJobId> warmedSubmitted;
   std::function<void()> onUpload;
   std::optional<cache::UploadJobId> failUpload;
   std::optional<cache::UploadJobId> failWarm;
   std::optional<cache::UploadJobId> failPublishAfterCommit;
+  std::optional<cache::UploadJobId> failPublishPermanent;
   uint32_t listCalls{0};
   uint32_t stopCalls{0};
   std::vector<bool> includeTerminalRequests;
@@ -342,6 +370,19 @@ TEST(TestWritePublishController, LostPublishResponseRecoversWithoutRepublishing)
   EXPECT_EQ(recovered->completed, 1);
   EXPECT_EQ(backend->published.size(), 1);
   EXPECT_EQ(backend->warmed, std::vector<cache::UploadJobId>{backend->jobs.front().jobId});
+}
+
+TEST(TestWritePublishController, PermanentPublishFailureCheckpointsAndDeletesOrphan) {
+  auto backend = std::make_shared<FakeBackend>();
+  backend->jobs = {job(10, cache::UploadJobState::PUBLISHING)};
+  backend->failPublishPermanent = backend->jobs.front().jobId;
+  WritePublishController controller(backend, config());
+
+  auto result = folly::coro::blockingWait(controller.runOnce());
+  ASSERT_OK(result);
+  ASSERT_EQ(backend->jobs.front().state, cache::UploadJobState::FAILED);
+  ASSERT_EQ(backend->jobs.front().orphanCleanupState, cache::OrphanCleanupState::COMPLETE);
+  ASSERT_EQ(backend->cleanedOrphans, std::vector<cache::UploadJobId>{backend->jobs.front().jobId});
 }
 
 TEST(TestWritePublishController, ValidatesLimitsAndRejectsBrokenPagination) {

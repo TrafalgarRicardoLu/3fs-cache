@@ -131,6 +131,10 @@ Result<Void> UploadJobRecord::valid() const {
       error.find('\0') != std::string::npos) {
     return makeError(StatusCode::kInvalidArg, "invalid upload job state, bounds, or timestamp");
   }
+  if (orphanCleanupState > OrphanCleanupState::CONFLICT) {
+    return makeError(StatusCode::kInvalidArg,
+                     "invalid orphan cleanup state " + std::to_string(static_cast<uint8_t>(orphanCleanupState)));
+  }
   uint32_t expectedPart = 1;
   uint64_t uploadedBytes = 0;
   for (const auto &part : parts) {
@@ -158,8 +162,10 @@ Result<Void> UploadJobRecord::valid() const {
   if (needsMultipart && multipartId.empty()) {
     return makeError(StatusCode::kInvalidArg, "active multipart job has no upload id");
   }
-  const bool completed = state == UploadJobState::PUBLISHING || state == UploadJobState::PUBLISHED;
-  if (completed != completedObject.has_value()) {
+  const bool requiresCompleted = state == UploadJobState::PUBLISHING || state == UploadJobState::PUBLISHED;
+  const bool permitsCompleted =
+      requiresCompleted || state == UploadJobState::FAILED || state == UploadJobState::CANCELLED;
+  if ((requiresCompleted && !completedObject) || (!permitsCompleted && completedObject)) {
     return makeError(StatusCode::kInvalidArg, "upload completion identity does not match job state");
   }
   if (completedObject) {
@@ -171,6 +177,16 @@ Result<Void> UploadJobRecord::valid() const {
   }
   if ((state == UploadJobState::PUBLISHED) != (publishedInode != 0)) {
     return makeError(StatusCode::kInvalidArg, "published inode does not match upload job state");
+  }
+  const bool hasCleanup = orphanCleanupState != OrphanCleanupState::NONE;
+  const bool hasCleanupOperation = orphanCleanupState == OrphanCleanupState::DELETING ||
+                                   orphanCleanupState == OrphanCleanupState::COMPLETE ||
+                                   orphanCleanupState == OrphanCleanupState::CONFLICT;
+  if (hasCleanup != (orphanCleanupEligibleAtMs != 0) ||
+      hasCleanupOperation != (orphanCleanupOperationId != Uuid::zero()) ||
+      (hasCleanup && (!completedObject || (state != UploadJobState::FAILED && state != UploadJobState::CANCELLED))) ||
+      (!hasCleanup && orphanCleanupAttempts != 0)) {
+    return makeError(StatusCode::kInvalidArg, "orphan cleanup checkpoint does not match upload state");
   }
   return Void{};
 }

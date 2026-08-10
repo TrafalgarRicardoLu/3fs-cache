@@ -11,12 +11,22 @@
 #include "common/utils/UtcTime.h"
 
 namespace hf3fs::cache_manager {
+namespace {
+bool retryablePublishFailure(const Status &status) {
+  return status.code() == CacheCode::kThrottled || status.code() == CacheCode::kUnavailable ||
+         status.code() == CacheCode::kTimeout || status.code() == RPCCode::kTimeout ||
+         status.code() == MetaCode::kRequestCanceled;
+}
+}  // namespace
+
 Result<Void> WritePublishControllerConfig::valid() const {
   if (pageSize == 0 || pageSize > cache::kMaxPhase2BatchItems || globalConcurrency == 0 ||
       globalConcurrency > cache::kMaxPhase2BatchItems || perOwnerConcurrency == 0 ||
-      perOwnerConcurrency > globalConcurrency || perOriginConcurrency == 0 || perOriginConcurrency > globalConcurrency ||
+      perOwnerConcurrency > globalConcurrency || perOriginConcurrency == 0 ||
+      perOriginConcurrency > globalConcurrency ||
       !cacheTableId || cacheBlockSize == 0 || cacheStripeSize == 0 ||
-      publishedPrefetchPriority > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {
+      publishedPrefetchPriority > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) ||
+      orphanCleanupRetention < 0_ns) {
     return makeError(StatusCode::kInvalidConfig, "invalid write publish controller limits or layout");
   }
   RETURN_ON_ERROR(uploader.valid());
@@ -186,6 +196,97 @@ CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::publish(cac
   co_return job;
 }
 
+CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::failPublish(cache::UploadJobRecord job,
+                                                                                const Status &) {
+  auto nowUs = UtcClock::now().toMicroseconds();
+  if (nowUs <= 0) co_return makeError(StatusCode::kDataCorruption, "cache manager clock is invalid");
+  auto nowMs = static_cast<uint64_t>(nowUs / 1000);
+  auto retentionMs = static_cast<uint64_t>(config_.orphanCleanupRetention.asMs().count());
+  auto eligibleAt = nowMs + std::min(retentionMs, std::numeric_limits<uint64_t>::max() - nowMs);
+  meta::MutateMultipartUploadReq request;
+  request.service = service_;
+  request.jobId = job.jobId;
+  request.expectedStateVersion = job.stateVersion;
+  request.multipartId = job.multipartId;
+  request.mutation = meta::MultipartUploadMutation::FAIL_PUBLISH;
+  request.error = "origin publish failed permanently";
+  request.orphanCleanupEligibleAtMs = eligibleAt;
+  request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto response = co_await metaClient_->mutateMultipartUpload(std::move(request));
+  CO_RETURN_ON_ERROR(response);
+  co_return std::move(response->job);
+}
+
+CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::cleanupOrphan(cache::UploadJobRecord job) {
+  if (!objectStore_ || !job.completedObject) {
+    co_return makeError(StatusCode::kInvalidConfig, "orphan cleanup object store or identity is missing");
+  }
+  auto operationId = job.orphanCleanupState == cache::OrphanCleanupState::DELETING
+                         ? job.orphanCleanupOperationId
+                         : Uuid::random();
+  if (job.orphanCleanupState != cache::OrphanCleanupState::DELETING) {
+    auto nowUs = UtcClock::now().toMicroseconds();
+    if (nowUs <= 0) co_return makeError(StatusCode::kDataCorruption, "cache manager clock is invalid");
+    auto nowMs = static_cast<uint64_t>(nowUs / 1000);
+    auto retentionMs = static_cast<uint64_t>(config_.orphanCleanupRetention.asMs().count());
+    auto eligibleAt = job.orphanCleanupState == cache::OrphanCleanupState::PENDING
+                          ? job.orphanCleanupEligibleAtMs
+                          : job.updatedAtMs +
+                                std::min(retentionMs, std::numeric_limits<uint64_t>::max() - job.updatedAtMs);
+    if (job.orphanCleanupState == cache::OrphanCleanupState::PENDING && nowMs < eligibleAt) co_return job;
+    meta::MutateMultipartUploadReq begin;
+    begin.service = service_;
+    begin.jobId = job.jobId;
+    begin.expectedStateVersion = job.stateVersion;
+    begin.multipartId = job.multipartId;
+    begin.mutation = meta::MultipartUploadMutation::BEGIN_ORPHAN_DELETE;
+    begin.orphanCleanupOperationId = operationId;
+    begin.orphanCleanupEligibleAtMs = eligibleAt;
+    begin.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto begun = co_await metaClient_->mutateMultipartUpload(std::move(begin));
+    CO_RETURN_ON_ERROR(begun);
+    job = std::move(begun->job);
+    if (job.orphanCleanupState != cache::OrphanCleanupState::DELETING) co_return job;
+    operationId = job.orphanCleanupOperationId;
+  }
+  auto markConflict = [&](std::string error) -> CoTryTask<cache::UploadJobRecord> {
+    meta::MutateMultipartUploadReq conflict;
+    conflict.service = service_;
+    conflict.jobId = job.jobId;
+    conflict.expectedStateVersion = job.stateVersion;
+    conflict.multipartId = job.multipartId;
+    conflict.mutation = meta::MultipartUploadMutation::FAIL_ORPHAN_DELETE;
+    conflict.orphanCleanupOperationId = operationId;
+    conflict.error = std::move(error);
+    conflict.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto marked = co_await metaClient_->mutateMultipartUpload(std::move(conflict));
+    CO_RETURN_ON_ERROR(marked);
+    co_return std::move(marked->job);
+  };
+  if (job.completedObject->version.type == cache::VersionSelectorType::STRONG_ETAG &&
+      !job.completedObject->key.ends_with(job.jobId.toUnderType().toHexString())) {
+    co_return co_await markConflict("orphan object key is not unique to its upload job; automatic deletion stopped");
+  }
+  auto deleted = co_await objectStore_->deleteObject({*job.completedObject});
+  if (deleted.hasError()) {
+    if (deleted.error().code() != CacheCode::kVersionMismatch) {
+      co_return makeError(deleted.error().code(), deleted.error().message());
+    }
+    co_return co_await markConflict("orphan object identity changed; automatic deletion stopped");
+  }
+  meta::MutateMultipartUploadReq finish;
+  finish.service = service_;
+  finish.jobId = job.jobId;
+  finish.expectedStateVersion = job.stateVersion;
+  finish.multipartId = job.multipartId;
+  finish.mutation = meta::MultipartUploadMutation::FINISH_ORPHAN_DELETE;
+  finish.orphanCleanupOperationId = operationId;
+  finish.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto finished = co_await metaClient_->mutateMultipartUpload(std::move(finish));
+  CO_RETURN_ON_ERROR(finished);
+  co_return std::move(finished->job);
+}
+
 CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::warm(cache::UploadJobRecord job) {
   if (stopping_.load(std::memory_order_acquire)) {
     co_return makeError(MetaCode::kRequestCanceled, "write publish controller stopped");
@@ -261,7 +362,10 @@ bool WritePublishController::actionable(const cache::UploadJobRecord &job) {
   return job.state == cache::UploadJobState::OPEN || job.state == cache::UploadJobState::SEALED ||
          job.state == cache::UploadJobState::UPLOADING ||
          job.state == cache::UploadJobState::COMPLETING || job.state == cache::UploadJobState::PUBLISHING ||
-         job.state == cache::UploadJobState::ABORTING || job.state == cache::UploadJobState::PUBLISHED;
+         job.state == cache::UploadJobState::ABORTING || job.state == cache::UploadJobState::PUBLISHED ||
+         ((job.state == cache::UploadJobState::FAILED || job.state == cache::UploadJobState::CANCELLED) &&
+          job.completedObject && job.orphanCleanupState != cache::OrphanCleanupState::COMPLETE &&
+          job.orphanCleanupState != cache::OrphanCleanupState::CONFLICT);
 }
 
 CoTryTask<std::vector<cache::UploadJobRecord>> WritePublishController::scanExpiredOpen() {
@@ -340,7 +444,11 @@ CoTryTask<void> WritePublishController::migrateActiveIndex() {
                                    : std::optional<cache::UploadJobId>{page->jobs.back().jobId};
     for (auto &job : page->jobs) {
       if (job.state == cache::UploadJobState::CANCELLED) {
-        CO_RETURN_ON_ERROR(co_await backend_->finalizeCancelled(std::move(job)));
+        auto finalized = co_await backend_->finalizeCancelled(std::move(job));
+        CO_RETURN_ON_ERROR(finalized);
+        if (finalized->completedObject) CO_RETURN_ON_ERROR(co_await backend_->cleanupOrphan(std::move(*finalized)));
+      } else if (job.state == cache::UploadJobState::FAILED && job.completedObject) {
+        CO_RETURN_ON_ERROR(co_await backend_->cleanupOrphan(std::move(job)));
       }
     }
     if (!page->more) co_return Void{};
@@ -415,13 +523,29 @@ CoTryTask<cache::UploadJobRecord> WritePublishController::advance(cache::UploadJ
   }
   if (stopping_.load(std::memory_order_acquire)) co_return job;
   if (job.state == cache::UploadJobState::PUBLISHING) {
-    auto published = co_await backend_->publish(std::move(job));
-    CO_RETURN_ON_ERROR(published);
-    job = std::move(*published);
+    auto published = co_await backend_->publish(job);
+    if (published.hasError()) {
+      if (retryablePublishFailure(published.error())) {
+        co_return makeError(published.error().code(), published.error().message());
+      }
+      auto failed = co_await backend_->failPublish(std::move(job), published.error());
+      CO_RETURN_ON_ERROR(failed);
+      job = std::move(*failed);
+    } else {
+      job = std::move(*published);
+    }
   } else if (job.state == cache::UploadJobState::ABORTING) {
     auto aborted = co_await backend_->abort(std::move(job));
     CO_RETURN_ON_ERROR(aborted);
     job = std::move(*aborted);
+  }
+  if (!stopping_.load(std::memory_order_acquire) &&
+      (job.state == cache::UploadJobState::FAILED || job.state == cache::UploadJobState::CANCELLED) &&
+      job.completedObject && job.orphanCleanupState != cache::OrphanCleanupState::COMPLETE &&
+      job.orphanCleanupState != cache::OrphanCleanupState::CONFLICT) {
+    auto cleaned = co_await backend_->cleanupOrphan(std::move(job));
+    CO_RETURN_ON_ERROR(cleaned);
+    job = std::move(*cleaned);
   }
   if (!stopping_.load(std::memory_order_acquire) && job.state == cache::UploadJobState::PUBLISHED) {
     auto warmed = co_await backend_->warm(std::move(job));

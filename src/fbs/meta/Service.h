@@ -1024,6 +1024,10 @@ enum class MultipartUploadMutation : uint8_t {
   BEGIN_ABORT = 3,
   FINISH_ABORT = 4,
   MARK_PREFETCH_SUBMITTED = 5,
+  FAIL_PUBLISH = 6,
+  BEGIN_ORPHAN_DELETE = 7,
+  FINISH_ORPHAN_DELETE = 8,
+  FAIL_ORPHAN_DELETE = 9,
 };
 
 struct MutateMultipartUploadReq : ReqBase {
@@ -1034,6 +1038,8 @@ struct MutateMultipartUploadReq : ReqBase {
   SERDE_STRUCT_FIELD(mutation, MultipartUploadMutation::INVALID);
   SERDE_STRUCT_FIELD(completedObject, std::optional<cache::ImmutableObjectIdentity>{});
   SERDE_STRUCT_FIELD(error, std::string{});
+  SERDE_STRUCT_FIELD(orphanCleanupOperationId, Uuid::zero());
+  SERDE_STRUCT_FIELD(orphanCleanupEligibleAtMs, uint64_t{});
   SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
 
  public:
@@ -1042,15 +1048,33 @@ struct MutateMultipartUploadReq : ReqBase {
     if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || multipartId.empty() ||
         multipartId.size() > cache::kMaxMultipartUploadIdBytes || multipartId.find('\0') != std::string::npos ||
         error.size() > cache::kMaxUploadErrorBytes || error.find('\0') != std::string::npos ||
-        mutation > MultipartUploadMutation::MARK_PREFETCH_SUBMITTED) {
+        mutation > MultipartUploadMutation::FAIL_ORPHAN_DELETE) {
       return INVALID("invalid multipart upload mutation fence");
     }
     if (mutation == MultipartUploadMutation::SAVE_COMPLETED) {
       if (!completedObject || !error.empty()) return INVALID("completed upload mutation has invalid result");
       return completedObject->valid();
     }
+    if (mutation == MultipartUploadMutation::FAIL_PUBLISH) {
+      if (completedObject || error.empty() || orphanCleanupOperationId != Uuid::zero() ||
+          orphanCleanupEligibleAtMs == 0) {
+        return INVALID("failed publish mutation has invalid cleanup checkpoint");
+      }
+      return VALID;
+    }
+    if (mutation == MultipartUploadMutation::BEGIN_ORPHAN_DELETE ||
+        mutation == MultipartUploadMutation::FINISH_ORPHAN_DELETE ||
+        mutation == MultipartUploadMutation::FAIL_ORPHAN_DELETE) {
+      if (completedObject || (mutation == MultipartUploadMutation::FAIL_ORPHAN_DELETE) != !error.empty() ||
+          orphanCleanupOperationId == Uuid::zero() ||
+          (mutation == MultipartUploadMutation::BEGIN_ORPHAN_DELETE) != (orphanCleanupEligibleAtMs != 0)) {
+        return INVALID("orphan delete mutation has invalid cleanup fence");
+      }
+      return VALID;
+    }
     if (completedObject || (mutation == MultipartUploadMutation::BEGIN_ABORT) != !error.empty() ||
-        mutation == MultipartUploadMutation::INVALID) {
+        mutation == MultipartUploadMutation::INVALID || orphanCleanupOperationId != Uuid::zero() ||
+        orphanCleanupEligibleAtMs != 0) {
       return INVALID("multipart upload mutation has invalid fields");
     }
     return VALID;

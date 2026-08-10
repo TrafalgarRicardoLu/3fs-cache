@@ -20,6 +20,7 @@
 #include <aws/s3/model/CompletedMultipartUpload.h>
 #include <aws/s3/model/CompletedPart.h>
 #include <aws/s3/model/CreateMultipartUploadRequest.h>
+#include <aws/s3/model/DeleteObjectRequest.h>
 #include <aws/s3/model/GetObjectRequest.h>
 #include <aws/s3/model/HeadObjectRequest.h>
 #include <aws/s3/model/ListObjectsV2Request.h>
@@ -236,6 +237,16 @@ class AwsS3RequestExecutor final : public S3RequestExecutor {
     auto outcome = client_->AbortMultipartUpload(awsRequest);
     if (!outcome.IsSuccess()) return mapAwsFailure(outcome.GetError());
     return S3AbortMultipartResponse{};
+  }
+
+  S3Outcome<S3DeleteObjectResponse> deleteObject(const S3DeleteObjectRequest &request) override {
+    Aws::S3::Model::DeleteObjectRequest awsRequest;
+    awsRequest.SetBucket(request.bucket.c_str());
+    awsRequest.SetKey(request.key.c_str());
+    if (request.versionId) awsRequest.SetVersionId(request.versionId->c_str());
+    auto outcome = client_->DeleteObject(awsRequest);
+    if (!outcome.IsSuccess()) return mapAwsFailure(outcome.GetError());
+    return S3DeleteObjectResponse{};
   }
 
  private:

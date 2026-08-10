@@ -1,6 +1,7 @@
 #include <folly/experimental/coro/BlockingWait.h>
 #include <folly/experimental/coro/Sleep.h>
 #include <gtest/gtest.h>
+#include <limits>
 
 #include "cache/metrics/CacheMetrics.h"
 #include "meta/store/FileSession.h"
@@ -825,6 +826,92 @@ TEST_F(TestWriteStaging, AdminListsCancelsAndRetriesUploadsWithFences) {
     CO_ASSERT_OK(retried);
     CO_ASSERT_EQ(retried->job.state, cache::UploadJobState::SEALED);
     CO_ASSERT_TRUE(retried->job.error.empty());
+  }());
+}
+
+TEST_F(TestWriteStaging, CheckpointsFailedPublishOrphanDeletionAndFencesRetry) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto cluster = createCluster();
+    enableWriteStaging(cluster);
+    auto &meta = cluster.meta().getOperator();
+    auto publish = co_await preparePublish(cluster, "/orphan-cleanup", cache::UploadJobId{Uuid::from(61, 62)});
+    CO_ASSERT_OK(publish);
+
+    MutateMultipartUploadReq fail;
+    fail.service = {std::string{kServiceName}, std::string{kServiceToken}};
+    fail.jobId = publish->jobId;
+    fail.expectedStateVersion = publish->expectedStateVersion;
+    fail.multipartId = "upload-test";
+    fail.mutation = MultipartUploadMutation::FAIL_PUBLISH;
+    fail.error = "publish rejected";
+    fail.orphanCleanupEligibleAtMs = 1;
+    fail.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto failed = co_await meta.mutateMultipartUpload(fail);
+    CO_ASSERT_OK(failed);
+    CO_ASSERT_EQ(failed->job.state, cache::UploadJobState::FAILED);
+    CO_ASSERT_TRUE(failed->job.completedObject.has_value());
+    CO_ASSERT_EQ(failed->job.orphanCleanupState, cache::OrphanCleanupState::PENDING);
+
+    auto operationId = Uuid::from(63, 64);
+    MutateMultipartUploadReq begin;
+    begin.service = fail.service;
+    begin.jobId = fail.jobId;
+    begin.expectedStateVersion = failed->job.stateVersion;
+    begin.multipartId = fail.multipartId;
+    begin.mutation = MultipartUploadMutation::BEGIN_ORPHAN_DELETE;
+    begin.orphanCleanupOperationId = operationId;
+    begin.orphanCleanupEligibleAtMs = 1;
+    begin.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto deleting = co_await meta.mutateMultipartUpload(begin);
+    CO_ASSERT_OK(deleting);
+    CO_ASSERT_EQ(deleting->job.orphanCleanupState, cache::OrphanCleanupState::DELETING);
+    CO_ASSERT_EQ(deleting->job.orphanCleanupOperationId, operationId);
+
+    AdminMutateUploadJobReq retry;
+    retry.user = SUPER_USER;
+    retry.jobId = fail.jobId;
+    retry.expectedStateVersion = deleting->job.stateVersion;
+    retry.mutation = AdminUploadMutation::RETRY;
+    retry.confirm = true;
+    retry.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    CO_ASSERT_ERROR(co_await meta.adminMutateUploadJob(retry), CacheCode::kStateConflict);
+
+    MutateMultipartUploadReq finish;
+    finish.service = fail.service;
+    finish.jobId = fail.jobId;
+    finish.expectedStateVersion = deleting->job.stateVersion;
+    finish.multipartId = fail.multipartId;
+    finish.mutation = MultipartUploadMutation::FINISH_ORPHAN_DELETE;
+    finish.orphanCleanupOperationId = operationId;
+    finish.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto complete = co_await meta.mutateMultipartUpload(finish);
+    CO_ASSERT_OK(complete);
+    CO_ASSERT_EQ(complete->job.orphanCleanupState, cache::OrphanCleanupState::COMPLETE);
+    CO_ASSERT_EQ(complete->job.orphanCleanupOperationId, operationId);
+
+    GetUploadJobReq get;
+    get.user = SUPER_USER;
+    get.jobId = fail.jobId;
+    get.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto queried = co_await meta.getUploadJob(get);
+    CO_ASSERT_OK(queried);
+    CO_ASSERT_EQ(queried->cleanupPolicy, cache::UploadCleanupPolicy::DELETE_ORPHAN_COMPLETE);
+
+    auto retryablePublish =
+        co_await preparePublish(cluster, "/orphan-retry", cache::UploadJobId{Uuid::from(65, 66)});
+    CO_ASSERT_OK(retryablePublish);
+    fail.jobId = retryablePublish->jobId;
+    fail.expectedStateVersion = retryablePublish->expectedStateVersion;
+    fail.orphanCleanupEligibleAtMs = std::numeric_limits<uint64_t>::max();
+    auto retryableFailed = co_await meta.mutateMultipartUpload(fail);
+    CO_ASSERT_OK(retryableFailed);
+    retry.jobId = fail.jobId;
+    retry.expectedStateVersion = retryableFailed->job.stateVersion;
+    auto retried = co_await meta.adminMutateUploadJob(retry);
+    CO_ASSERT_OK(retried);
+    CO_ASSERT_EQ(retried->job.state, cache::UploadJobState::PUBLISHING);
+    CO_ASSERT_EQ(retried->job.orphanCleanupState, cache::OrphanCleanupState::NONE);
+    CO_ASSERT_TRUE(retried->job.completedObject.has_value());
   }());
 }
 

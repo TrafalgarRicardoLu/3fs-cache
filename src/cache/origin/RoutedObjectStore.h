@@ -22,6 +22,7 @@ class RoutedObjectStore final : public ObjectStore {
   CoTryTask<ObjectMetadata> completeMultipartUpload(CompleteMultipartUploadRequest request) override;
   CoTryTask<Void> abortMultipartUpload(const AbortMultipartUploadRequest &request) override;
   CoTryTask<ObjectMetadata> headCompletedUpload(const HeadCompletedUploadRequest &request) override;
+  CoTryTask<Void> deleteObject(const DeleteObjectRequest &request) override;
 
  private:
   Result<std::shared_ptr<ObjectStore>> find(OriginId originId) const;

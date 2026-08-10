@@ -131,6 +131,16 @@ TEST(CacheCommonTypes, PhaseFourRecordsRoundTrip) {
   ASSERT_OK(serde::deserialize(decodedReconcile, serde::serialize(reconcile)));
   EXPECT_EQ(decodedUpload, upload);
   EXPECT_EQ(decodedReconcile, reconcile);
+
+  upload.state = UploadJobState::FAILED;
+  upload.error = "publish rejected";
+  upload.orphanCleanupState = OrphanCleanupState::DELETING;
+  upload.orphanCleanupOperationId = Uuid::from(11, 12);
+  upload.orphanCleanupEligibleAtMs = 300;
+  upload.orphanCleanupAttempts = 1;
+  ASSERT_OK(upload.valid());
+  ASSERT_OK(serde::deserialize(decodedUpload, serde::serialize(upload)));
+  EXPECT_EQ(decodedUpload, upload);
 }
 
 TEST(CacheCommonTypes, RejectsInvalidPhaseFourRecords) {

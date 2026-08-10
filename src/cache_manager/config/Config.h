@@ -129,6 +129,7 @@ class Config : public ConfigBase<Config> {
   CONFIG_ITEM(phase3_prefix_block_size, uint32_t{4_MB}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(phase3_prefix_stripe_size, uint32_t{1}, ConfigCheckers::checkPositive);
   CONFIG_ITEM(phase4_upload_interval, 100_ms, [](Duration value) { return value > 0_ns; });
+  CONFIG_ITEM(phase4_orphan_cleanup_retention, 24_h, [](Duration value) { return value >= 0_ns; });
   CONFIG_ITEM(phase4_upload_page_size, uint32_t{100}, [](uint32_t value) {
     return value > 0 && value <= cache::kMaxPhase2BatchItems;
   });

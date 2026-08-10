@@ -65,6 +65,14 @@ class FakeExecutor : public S3RequestExecutor {
     return outcome;
   }
 
+  S3Outcome<S3DeleteObjectResponse> deleteObject(const S3DeleteObjectRequest &request) override {
+    ++deleteCalls;
+    lastDelete = request;
+    auto outcome = std::move(deleteOutcomes.front());
+    deleteOutcomes.pop_front();
+    return outcome;
+  }
+
   uint32_t headCalls{0};
   uint32_t getCalls{0};
   uint32_t listCalls{0};
@@ -72,10 +80,12 @@ class FakeExecutor : public S3RequestExecutor {
   uint32_t uploadPartCalls{0};
   uint32_t completeMultipartCalls{0};
   uint32_t abortMultipartCalls{0};
+  uint32_t deleteCalls{0};
   ByteRange lastRange;
   ListRequest lastList;
   S3UploadPartRequest lastUploadPart;
   S3CompleteMultipartRequest lastComplete;
+  S3DeleteObjectRequest lastDelete;
   std::deque<S3Outcome<HeadResponse>> headOutcomes;
   std::deque<S3Outcome<GetRangeResponse>> getOutcomes;
   std::deque<S3Outcome<ListResponse>> listOutcomes;
@@ -83,6 +93,7 @@ class FakeExecutor : public S3RequestExecutor {
   std::deque<S3Outcome<S3UploadPartResponse>> uploadPartOutcomes;
   std::deque<S3Outcome<S3CompleteMultipartResponse>> completeMultipartOutcomes;
   std::deque<S3Outcome<S3AbortMultipartResponse>> abortMultipartOutcomes;
+  std::deque<S3Outcome<S3DeleteObjectResponse>> deleteOutcomes;
 };
 
 ObjectRef objectRef() { return ObjectRef{OriginId{1}, "bucket", "key"}; }
@@ -331,6 +342,30 @@ TEST(S3ObjectStore, ClassifiesMultipartFailuresAndRejectsMalformedResponses) {
   EXPECT_EQ(fake->completeMultipartCalls, uint32_t{1});
   ASSERT_ERROR(folly::coro::blockingWait(store.abortMultipartUpload({upload})), CacheCode::kNotFound);
   ASSERT_ERROR(folly::coro::blockingWait(store.headCompletedUpload({objectRef(), 1})), CacheCode::kInvalidResponse);
+}
+
+TEST(S3ObjectStore, DeletesExactObjectVersionAndTreatsMissingAsSuccess) {
+  auto executor = std::make_unique<FakeExecutor>();
+  auto *fake = executor.get();
+  fake->deleteOutcomes.emplace_back(S3Failure{S3FailureKind::NOT_FOUND, 404, "already gone"});
+  S3ObjectStore store(testConfig(), std::move(executor));
+
+  ASSERT_OK(folly::coro::blockingWait(store.deleteObject({identity()})));
+  ASSERT_EQ(fake->deleteCalls, uint32_t{1});
+  ASSERT_EQ(fake->lastDelete.bucket, "bucket");
+  ASSERT_EQ(fake->lastDelete.key, "key");
+  ASSERT_EQ(fake->lastDelete.versionId, "version-1");
+}
+
+TEST(S3ObjectStore, RefusesToDeleteChangedEtagObject) {
+  auto executor = std::make_unique<FakeExecutor>();
+  auto *fake = executor.get();
+  fake->headOutcomes.emplace_back(HeadResponse{1, std::nullopt, "different-etag"});
+  S3ObjectStore store(testConfig(), std::move(executor));
+
+  ASSERT_ERROR(folly::coro::blockingWait(store.deleteObject({identity(VersionSelectorType::STRONG_ETAG)})),
+               CacheCode::kVersionMismatch);
+  ASSERT_EQ(fake->deleteCalls, uint32_t{0});
 }
 
 #ifndef HF3FS_ENABLE_CACHE

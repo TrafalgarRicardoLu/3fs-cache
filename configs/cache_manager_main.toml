@@ -11,6 +11,7 @@ enable_phase2 = false
 enable_phase3 = false
 enable_phase4 = false
 phase4_upload_interval = "100ms"
+phase4_orphan_cleanup_retention = "24h"
 phase4_upload_page_size = 100
 phase4_upload_global_concurrency = 4
 phase4_upload_per_owner_concurrency = 2

@@ -76,9 +76,16 @@ class RecordingStore final : public ObjectStore {
                              request.expectedSize};
   }
 
+  CoTryTask<Void> deleteObject(const DeleteObjectRequest &request) override {
+    lastOrigin = request.object.originId;
+    ++deleteCalls;
+    co_return Void{};
+  }
+
   OriginId lastOrigin{};
   ByteRange lastRange{};
   size_t multipartCalls{0};
+  size_t deleteCalls{0};
   std::optional<status_code_t> multipartError;
   bool malformedPart{false};
 };
@@ -104,6 +111,8 @@ TEST(RoutedObjectStore, RoutesHeadAndRangeByOriginId) {
   ASSERT_OK(listed);
   ASSERT_EQ(listed->objects[0].identity.key, "prefix/key");
   EXPECT_EQ(second->lastOrigin, OriginId{2});
+  ASSERT_OK(folly::coro::blockingWait(store.deleteObject({object})));
+  EXPECT_EQ(first->deleteCalls, size_t{1});
 }
 
 TEST(RoutedObjectStore, RejectsUnknownOriginWithoutFallingThrough) {

@@ -50,6 +50,7 @@ class S3ObjectStore : public ObjectStore {
   CoTryTask<ObjectMetadata> completeMultipartUpload(CompleteMultipartUploadRequest request) override;
   CoTryTask<Void> abortMultipartUpload(const AbortMultipartUploadRequest &request) override;
   CoTryTask<ObjectMetadata> headCompletedUpload(const HeadCompletedUploadRequest &request) override;
+  CoTryTask<Void> deleteObject(const DeleteObjectRequest &request) override;
 
  private:
   class Permit;
@@ -62,6 +63,7 @@ class S3ObjectStore : public ObjectStore {
   Result<ObjectMetadata> completeMultipartUploadSync(CompleteMultipartUploadRequest request);
   Result<Void> abortMultipartUploadSync(const AbortMultipartUploadRequest &request);
   Result<ObjectMetadata> headCompletedUploadSync(const HeadCompletedUploadRequest &request);
+  Result<Void> deleteObjectSync(const DeleteObjectRequest &request);
   Result<Permit> acquire(uint64_t bytes);
   void release(uint64_t bytes);
 

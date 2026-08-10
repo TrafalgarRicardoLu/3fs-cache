@@ -154,8 +154,17 @@ class GetUploadJobOp : public ReadOnlyOperation<GetUploadJobRsp> {
     } else {
       response.stagingCleanupState = cache::StagingCleanupState::RETAINED;
     }
-    if (response.job.state == cache::UploadJobState::PUBLISHED ||
-        response.job.state == cache::UploadJobState::CANCELLED) {
+    if (response.job.orphanCleanupState == cache::OrphanCleanupState::DELETING) {
+      response.cleanupPolicy = cache::UploadCleanupPolicy::DELETE_ORPHAN_IN_PROGRESS;
+    } else if (response.job.orphanCleanupState == cache::OrphanCleanupState::COMPLETE) {
+      response.cleanupPolicy = cache::UploadCleanupPolicy::DELETE_ORPHAN_COMPLETE;
+    } else if ((response.job.state == cache::UploadJobState::FAILED ||
+                response.job.state == cache::UploadJobState::CANCELLED) &&
+               response.job.completedObject &&
+               response.job.orphanCleanupState != cache::OrphanCleanupState::CONFLICT) {
+      response.cleanupPolicy = cache::UploadCleanupPolicy::DELETE_ORPHAN_PENDING;
+    } else if (response.job.state == cache::UploadJobState::PUBLISHED ||
+               response.job.state == cache::UploadJobState::CANCELLED) {
       response.cleanupPolicy = cache::UploadCleanupPolicy::DELETE_STAGING_AFTER_LAST_HANDLE;
     } else if (response.job.completedObject) {
       response.cleanupPolicy = cache::UploadCleanupPolicy::RETAIN_ORPHAN_FOR_OPERATOR;

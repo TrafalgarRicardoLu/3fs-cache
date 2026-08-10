@@ -152,6 +152,17 @@ enum class UploadCleanupPolicy : uint8_t {
   RETAIN_UNTIL_TERMINAL = 0,
   DELETE_STAGING_AFTER_LAST_HANDLE = 1,
   RETAIN_ORPHAN_FOR_OPERATOR = 2,
+  DELETE_ORPHAN_PENDING = 3,
+  DELETE_ORPHAN_IN_PROGRESS = 4,
+  DELETE_ORPHAN_COMPLETE = 5,
+};
+
+enum class OrphanCleanupState : uint8_t {
+  NONE = 0,
+  PENDING = 1,
+  DELETING = 2,
+  COMPLETE = 3,
+  CONFLICT = 4,
 };
 
 enum class UploadWarmState : uint8_t {
@@ -334,6 +345,10 @@ struct UploadJobRecord {
   SERDE_STRUCT_FIELD(completedObject, std::optional<ImmutableObjectIdentity>{});
   SERDE_STRUCT_FIELD(publishedInode, uint64_t{});
   SERDE_STRUCT_FIELD(error, std::string{});
+  SERDE_STRUCT_FIELD(orphanCleanupState, OrphanCleanupState::NONE);
+  SERDE_STRUCT_FIELD(orphanCleanupOperationId, Uuid::zero());
+  SERDE_STRUCT_FIELD(orphanCleanupEligibleAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(orphanCleanupAttempts, uint32_t{});
 
  public:
   Result<Void> valid() const;

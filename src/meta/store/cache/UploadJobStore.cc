@@ -13,7 +13,9 @@ constexpr size_t kMaxUploadJobValueBytes = 96U << 10;
 constexpr int32_t kListScanBatch = 256;
 
 bool terminal(const cache::UploadJobRecord &job) {
-  return job.state == cache::UploadJobState::FAILED || job.state == cache::UploadJobState::CANCELLED;
+  if (job.state != cache::UploadJobState::FAILED && job.state != cache::UploadJobState::CANCELLED) return false;
+  return !job.completedObject || job.orphanCleanupState == cache::OrphanCleanupState::COMPLETE ||
+         job.orphanCleanupState == cache::OrphanCleanupState::CONFLICT;
 }
 
 bool sameSpec(const cache::UploadJobRecord &left, const cache::UploadJobRecord &right) {
@@ -23,7 +25,7 @@ bool sameSpec(const cache::UploadJobRecord &left, const cache::UploadJobRecord &
 }
 
 bool validTransition(cache::UploadJobState from, cache::UploadJobState to) {
-  if (from == to) return from != cache::UploadJobState::FAILED && from != cache::UploadJobState::CANCELLED;
+  if (from == to) return true;
   switch (from) {
     case cache::UploadJobState::OPEN:
       return to == cache::UploadJobState::SEALED || to == cache::UploadJobState::FAILED ||
@@ -43,11 +45,30 @@ bool validTransition(cache::UploadJobState from, cache::UploadJobState to) {
       return to == cache::UploadJobState::CANCELLED || to == cache::UploadJobState::FAILED;
     case cache::UploadJobState::FAILED:
       return to == cache::UploadJobState::SEALED || to == cache::UploadJobState::UPLOADING ||
-             to == cache::UploadJobState::COMPLETING || to == cache::UploadJobState::ABORTING ||
+             to == cache::UploadJobState::COMPLETING || to == cache::UploadJobState::PUBLISHING ||
+             to == cache::UploadJobState::ABORTING ||
              to == cache::UploadJobState::CANCELLED;
     default:
       return false;
   }
+}
+
+bool validCleanupTransition(const cache::UploadJobRecord &current, const cache::UploadJobRecord &next) {
+  auto from = current.orphanCleanupState;
+  auto to = next.orphanCleanupState;
+  if (from == to) return true;
+  if (from == cache::OrphanCleanupState::NONE) {
+    return to == cache::OrphanCleanupState::PENDING || to == cache::OrphanCleanupState::DELETING;
+  }
+  if (from == cache::OrphanCleanupState::PENDING) {
+    return to == cache::OrphanCleanupState::DELETING ||
+           (to == cache::OrphanCleanupState::NONE && current.state == cache::UploadJobState::FAILED &&
+            next.state == cache::UploadJobState::PUBLISHING);
+  }
+  if (from == cache::OrphanCleanupState::DELETING) {
+    return to == cache::OrphanCleanupState::COMPLETE || to == cache::OrphanCleanupState::CONFLICT;
+  }
+  return false;
 }
 
 Result<Void> validInitialJob(const cache::UploadJobRecord &job) {
@@ -212,10 +233,22 @@ CoTryTask<cache::UploadJobRecord> UploadJobStore::update(kv::IReadWriteTransacti
   if (!validTransition(current.state, job.state)) {
     co_return makeError(CacheCode::kStateConflict, "invalid upload job state transition");
   }
+  if (!validCleanupTransition(current, job)) {
+    co_return makeError(CacheCode::kStateConflict, "invalid orphan cleanup state transition");
+  }
   if (job.updatedAtMs < current.updatedAtMs || job.parts.size() < current.parts.size() ||
       !std::equal(current.parts.begin(), current.parts.end(), job.parts.begin()) ||
       (!current.multipartId.empty() && current.multipartId != job.multipartId) ||
       (current.completedObject && current.completedObject != job.completedObject) ||
+      job.orphanCleanupAttempts < current.orphanCleanupAttempts ||
+      (current.orphanCleanupEligibleAtMs != 0 && job.orphanCleanupState != cache::OrphanCleanupState::NONE &&
+       current.orphanCleanupEligibleAtMs != job.orphanCleanupEligibleAtMs) ||
+      (current.orphanCleanupOperationId != Uuid::zero() &&
+       current.orphanCleanupOperationId != job.orphanCleanupOperationId) ||
+      (current.orphanCleanupState == cache::OrphanCleanupState::COMPLETE &&
+       job.orphanCleanupState != cache::OrphanCleanupState::COMPLETE) ||
+      (current.orphanCleanupState == cache::OrphanCleanupState::CONFLICT &&
+       job.orphanCleanupState != cache::OrphanCleanupState::CONFLICT) ||
       (current.publishedInode != 0 && current.publishedInode != job.publishedInode) ||
       (current.state == cache::UploadJobState::OPEN && job.state == cache::UploadJobState::OPEN &&
        (job.stagingLength != current.stagingLength || job.writerLeaseId != current.writerLeaseId ||

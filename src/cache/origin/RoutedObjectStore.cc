@@ -114,4 +114,12 @@ CoTryTask<ObjectMetadata> RoutedObjectStore::headCompletedUpload(const HeadCompl
   co_return std::move(*result);
 }
 
+CoTryTask<Void> RoutedObjectStore::deleteObject(const DeleteObjectRequest &request) {
+  CO_RETURN_ON_ERROR(request.valid());
+  CO_RETURN_ON_ERROR(checkCancellation());
+  auto store = find(request.object.originId);
+  CO_RETURN_ON_ERROR(store);
+  co_return co_await (*store)->deleteObject(request);
+}
+
 }  // namespace hf3fs::cache::origin
