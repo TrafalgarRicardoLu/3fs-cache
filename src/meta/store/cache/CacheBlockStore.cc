@@ -245,8 +245,7 @@ CoTryTask<CacheBlockPage> CacheBlockStore::snapshotListReconcile(kv::IReadWriteT
       CO_RETURN_ON_ERROR(co_await indexState(txn, *record));
       if (record->state == cache::CacheBlockState::READY || record->state == cache::CacheBlockState::EVICTING ||
           record->state == cache::CacheBlockState::CLEANING) {
-        page.records.push_back(std::move(*record));
-        if (page.records.size() > limit) break;
+        if (page.records.size() <= limit) page.records.push_back(std::move(*record));
       }
     }
     if (page.records.size() > limit || !result->hasMore) {
