@@ -29,7 +29,7 @@ class PermitRecovery {
   CoTryTask<void> recover(const meta::RecoverableCachePermit &item, uint64_t nowNs, uint64_t expiresAtNs);
   CoTryTask<void> attach(const meta::RecoverableCachePermit &item);
   CoTryTask<void> cancel(const meta::RecoverableCachePermit &item);
-  CoTryTask<void> recoverLoading(const meta::RecoverableCachePermit &item, uint64_t nowNs);
+  CoTryTask<void> recoverLoading(const meta::RecoverableCachePermit &item, uint64_t nowNs, bool force = false);
 
   std::shared_ptr<CacheManagerBackend> backend_;
   HintCoalescer &hints_;

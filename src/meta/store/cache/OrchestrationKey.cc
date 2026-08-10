@@ -114,4 +114,9 @@ Result<PinIndexKey> OrchestrationKey::unpackPinByOwner(std::string_view key) {
   return result;
 }
 
+std::string OrchestrationKey::pinOwnerLease(const cache::PinOwner &owner) {
+  return Serializer::serRawArgs(
+      kv::KeyPrefix::PinOwnerLease, static_cast<uint8_t>(owner.kind), owner.id.toUnderType());
+}
+
 }  // namespace hf3fs::meta::server

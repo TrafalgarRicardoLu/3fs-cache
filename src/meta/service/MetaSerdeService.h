@@ -78,6 +78,7 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
   META_SERVICE_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   META_SERVICE_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
   META_SERVICE_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  META_SERVICE_METHOD(recoverExpiredOpenUpload, RecoverExpiredOpenUploadReq, RecoverExpiredWriteStagingRsp);
   META_SERVICE_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
   META_SERVICE_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
   META_SERVICE_METHOD(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
@@ -86,6 +87,9 @@ class MetaSerdeService : public serde::ServiceWrapper<MetaSerdeService, MetaSerd
   META_SERVICE_METHOD(getUploadJob, GetUploadJobReq, GetUploadJobRsp);
   META_SERVICE_METHOD(adminListUploadJobs, AdminListUploadJobsReq, ListUploadJobsRsp);
   META_SERVICE_METHOD(adminMutateUploadJob, AdminMutateUploadJobReq, AdminMutateUploadJobRsp);
+  META_SERVICE_METHOD(listExpiredOpenUploads, ListExpiredOpenUploadsReq, ListExpiredOpenUploadsRsp);
+  META_SERVICE_METHOD(finalizeCancelledUpload, FinalizeCancelledUploadReq, FinalizeCancelledUploadRsp);
+  META_SERVICE_METHOD(renewCachePinOwnerLease, RenewCachePinOwnerLeaseReq, RenewCachePinOwnerLeaseRsp);
 #undef META_SERVICE_METHOD
 
  private:

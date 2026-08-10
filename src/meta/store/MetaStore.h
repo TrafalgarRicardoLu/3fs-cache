@@ -147,6 +147,9 @@ class MetaStore {
   OpPtr<GetUploadJobRsp> getUploadJob(const GetUploadJobReq &req);
   OpPtr<ListUploadJobsRsp> adminListUploadJobs(const AdminListUploadJobsReq &req);
   OpPtr<AdminMutateUploadJobRsp> adminMutateUploadJob(const AdminMutateUploadJobReq &req);
+  OpPtr<ListExpiredOpenUploadsRsp> listExpiredOpenUploads(const ListExpiredOpenUploadsReq &req);
+  OpPtr<FinalizeCancelledUploadRsp> finalizeCancelledUpload(const FinalizeCancelledUploadReq &req);
+  OpPtr<RenewCachePinOwnerLeaseRsp> renewCachePinOwnerLease(const RenewCachePinOwnerLeaseReq &req);
 
   OpPtr<GetFileReadPlanRsp> getFileReadPlan(const GetFileReadPlanReq &req);
 

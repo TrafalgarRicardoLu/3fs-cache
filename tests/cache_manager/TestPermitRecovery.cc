@@ -226,6 +226,19 @@ TEST(TestPermitRecovery, DoesNotReplacePinnedLoadingPermit) {
   ASSERT_EQ(backend->replaceCalls, 0);
 }
 
+TEST(TestPermitRecovery, MissingLoadingPermitRecoversWithoutWaitingForLeaseExpiry) {
+  auto backend = std::make_shared<RecoveryBackend>();
+  backend->records.push_back(phase4LoadingItem(10));
+  backend->queryError = Status(CacheCode::kNotFound);
+  HintCoalescer hints;
+  CacheCleanupWorker cleanup(backend);
+  PermitRecovery recovery(
+      backend, hints, Uuid::from(9, 8), 1_s, 1, [] { return uint64_t{1000}; }, &cleanup, true);
+  ASSERT_OK(folly::coro::blockingWait(recovery.run()));
+  ASSERT_EQ(backend->recovered.size(), 1);
+  ASSERT_EQ(backend->cleanupFinishes, 1);
+}
+
 TEST(TestPermitRecovery, CancelsQueuedAdmissionWhenCapacityCannotBeRecovered) {
   auto backend = std::make_shared<RecoveryBackend>();
   backend->records.push_back(recoveryItem());

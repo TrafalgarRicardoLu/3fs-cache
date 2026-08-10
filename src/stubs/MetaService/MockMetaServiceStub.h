@@ -92,6 +92,7 @@ class DummyMetaServiceStub : public IMetaServiceStub {
   NOT_IMPLEMENTED_FUNC(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   NOT_IMPLEMENTED_FUNC(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
   NOT_IMPLEMENTED_FUNC(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  NOT_IMPLEMENTED_FUNC(recoverExpiredOpenUpload, RecoverExpiredOpenUploadReq, RecoverExpiredWriteStagingRsp);
   NOT_IMPLEMENTED_FUNC(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
   NOT_IMPLEMENTED_FUNC(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
   NOT_IMPLEMENTED_FUNC(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
@@ -100,6 +101,9 @@ class DummyMetaServiceStub : public IMetaServiceStub {
   NOT_IMPLEMENTED_FUNC(getUploadJob, GetUploadJobReq, GetUploadJobRsp);
   NOT_IMPLEMENTED_FUNC(adminListUploadJobs, AdminListUploadJobsReq, ListUploadJobsRsp);
   NOT_IMPLEMENTED_FUNC(adminMutateUploadJob, AdminMutateUploadJobReq, AdminMutateUploadJobRsp);
+  NOT_IMPLEMENTED_FUNC(listExpiredOpenUploads, ListExpiredOpenUploadsReq, ListExpiredOpenUploadsRsp);
+  NOT_IMPLEMENTED_FUNC(finalizeCancelledUpload, FinalizeCancelledUploadReq, FinalizeCancelledUploadRsp);
+  NOT_IMPLEMENTED_FUNC(renewCachePinOwnerLease, RenewCachePinOwnerLeaseReq, RenewCachePinOwnerLeaseRsp);
 
   virtual CoTryTask<AuthRsp> authenticate(const AuthReq &req) { co_return AuthRsp{req.user}; }
   CoTryTask<AuthRsp> authenticate(const AuthReq &req, const net::UserRequestOptions &, serde::Timestamp *) override {
@@ -230,6 +234,7 @@ class MetaServiceStub<hf3fs::stubs::StubMockContext<IMetaServiceStub>> : public 
   FORWARD_RPC_FUNC(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   FORWARD_RPC_FUNC(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
   FORWARD_RPC_FUNC(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  FORWARD_RPC_FUNC(recoverExpiredOpenUpload, RecoverExpiredOpenUploadReq, RecoverExpiredWriteStagingRsp);
   FORWARD_RPC_FUNC(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
   FORWARD_RPC_FUNC(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
   FORWARD_RPC_FUNC(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
@@ -238,6 +243,9 @@ class MetaServiceStub<hf3fs::stubs::StubMockContext<IMetaServiceStub>> : public 
   FORWARD_RPC_FUNC(getUploadJob, GetUploadJobReq, GetUploadJobRsp);
   FORWARD_RPC_FUNC(adminListUploadJobs, AdminListUploadJobsReq, ListUploadJobsRsp);
   FORWARD_RPC_FUNC(adminMutateUploadJob, AdminMutateUploadJobReq, AdminMutateUploadJobRsp);
+  FORWARD_RPC_FUNC(listExpiredOpenUploads, ListExpiredOpenUploadsReq, ListExpiredOpenUploadsRsp);
+  FORWARD_RPC_FUNC(finalizeCancelledUpload, FinalizeCancelledUploadReq, FinalizeCancelledUploadRsp);
+  FORWARD_RPC_FUNC(renewCachePinOwnerLease, RenewCachePinOwnerLeaseReq, RenewCachePinOwnerLeaseRsp);
 
 #undef FORWARD_RPC_FUNC
 

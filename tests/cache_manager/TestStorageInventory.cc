@@ -86,6 +86,21 @@ TEST(TestStorageInventory, ReadsStablePagesWithBoundedRequests) {
   EXPECT_EQ(backend->requests[1].cursor, "next");
 }
 
+TEST(TestStorageInventory, StreamsOneBoundedPageAtATime) {
+  auto backend = std::make_shared<InventoryBackend>();
+  backend->pages[flat::TargetId{1}] = {page({inventoryEntry(1)}, "next", false), page({inventoryEntry(2)}, {}, true)};
+  StorageInventoryReader reader(backend, 1, 2);
+  size_t pages = 0;
+  auto result = folly::coro::blockingWait(
+      reader.readTargetPages(flat::TargetId{1}, [&](TargetCacheInventory inventory) -> CoTryTask<void> {
+        EXPECT_EQ(inventory.entries.size(), 1);
+        ++pages;
+        co_return Void{};
+      }));
+  ASSERT_OK(result);
+  EXPECT_EQ(pages, 2);
+}
+
 TEST(TestStorageInventory, RejectsRepeatedCursorAndChangedEpoch) {
   auto repeated = std::make_shared<InventoryBackend>();
   repeated->pages[flat::TargetId{1}] = {page({inventoryEntry(1)}, "same", false),

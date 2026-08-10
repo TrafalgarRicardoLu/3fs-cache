@@ -1,7 +1,9 @@
 #include "meta/store/cache/CacheBlockStore.h"
 
+#include <algorithm>
 #include <folly/experimental/coro/Collect.h>
 #include <folly/logging/xlog.h>
+#include <iterator>
 #include <limits>
 
 #include "cache/metrics/CacheMetrics.h"
@@ -16,6 +18,25 @@ namespace {
 
 constexpr int32_t kRecoverableScanBatch = 1000;
 
+std::string statePrefix(cache::CacheBlockState state) {
+  return Serializer::serRawArgs(kv::KeyPrefix::CacheBlockState, static_cast<uint8_t>(state));
+}
+
+std::string stateKey(cache::CacheBlockState state, const cache::CacheBlockKey &key) {
+  return Serializer::serRawArgs(
+      kv::KeyPrefix::CacheBlockState, static_cast<uint8_t>(state), key.inode, key.block.toUnderType());
+}
+
+std::string stateIndexMarkerKey() {
+  return Serializer::serRawArgs(kv::KeyPrefix::CacheMigration, uint8_t{1});
+}
+
+CoTryTask<bool> stateIndexReady(kv::IReadOnlyTransaction &txn) {
+  auto marker = co_await txn.snapshotGet(stateIndexMarkerKey());
+  CO_RETURN_ON_ERROR(marker);
+  co_return marker->has_value();
+}
+
 Result<CacheBlockRecord> decodeRecord(const kv::IReadOnlyTransaction::KeyValue &kv) {
   CacheBlockRecord record;
   auto deserialized = serde::deserialize(record, kv.value);
@@ -23,6 +44,21 @@ Result<CacheBlockRecord> decodeRecord(const kv::IReadOnlyTransaction::KeyValue &
     return makeError(StatusCode::kDataCorruption, "invalid cache block record in range");
   }
   return record;
+}
+
+Result<CacheBlockRecord> decodeStateRecord(const kv::IReadOnlyTransaction::KeyValue &kv,
+                                           cache::CacheBlockState expectedState) {
+  CacheBlockRecord record;
+  auto deserialized = serde::deserialize(record, kv.value);
+  if (deserialized.hasError() || record.valid().hasError() || record.state != expectedState ||
+      stateKey(record.state, record.key) != kv.key) {
+    return makeError(StatusCode::kDataCorruption, "invalid cache block state index record");
+  }
+  return record;
+}
+
+CoTryTask<void> indexState(kv::IReadWriteTransaction &txn, const CacheBlockRecord &record) {
+  co_return co_await txn.set(stateKey(record.state, record.key), serde::serialize(record));
 }
 
 template <typename Transaction>
@@ -109,6 +145,28 @@ CoTryTask<CacheBlockPage> CacheBlockStore::snapshotListRecoverable(kv::IReadOnly
     co_return makeError(StatusCode::kInvalidArg, "invalid recoverable cache block page limit");
   }
   if (after) CO_RETURN_ON_ERROR(after->valid());
+  auto indexed = co_await stateIndexReady(txn);
+  CO_RETURN_ON_ERROR(indexed);
+  if (*indexed) {
+    auto queued = co_await snapshotListState(txn, cache::CacheBlockState::QUEUED, after, limit + 1);
+    CO_RETURN_ON_ERROR(queued);
+    auto loading = co_await snapshotListState(txn, cache::CacheBlockState::LOADING, after, limit + 1);
+    CO_RETURN_ON_ERROR(loading);
+    CacheBlockPage page;
+    page.records.reserve(queued->records.size() + loading->records.size());
+    for (auto &record : queued->records) {
+      if (record.permit) page.records.push_back(std::move(record));
+    }
+    for (auto &record : loading->records) {
+      if (record.permit) page.records.push_back(std::move(record));
+    }
+    std::sort(page.records.begin(), page.records.end(), [](const auto &left, const auto &right) {
+      return CacheBlockStore::recordKey(left.key) < CacheBlockStore::recordKey(right.key);
+    });
+    page.more = page.records.size() > limit || queued->more || loading->more;
+    if (page.records.size() > limit) page.records.resize(limit);
+    co_return page;
+  }
   const auto prefix = Serializer::serRawArgs(kv::KeyPrefix::CacheBlock, uint8_t{0});
   const auto endKey = kv::TransactionHelper::prefixListEndKey(prefix);
   auto beginKey = after ? recordKey(*after) : prefix;
@@ -139,40 +197,97 @@ CoTryTask<CacheBlockPage> CacheBlockStore::snapshotListRecoverable(kv::IReadOnly
   co_return page;
 }
 
-CoTryTask<CacheBlockPage> CacheBlockStore::snapshotListReconcile(kv::IReadOnlyTransaction &txn,
+CoTryTask<CacheBlockPage> CacheBlockStore::snapshotListReconcile(kv::IReadWriteTransaction &txn,
                                                                  std::optional<cache::CacheBlockKey> after,
                                                                  uint32_t limit) {
   if (limit == 0 || limit > cache::kMaxPhase2BatchItems) {
     co_return makeError(StatusCode::kInvalidArg, "invalid cache reconcile page limit");
   }
   if (after) CO_RETURN_ON_ERROR(after->valid());
+  auto indexed = co_await stateIndexReady(txn);
+  CO_RETURN_ON_ERROR(indexed);
+  if (*indexed) {
+    std::vector<CacheBlockRecord> records;
+    bool more = false;
+    for (auto state : {cache::CacheBlockState::READY,
+                       cache::CacheBlockState::EVICTING,
+                       cache::CacheBlockState::CLEANING}) {
+      auto page = co_await snapshotListState(txn, state, after, limit + 1);
+      CO_RETURN_ON_ERROR(page);
+      more = more || page->more;
+      records.insert(records.end(),
+                     std::make_move_iterator(page->records.begin()),
+                     std::make_move_iterator(page->records.end()));
+    }
+    std::sort(records.begin(), records.end(), [](const auto &left, const auto &right) {
+      return CacheBlockStore::recordKey(left.key) < CacheBlockStore::recordKey(right.key);
+    });
+    more = more || records.size() > limit;
+    if (records.size() > limit) records.resize(limit);
+    co_return CacheBlockPage{std::move(records), more};
+  }
   const auto prefix = Serializer::serRawArgs(kv::KeyPrefix::CacheBlock, uint8_t{0});
   const auto endKey = kv::TransactionHelper::prefixListEndKey(prefix);
   auto beginKey = after ? recordKey(*after) : prefix;
   bool inclusive = !after.has_value();
   CacheBlockPage page;
   while (page.records.size() <= limit) {
-    auto result = co_await txn.snapshotGetRange({beginKey, inclusive}, {endKey, false}, kRecoverableScanBatch);
+    auto result = co_await txn.getRange({beginKey, inclusive}, {endKey, false}, kRecoverableScanBatch);
     CO_RETURN_ON_ERROR(result);
     if (result->kvs.empty()) {
       if (result->hasMore) co_return makeError(CacheCode::kInvalidResponse, "empty cache reconcile scan has more data");
+      CO_RETURN_ON_ERROR(co_await txn.set(stateIndexMarkerKey(), "1"));
       break;
     }
     for (const auto &value : result->kvs) {
       auto record = decodeRecord(value);
       CO_RETURN_ON_ERROR(record);
+      CO_RETURN_ON_ERROR(co_await indexState(txn, *record));
       if (record->state == cache::CacheBlockState::READY || record->state == cache::CacheBlockState::EVICTING ||
           record->state == cache::CacheBlockState::CLEANING) {
         page.records.push_back(std::move(*record));
         if (page.records.size() > limit) break;
       }
     }
-    if (page.records.size() > limit || !result->hasMore) break;
+    if (page.records.size() > limit || !result->hasMore) {
+      if (!result->hasMore) CO_RETURN_ON_ERROR(co_await txn.set(stateIndexMarkerKey(), "1"));
+      break;
+    }
     beginKey = result->kvs.back().key;
     inclusive = false;
   }
   page.more = page.records.size() > limit;
   if (page.more) page.records.resize(limit);
+  co_return page;
+}
+
+CoTryTask<bool> CacheBlockStore::snapshotStateIndexReady(kv::IReadOnlyTransaction &txn) {
+  co_return co_await stateIndexReady(txn);
+}
+
+CoTryTask<CacheBlockPage> CacheBlockStore::snapshotListState(kv::IReadOnlyTransaction &txn,
+                                                             cache::CacheBlockState state,
+                                                             std::optional<cache::CacheBlockKey> after,
+                                                             uint32_t limit,
+                                                             bool inclusive) {
+  if (state == cache::CacheBlockState::NONE || limit == 0 || limit > cache::kMaxPhase2BatchItems + 1) {
+    co_return makeError(StatusCode::kInvalidArg, "invalid cache block state page");
+  }
+  if (after) CO_RETURN_ON_ERROR(after->valid());
+  auto prefix = statePrefix(state);
+  auto beginKey = after ? stateKey(state, *after) : prefix;
+  auto endKey = kv::TransactionHelper::prefixListEndKey(prefix);
+  auto values = co_await txn.snapshotGetRange({beginKey, !after || inclusive}, {endKey, false}, limit + 1);
+  CO_RETURN_ON_ERROR(values);
+  CacheBlockPage page;
+  page.more = values->kvs.size() > limit || values->hasMore;
+  auto count = std::min<size_t>(values->kvs.size(), limit);
+  page.records.reserve(count);
+  for (size_t index = 0; index < count; ++index) {
+    auto record = decodeStateRecord(values->kvs[index], state);
+    CO_RETURN_ON_ERROR(record);
+    page.records.push_back(std::move(*record));
+  }
   co_return page;
 }
 
@@ -200,8 +315,14 @@ CoTryTask<std::optional<CacheBlockRecord>> CacheBlockStore::load(kv::IReadWriteT
 
 CoTryTask<Void> CacheBlockStore::store(kv::IReadWriteTransaction &txn, const CacheBlockRecord &record) {
   CO_RETURN_ON_ERROR(record.valid());
+  auto current = co_await load(txn, record.key);
+  CO_RETURN_ON_ERROR(current);
+  if (current->has_value() && (**current).state != record.state) {
+    CO_RETURN_ON_ERROR(co_await txn.clear(stateKey((**current).state, record.key)));
+  }
   auto result = co_await txn.set(recordKey(record.key), serde::serialize(record));
   CO_RETURN_ON_ERROR(result);
+  CO_RETURN_ON_ERROR(co_await indexState(txn, record));
   cache::metrics::recordCount(cache::metrics::Event::META_STATE_TRANSITION,
                               1,
                               {.inode = record.key.inode,
@@ -226,6 +347,9 @@ CoTryTask<Void> CacheBlockStore::store(kv::IReadWriteTransaction &txn, const Cac
 
 CoTryTask<Void> CacheBlockStore::remove(kv::IReadWriteTransaction &txn, const cache::CacheBlockKey &key) {
   CO_RETURN_ON_ERROR(key.valid());
+  auto current = co_await load(txn, key);
+  CO_RETURN_ON_ERROR(current);
+  if (current->has_value()) CO_RETURN_ON_ERROR(co_await txn.clear(stateKey((**current).state, key)));
   co_return co_await txn.clear(recordKey(key));
 }
 

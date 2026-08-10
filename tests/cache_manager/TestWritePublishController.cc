@@ -62,18 +62,63 @@ WritePublishControllerConfig config() {
 
 class FakeBackend : public WritePublishControllerBackend {
  public:
-  CoTryTask<UploadJobPage> list(std::optional<cache::UploadJobId> after, uint32_t limit) override {
+  CoTryTask<UploadJobPage> list(std::optional<cache::UploadJobId> after,
+                                uint32_t limit,
+                                bool includeTerminal) override {
     ++listCalls;
+    includeTerminalRequests.push_back(includeTerminal);
+    std::vector<cache::UploadJobRecord> visible;
+    for (const auto &value : jobs) {
+      auto terminal = value.state == cache::UploadJobState::FAILED || value.state == cache::UploadJobState::CANCELLED ||
+                      std::find(warmedSubmitted.begin(), warmedSubmitted.end(), value.jobId) != warmedSubmitted.end();
+      if (includeTerminal || !terminal) visible.push_back(value);
+    }
     size_t begin = 0;
     if (after) {
-      while (begin < jobs.size() && jobs[begin].jobId != *after) ++begin;
-      if (begin < jobs.size()) ++begin;
+      while (begin < visible.size() && visible[begin].jobId != *after) ++begin;
+      if (begin < visible.size()) ++begin;
     }
-    auto end = std::min(jobs.size(), begin + limit);
+    auto end = std::min(visible.size(), begin + limit);
     UploadJobPage page;
-    page.jobs.insert(page.jobs.end(), jobs.begin() + begin, jobs.begin() + end);
-    page.more = end < jobs.size();
+    page.jobs.insert(page.jobs.end(), visible.begin() + begin, visible.begin() + end);
+    page.more = end < visible.size();
     co_return page;
+  }
+
+  CoTryTask<UploadJobPage> listExpiredOpen(std::optional<meta::UploadOpenLeaseCursor> after,
+                                           uint64_t expiresBeforeMs,
+                                           uint32_t limit) override {
+    std::vector<cache::UploadJobRecord> visible;
+    for (const auto &value : jobs) {
+      if (value.state == cache::UploadJobState::OPEN && value.writerLeaseExpiresAtMs <= expiresBeforeMs) {
+        visible.push_back(value);
+      }
+    }
+    size_t begin = 0;
+    if (after) {
+      while (begin < visible.size() && visible[begin].jobId != after->jobId) ++begin;
+      if (begin < visible.size()) ++begin;
+    }
+    auto end = std::min(visible.size(), begin + limit);
+    UploadJobPage page;
+    page.jobs.insert(page.jobs.end(), visible.begin() + begin, visible.begin() + end);
+    page.more = end < visible.size();
+    co_return page;
+  }
+
+  CoTryTask<cache::UploadJobRecord> recoverOpen(cache::UploadJobRecord value) override {
+    recoveredOpen.push_back(value.jobId);
+    value.state = cache::UploadJobState::SEALED;
+    value.stagingLength = 4;
+    value.writerLeaseId = Uuid::zero();
+    value.writerLeaseExpiresAtMs = 0;
+    ++value.stateVersion;
+    co_return value;
+  }
+
+  CoTryTask<cache::UploadJobRecord> finalizeCancelled(cache::UploadJobRecord value) override {
+    finalizedCancelled.push_back(value.jobId);
+    co_return value;
   }
 
   CoTryTask<cache::UploadJobRecord> upload(cache::UploadJobRecord value) final {
@@ -119,6 +164,10 @@ class FakeBackend : public WritePublishControllerBackend {
   CoTryTask<cache::UploadJobRecord> warm(cache::UploadJobRecord value) final {
     warmed.push_back(value.jobId);
     if (failWarm && value.jobId == *failWarm) co_return makeError(CacheCode::kUnavailable, "injected prefetch failure");
+    ++value.stateVersion;
+    warmedSubmitted.push_back(value.jobId);
+    auto found = std::find_if(jobs.begin(), jobs.end(), [&](const auto &job) { return job.jobId == value.jobId; });
+    if (found != jobs.end()) *found = value;
     co_return value;
   }
 
@@ -140,12 +189,16 @@ class FakeBackend : public WritePublishControllerBackend {
   std::vector<cache::UploadJobId> published;
   std::vector<cache::UploadJobId> warmed;
   std::vector<cache::UploadJobId> aborted;
+  std::vector<cache::UploadJobId> recoveredOpen;
+  std::vector<cache::UploadJobId> finalizedCancelled;
+  std::vector<cache::UploadJobId> warmedSubmitted;
   std::function<void()> onUpload;
   std::optional<cache::UploadJobId> failUpload;
   std::optional<cache::UploadJobId> failWarm;
   std::optional<cache::UploadJobId> failPublishAfterCommit;
   uint32_t listCalls{0};
   uint32_t stopCalls{0};
+  std::vector<bool> includeTerminalRequests;
   bool stopped{false};
 };
 
@@ -163,19 +216,21 @@ TEST(TestWritePublishController, RecoversEveryDurableStateAcrossPages) {
   auto result = folly::coro::blockingWait(controller.recover());
   ASSERT_OK(result);
   EXPECT_EQ(result->scanned, 7);
-  EXPECT_EQ(result->scheduled, 6);
-  EXPECT_EQ(result->completed, 6);
+  EXPECT_EQ(result->scheduled, 7);
+  EXPECT_EQ(result->completed, 7);
   EXPECT_EQ(result->failed, 0);
-  EXPECT_EQ(backend->listCalls, 4);
-  EXPECT_EQ(backend->uploaded.size(), 2);
-  EXPECT_EQ(backend->completed.size(), 3);
-  EXPECT_EQ(backend->published.size(), 4);
-  EXPECT_EQ(backend->warmed.size(), 5);
+  EXPECT_EQ(backend->listCalls, 8);
+  EXPECT_EQ(std::count(backend->includeTerminalRequests.begin(), backend->includeTerminalRequests.end(), true), 4);
+  EXPECT_EQ(backend->recoveredOpen.size(), 1);
+  EXPECT_EQ(backend->uploaded.size(), 3);
+  EXPECT_EQ(backend->completed.size(), 4);
+  EXPECT_EQ(backend->published.size(), 5);
+  EXPECT_EQ(backend->warmed.size(), 6);
   EXPECT_EQ(backend->aborted.size(), 1);
   EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_RUN), 1);
   EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_SCANNED), 7);
-  EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_SCHEDULED), 6);
-  EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_COMPLETED), 6);
+  EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_SCHEDULED), 7);
+  EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_COMPLETED), 7);
   EXPECT_EQ(cache::metrics::countForTest(cache::metrics::Event::MANAGER_UPLOAD_FAILED), 0);
   EXPECT_EQ(cache::metrics::lastTagsForTest(cache::metrics::Event::MANAGER_UPLOAD_RUN).reason, "complete");
 }
@@ -262,6 +317,11 @@ TEST(TestWritePublishController, PublishedPrefetchFailureDoesNotRepublishAndRest
   EXPECT_EQ(recovered->completed, 1);
   EXPECT_TRUE(backend->published.empty());
   EXPECT_EQ(backend->warmed.size(), 2);
+
+  auto steady = folly::coro::blockingWait(restarted.runOnce());
+  ASSERT_OK(steady);
+  EXPECT_EQ(steady->scheduled, 0);
+  EXPECT_EQ(backend->warmed.size(), 2);
 }
 
 TEST(TestWritePublishController, LostPublishResponseRecoversWithoutRepublishing) {
@@ -291,7 +351,7 @@ TEST(TestWritePublishController, ValidatesLimitsAndRejectsBrokenPagination) {
 
   class BrokenBackend final : public FakeBackend {
    public:
-    CoTryTask<UploadJobPage> list(std::optional<cache::UploadJobId>, uint32_t) final {
+    CoTryTask<UploadJobPage> list(std::optional<cache::UploadJobId>, uint32_t, bool) final {
       co_return UploadJobPage{{}, true};
     }
   };

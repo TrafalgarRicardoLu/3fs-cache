@@ -153,5 +153,38 @@ TEST_F(TestCacheBlockStore, PagesOnlyRecoverableCacheLoadsInStableOrder) {
   }());
 }
 
+TEST_F(TestCacheBlockStore, ReconcileBackfillsStateIndexAndCommitsMigrationMarker) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    CacheBlockRecord legacy;
+    legacy.key = key(9, 1);
+    legacy.state = cache::CacheBlockState::FAILED;
+    auto setup = engine_.createReadWriteTransaction();
+    CO_ASSERT_OK(co_await setup->set(CacheBlockStore::recordKey(legacy.key), serde::serialize(legacy)));
+    CO_ASSERT_OK(co_await setup->commit());
+
+    auto before = engine_.createReadonlyTransaction();
+    auto ready = co_await CacheBlockStore::snapshotStateIndexReady(*before);
+    CO_ASSERT_OK(ready);
+    CO_ASSERT_FALSE(*ready);
+
+    auto migrate = engine_.createReadWriteTransaction();
+    auto reconciled = co_await CacheBlockStore::snapshotListReconcile(*migrate, std::nullopt, 10);
+    CO_ASSERT_OK(reconciled);
+    CO_ASSERT_TRUE(reconciled->records.empty());
+    CO_ASSERT_OK(co_await migrate->commit());
+
+    auto after = engine_.createReadonlyTransaction();
+    ready = co_await CacheBlockStore::snapshotStateIndexReady(*after);
+    CO_ASSERT_OK(ready);
+    CO_ASSERT_TRUE(*ready);
+    auto failed = co_await CacheBlockStore::snapshotListState(
+        *after, cache::CacheBlockState::FAILED, std::nullopt, 10);
+    CO_ASSERT_OK(failed);
+    CO_ASSERT_EQ(failed->records.size(), size_t{1});
+    CO_ASSERT_EQ(failed->records.front().key, legacy.key);
+    CO_ASSERT_EQ(failed->records.front().state, legacy.state);
+  }());
+}
+
 }  // namespace
 }  // namespace hf3fs::meta::server

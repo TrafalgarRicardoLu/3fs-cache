@@ -76,6 +76,7 @@ class MockMetaService : public serde::ServiceWrapper<MockMetaService, MetaSerde>
   META_MOCK_SERVICE_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   META_MOCK_SERVICE_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
   META_MOCK_SERVICE_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  META_MOCK_SERVICE_METHOD(recoverExpiredOpenUpload, RecoverExpiredOpenUploadReq, RecoverExpiredWriteStagingRsp);
   META_MOCK_SERVICE_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
   META_MOCK_SERVICE_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
   META_MOCK_SERVICE_METHOD(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
@@ -86,6 +87,9 @@ class MockMetaService : public serde::ServiceWrapper<MockMetaService, MetaSerde>
   META_MOCK_SERVICE_METHOD(getUploadJob, GetUploadJobReq, GetUploadJobRsp);
   META_MOCK_SERVICE_METHOD(adminListUploadJobs, AdminListUploadJobsReq, ListUploadJobsRsp);
   META_MOCK_SERVICE_METHOD(adminMutateUploadJob, AdminMutateUploadJobReq, AdminMutateUploadJobRsp);
+  META_MOCK_SERVICE_METHOD(listExpiredOpenUploads, ListExpiredOpenUploadsReq, ListExpiredOpenUploadsRsp);
+  META_MOCK_SERVICE_METHOD(finalizeCancelledUpload, FinalizeCancelledUploadReq, FinalizeCancelledUploadRsp);
+  META_MOCK_SERVICE_METHOD(renewCachePinOwnerLease, RenewCachePinOwnerLeaseReq, RenewCachePinOwnerLeaseRsp);
   META_MOCK_SERVICE_METHOD(convertActiveJobPins, ConvertActiveJobPinsReq, ConvertActiveJobPinsRsp);
   META_MOCK_SERVICE_METHOD(reconcileCacheBlocks, ReconcileCacheBlocksReq, ReconcileCacheBlocksRsp);
   META_MOCK_SERVICE_METHOD(listReconcileCacheBlocks, ListReconcileCacheBlocksReq, ListReconcileCacheBlocksRsp);

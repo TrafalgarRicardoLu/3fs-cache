@@ -1717,20 +1717,21 @@ void hf3fs_write(fuse_req_t req, fuse_ino_t fino, const char *buf, size_t size, 
 
     auto nowMs = static_cast<uint64_t>(UtcClock::now().toMicroseconds() / 1000);
     auto leaseMs = static_cast<uint64_t>(d.config->write_through().writer_lease().asMs().count());
-    auto expiresAtMs = std::max(nowMs + leaseMs, staging->job.writerLeaseExpiresAtMs + 1);
-    meta::RenewWriteStagingLeaseReq renew;
-    renew.user = userInfo;
-    renew.jobId = staging->job.jobId;
-    renew.expectedStateVersion = staging->job.stateVersion;
-    renew.writerLeaseId = staging->job.writerLeaseId;
-    renew.writerLeaseExpiresAtMs = expiresAtMs;
-    renew.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
-    auto renewed = withRequestInfo(req, d.metaClient->renewWriteStagingLease(std::move(renew)));
-    if (renewed.hasError()) {
-      handle_error(req, renewed);
-      return;
+    if (shouldRenewWriterLease(nowMs, staging->job.writerLeaseExpiresAtMs, leaseMs)) {
+      meta::RenewWriteStagingLeaseReq renew;
+      renew.user = userInfo;
+      renew.jobId = staging->job.jobId;
+      renew.expectedStateVersion = staging->job.stateVersion;
+      renew.writerLeaseId = staging->job.writerLeaseId;
+      renew.writerLeaseExpiresAtMs = nextWriterLeaseExpiry(nowMs, staging->job.writerLeaseExpiresAtMs, leaseMs);
+      renew.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+      auto renewed = withRequestInfo(req, d.metaClient->renewWriteStagingLease(std::move(renew)));
+      if (renewed.hasError()) {
+        handle_error(req, renewed);
+        return;
+      }
+      staging->job = std::move(renewed->job);
     }
-    staging->job = std::move(renewed->job);
   }
 
   auto odir = handle->oDirect;
@@ -1918,10 +1919,16 @@ void hf3fs_release(fuse_req_t req, fuse_ino_t fino, struct fuse_file_info *fi) {
 
   auto userInfo = UserInfo(flat::Uid(fuse_req_ctx(req)->uid), flat::Gid(fuse_req_ctx(req)->gid), d.fuseToken);
   if (handle->writeStaging) {
-    if (!sealWriteStaging(req, fino, fi) || !awaitWriteStagingPublish(req, fi)) return;
+    auto published = sealWriteStaging(req, fino, fi) && awaitWriteStagingPublish(req, fi);
     auto res = withRequestInfo(
         req,
         d.metaClient->close(userInfo, handle->inodeSnapshot.id, sessionId, false, std::nullopt, std::nullopt));
+    if (!published) {
+      if (res.hasError()) {
+        XLOGF(WARN, "Failed to close write staging session after publish error: inode={}, error={}", ino, res.error());
+      }
+      return;
+    }
     if (res.hasError()) {
       handle_error(req, res);
       return;

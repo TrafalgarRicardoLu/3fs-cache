@@ -59,6 +59,56 @@ CoTryTask<TargetCacheInventory> StorageInventoryReader::readTarget(storage::Targ
   }
 }
 
+CoTryTask<void> StorageInventoryReader::readTargetPages(storage::TargetId targetId, PageHandler handler) {
+  if (targetId == storage::TargetId{} || pageSize_ == 0 || pageSize_ > storage::kMaxCacheStorageBatchItems ||
+      !handler) {
+    co_return makeError(StatusCode::kInvalidArg, "invalid streaming cache inventory reader configuration");
+  }
+
+  std::string cursor;
+  std::set<std::string> cursors;
+  std::string previousKey;
+  Uuid inventoryEpoch{Uuid::zero()};
+  while (true) {
+    if (shouldStop_ && shouldStop_()) co_return makeError(CacheCode::kUnavailable, "cache inventory scan stopped");
+    storage::ListCacheInventoryReq request;
+    request.targetId = targetId;
+    request.cursor = cursor;
+    request.limit = pageSize_;
+    request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto page = co_await backend_->listCacheInventory(std::move(request));
+    CO_RETURN_ON_ERROR(page);
+    if (auto valid = page->valid(); valid.hasError()) {
+      co_return makeError(CacheCode::kInvalidResponse, valid.error().message());
+    }
+    if (!page->done && page->entries.empty()) {
+      co_return makeError(CacheCode::kInvalidResponse, "cache inventory returned an empty nonterminal page");
+    }
+    if (inventoryEpoch == Uuid::zero()) {
+      inventoryEpoch = page->inventoryEpoch;
+    } else if (inventoryEpoch != page->inventoryEpoch) {
+      co_return makeError(CacheCode::kInvalidResponse, "cache inventory epoch changed while paging");
+    }
+    for (const auto &entry : page->entries) {
+      if (entry.targetId != targetId) {
+        co_return makeError(CacheCode::kInvalidResponse, "cache inventory entry belongs to another target");
+      }
+      auto key = serde::serialize(entry.key);
+      if (!previousKey.empty() && key <= previousKey) {
+        co_return makeError(CacheCode::kInvalidResponse, "cache inventory entries are not strictly ordered");
+      }
+      previousKey = std::move(key);
+    }
+    TargetCacheInventory inventory{targetId, inventoryEpoch, std::move(page->entries)};
+    CO_RETURN_ON_ERROR(co_await handler(std::move(inventory)));
+    if (page->done) co_return Void{};
+    if (page->nextCursor == cursor || !cursors.emplace(page->nextCursor).second) {
+      co_return makeError(CacheCode::kInvalidResponse, "cache inventory cursor did not advance");
+    }
+    cursor = std::move(page->nextCursor);
+  }
+}
+
 CoTask<std::vector<Result<TargetCacheInventory>>> StorageInventoryReader::readTargets(
     std::span<const storage::TargetId> targetIds) {
   std::vector<Result<TargetCacheInventory>> results;

@@ -45,6 +45,16 @@ class FakeBackend : public MultipartUploaderBackend {
     co_return cache::origin::MultipartUpload{destination, "upload-1"};
   }
 
+  CoTryTask<Void> abortMultipartUpload(cache::origin::AbortMultipartUploadRequest request) final {
+    aborted.push_back(std::move(request.upload));
+    co_return Void{};
+  }
+
+  CoTryTask<cache::UploadJobRecord> getUploadJob(cache::UploadJobId jobId) final {
+    if (job.jobId != jobId) co_return makeError(CacheCode::kNotFound);
+    co_return job;
+  }
+
   CoTryTask<cache::origin::UploadPartResult> uploadPart(cache::origin::UploadPartRequest request) final {
     uploadNumbers.push_back(request.partNumber);
     if (!uploadFailures.empty()) {
@@ -81,6 +91,10 @@ class FakeBackend : public MultipartUploaderBackend {
     job.multipartId = std::move(multipartId);
     ++job.stateVersion;
     ++job.updatedAtMs;
+    if (failBeginAfterCommit) {
+      failBeginAfterCommit = false;
+      co_return makeError(CacheCode::kTimeout, "lost begin response");
+    }
     co_return job;
   }
 
@@ -126,6 +140,7 @@ class FakeBackend : public MultipartUploaderBackend {
   std::map<uint32_t, std::vector<uint8_t>> uploaded;
   std::vector<cache::ByteRange> reads;
   std::vector<uint32_t> uploadNumbers;
+  std::vector<cache::origin::MultipartUpload> aborted;
   std::vector<std::chrono::milliseconds> delays;
   std::deque<Status> uploadFailures;
   std::deque<Status> beginFailures;
@@ -133,10 +148,30 @@ class FakeBackend : public MultipartUploaderBackend {
   std::optional<uint32_t> failCheckpointPart;
   size_t cancelAfterCheckpoints{0};
   bool stopped{false};
+  bool failBeginAfterCommit{false};
   int creates{0};
   int begins{0};
   int checkpointCalls{0};
 };
+
+TEST(TestMultipartUploader, AbortsCreatedUploadAfterConfirmedBeginRace) {
+  auto backend = std::make_shared<FakeBackend>(sealedJob(4));
+  backend->beginFailures.push_back(Status(CacheCode::kStateConflict, "lost begin race"));
+  MultipartUploader uploader(backend, {.partSize = 4, .maxRetries = 0});
+  ASSERT_ERROR(folly::coro::blockingWait(uploader.upload(backend->job)), CacheCode::kStateConflict);
+  ASSERT_EQ(backend->aborted.size(), 1);
+  EXPECT_EQ(backend->aborted.front().uploadId, "upload-1");
+}
+
+TEST(TestMultipartUploader, RecoversCommittedBeginBeforeConsideringAbort) {
+  auto backend = std::make_shared<FakeBackend>(sealedJob(4));
+  backend->failBeginAfterCommit = true;
+  MultipartUploader uploader(backend, {.partSize = 4, .maxRetries = 0});
+  auto result = folly::coro::blockingWait(uploader.upload(backend->job));
+  ASSERT_OK(result);
+  EXPECT_TRUE(backend->aborted.empty());
+  EXPECT_EQ(result->multipartId, "upload-1");
+}
 
 TEST(TestMultipartUploader, CheckpointsEveryPartAndTail) {
   auto backend = std::make_shared<FakeBackend>(sealedJob());

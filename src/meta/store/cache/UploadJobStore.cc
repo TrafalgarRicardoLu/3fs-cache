@@ -12,9 +12,8 @@ namespace {
 constexpr size_t kMaxUploadJobValueBytes = 96U << 10;
 constexpr int32_t kListScanBatch = 256;
 
-bool terminal(cache::UploadJobState state) {
-  return state == cache::UploadJobState::PUBLISHED || state == cache::UploadJobState::FAILED ||
-         state == cache::UploadJobState::CANCELLED;
+bool terminal(const cache::UploadJobRecord &job) {
+  return job.state == cache::UploadJobState::FAILED || job.state == cache::UploadJobState::CANCELLED;
 }
 
 bool sameSpec(const cache::UploadJobRecord &left, const cache::UploadJobRecord &right) {
@@ -24,7 +23,7 @@ bool sameSpec(const cache::UploadJobRecord &left, const cache::UploadJobRecord &
 }
 
 bool validTransition(cache::UploadJobState from, cache::UploadJobState to) {
-  if (from == to) return !terminal(from);
+  if (from == to) return from != cache::UploadJobState::FAILED && from != cache::UploadJobState::CANCELLED;
   switch (from) {
     case cache::UploadJobState::OPEN:
       return to == cache::UploadJobState::SEALED || to == cache::UploadJobState::FAILED ||
@@ -103,12 +102,50 @@ CoTryTask<CreateUploadJobResult> UploadJobStore::create(kv::IReadWriteTransactio
     if (!sameSpec(**existing, job)) {
       co_return makeError(CacheCode::kStateConflict, "upload job id is already used by another spec");
     }
+    CO_RETURN_ON_ERROR(co_await indexActive(txn, **existing));
     co_return CreateUploadJobResult{std::move(**existing), false};
   }
   auto value = encode(job);
   CO_RETURN_ON_ERROR(value);
   CO_RETURN_ON_ERROR(co_await txn.set(UploadJobKey::job(job.jobId), *value));
+  CO_RETURN_ON_ERROR(co_await txn.set(UploadJobKey::active(job.jobId), *value));
+  CO_RETURN_ON_ERROR(co_await txn.set(UploadJobKey::openLease(job.writerLeaseExpiresAtMs, job.jobId), *value));
+  CO_RETURN_ON_ERROR(co_await txn.set(UploadJobKey::state(job.state, job.jobId), *value));
   co_return CreateUploadJobResult{job, true};
+}
+
+CoTryTask<ExpiredOpenUploadPage> UploadJobStore::snapshotListExpiredOpen(
+    kv::IReadOnlyTransaction &txn,
+    uint64_t expiresBeforeMs,
+    std::optional<meta::UploadOpenLeaseCursor> after,
+    uint32_t limit) {
+  if (expiresBeforeMs == 0 || limit == 0 || limit > cache::kMaxPhase2BatchItems) {
+    co_return makeError(StatusCode::kInvalidArg, "invalid expired open upload page");
+  }
+  if (after) CO_RETURN_ON_ERROR(after->valid());
+  auto prefix = UploadJobKey::openLeasePrefix();
+  auto beginKey = after ? UploadJobKey::openLease(after->expiresAtMs, after->jobId) : prefix;
+  auto endKey = expiresBeforeMs == std::numeric_limits<uint64_t>::max()
+                    ? kv::TransactionHelper::prefixListEndKey(prefix)
+                    : UploadJobKey::openLeaseTime(expiresBeforeMs + 1);
+  auto values = co_await txn.snapshotGetRange({beginKey, !after.has_value()}, {endKey, false}, limit + 1);
+  CO_RETURN_ON_ERROR(values);
+  ExpiredOpenUploadPage page;
+  page.more = values->kvs.size() > limit;
+  auto count = std::min<size_t>(values->kvs.size(), limit);
+  page.jobs.reserve(count);
+  for (size_t index = 0; index < count; ++index) {
+    const auto &value = values->kvs[index];
+    auto cursor = UploadJobKey::unpackOpenLease(value.key);
+    CO_RETURN_ON_ERROR(cursor);
+    auto job = decode(UploadJobKey::job(cursor->second), value.value);
+    CO_RETURN_ON_ERROR(job);
+    if (job->state != cache::UploadJobState::OPEN || job->writerLeaseExpiresAtMs != cursor->first) {
+      co_return makeError(StatusCode::kDataCorruption, "stale open upload lease index");
+    }
+    page.jobs.push_back(std::move(*job));
+  }
+  co_return page;
 }
 
 CoTryTask<std::optional<cache::UploadJobRecord>> UploadJobStore::snapshotLoad(kv::IReadOnlyTransaction &txn,
@@ -129,8 +166,8 @@ CoTryTask<UploadJobPage> UploadJobStore::snapshotList(kv::IReadOnlyTransaction &
   if (limit == 0 || limit > cache::kMaxPhase2BatchItems || (after && *after == cache::UploadJobId{})) {
     co_return makeError(StatusCode::kInvalidArg, "invalid upload job page");
   }
-  auto prefix = UploadJobKey::prefix();
-  auto beginKey = after ? UploadJobKey::job(*after) : prefix;
+  auto prefix = includeTerminal ? UploadJobKey::prefix() : UploadJobKey::activePrefix();
+  auto beginKey = after ? (includeTerminal ? UploadJobKey::job(*after) : UploadJobKey::active(*after)) : prefix;
   auto endKey = kv::TransactionHelper::prefixListEndKey(prefix);
   bool inclusive = !after.has_value();
   UploadJobPage page;
@@ -138,9 +175,11 @@ CoTryTask<UploadJobPage> UploadJobStore::snapshotList(kv::IReadOnlyTransaction &
     auto values = co_await txn.snapshotGetRange({beginKey, inclusive}, {endKey, false}, kListScanBatch);
     CO_RETURN_ON_ERROR(values);
     for (const auto &value : values->kvs) {
-      auto job = decode(value.key, value.value);
+      auto jobId = includeTerminal ? UploadJobKey::unpack(value.key) : UploadJobKey::unpackActive(value.key);
+      CO_RETURN_ON_ERROR(jobId);
+      auto job = decode(UploadJobKey::job(*jobId), value.value);
       CO_RETURN_ON_ERROR(job);
-      if ((!ownerUid || job->ownerUid == *ownerUid) && (includeTerminal || !terminal(job->state))) {
+      if ((!ownerUid || job->ownerUid == *ownerUid) && (includeTerminal || !terminal(*job))) {
         page.jobs.push_back(std::move(*job));
       }
       if (page.jobs.size() > limit) break;
@@ -176,6 +215,8 @@ CoTryTask<cache::UploadJobRecord> UploadJobStore::update(kv::IReadWriteTransacti
   if (job.updatedAtMs < current.updatedAtMs || job.parts.size() < current.parts.size() ||
       !std::equal(current.parts.begin(), current.parts.end(), job.parts.begin()) ||
       (!current.multipartId.empty() && current.multipartId != job.multipartId) ||
+      (current.completedObject && current.completedObject != job.completedObject) ||
+      (current.publishedInode != 0 && current.publishedInode != job.publishedInode) ||
       (current.state == cache::UploadJobState::OPEN && job.state == cache::UploadJobState::OPEN &&
        (job.stagingLength != current.stagingLength || job.writerLeaseId != current.writerLeaseId ||
         job.writerLeaseExpiresAtMs < current.writerLeaseExpiresAtMs)) ||
@@ -186,7 +227,44 @@ CoTryTask<cache::UploadJobRecord> UploadJobStore::update(kv::IReadWriteTransacti
   auto value = encode(job);
   CO_RETURN_ON_ERROR(value);
   CO_RETURN_ON_ERROR(co_await txn.set(UploadJobKey::job(job.jobId), *value));
+  if (current.state != job.state) {
+    CO_RETURN_ON_ERROR(co_await txn.clear(UploadJobKey::state(current.state, current.jobId)));
+  }
+  CO_RETURN_ON_ERROR(co_await txn.set(UploadJobKey::state(job.state, job.jobId), *value));
+  if (current.state == cache::UploadJobState::OPEN) {
+    CO_RETURN_ON_ERROR(co_await txn.clear(UploadJobKey::openLease(current.writerLeaseExpiresAtMs, current.jobId)));
+  }
+  if (job.state == cache::UploadJobState::OPEN) {
+    CO_RETURN_ON_ERROR(co_await txn.set(UploadJobKey::openLease(job.writerLeaseExpiresAtMs, job.jobId), *value));
+  }
+  if (terminal(job)) {
+    CO_RETURN_ON_ERROR(co_await txn.clear(UploadJobKey::active(job.jobId)));
+  } else {
+    CO_RETURN_ON_ERROR(co_await txn.set(UploadJobKey::active(job.jobId), *value));
+  }
   co_return job;
+}
+
+CoTryTask<void> UploadJobStore::removeActive(kv::IReadWriteTransaction &txn, cache::UploadJobId jobId) {
+  if (jobId == cache::UploadJobId{}) co_return makeError(StatusCode::kInvalidArg, "upload job id not set");
+  co_return co_await txn.clear(UploadJobKey::active(jobId));
+}
+
+CoTryTask<void> UploadJobStore::indexActive(kv::IReadWriteTransaction &txn, const cache::UploadJobRecord &job) {
+  CO_RETURN_ON_ERROR(job.valid());
+  auto value = encode(job);
+  CO_RETURN_ON_ERROR(value);
+  CO_RETURN_ON_ERROR(co_await txn.set(UploadJobKey::state(job.state, job.jobId), *value));
+  if (terminal(job)) co_return Void{};
+  CO_RETURN_ON_ERROR(co_await txn.set(UploadJobKey::active(job.jobId), *value));
+  if (job.state == cache::UploadJobState::OPEN) {
+    CO_RETURN_ON_ERROR(co_await txn.set(UploadJobKey::openLease(job.writerLeaseExpiresAtMs, job.jobId), *value));
+  }
+  co_return Void{};
+}
+
+CoTryTask<void> UploadJobStore::finishStateIndexMigration(kv::IReadWriteTransaction &txn) {
+  co_return co_await txn.set(UploadJobKey::stateIndexMarker(), "1");
 }
 
 }  // namespace hf3fs::meta::server

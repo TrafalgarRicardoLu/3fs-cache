@@ -131,8 +131,25 @@ CoTryTask<cache::UploadJobRecord> MultipartUploader::upload(cache::UploadJobReco
       co_return makeError(CacheCode::kInvalidResponse, "multipart create changed upload destination");
     }
     auto begun = co_await beginWithRetry(job, created->uploadId);
-    CO_RETURN_ON_ERROR(begun);
-    job = std::move(*begun);
+    if (begun.hasError()) {
+      // A timeout may hide a committed begin. Only abort after Metadata proves
+      // this upload id was not durably selected for the job.
+      auto durable = co_await backend_->getUploadJob(job.jobId);
+      if (durable.hasValue() && durable->state == cache::UploadJobState::UPLOADING &&
+          durable->multipartId == created->uploadId) {
+        job = std::move(*durable);
+      } else {
+        if (durable.hasValue()) {
+          auto aborted = co_await backend_->abortMultipartUpload({{created->destination, created->uploadId}});
+          if (aborted.hasError() && aborted.error().code() != CacheCode::kNotFound) {
+            co_return makeError(aborted.error());
+          }
+        }
+        co_return makeError(begun.error());
+      }
+    } else {
+      job = std::move(*begun);
+    }
     CO_RETURN_ON_ERROR(validateProgress(job, config_.partSize));
   }
 
@@ -234,6 +251,22 @@ CoTryTask<cache::origin::MultipartUpload> RealMultipartUploaderBackend::createMu
     const cache::ObjectRef &destination) {
   if (!objectStore_) co_return makeError(StatusCode::kInvalidConfig, "multipart object store is missing");
   co_return co_await objectStore_->createMultipartUpload({destination});
+}
+
+CoTryTask<Void> RealMultipartUploaderBackend::abortMultipartUpload(cache::origin::AbortMultipartUploadRequest request) {
+  if (!objectStore_) co_return makeError(StatusCode::kInvalidConfig, "multipart object store is missing");
+  co_return co_await objectStore_->abortMultipartUpload(request);
+}
+
+CoTryTask<cache::UploadJobRecord> RealMultipartUploaderBackend::getUploadJob(cache::UploadJobId jobId) {
+  if (!metaClient_) co_return makeError(StatusCode::kInvalidConfig, "multipart Metadata client is missing");
+  meta::GetUploadJobReq request;
+  request.user = user_;
+  request.jobId = jobId;
+  request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto response = co_await metaClient_->getUploadJob(std::move(request));
+  CO_RETURN_ON_ERROR(response);
+  co_return std::move(response->job);
 }
 
 CoTryTask<cache::origin::UploadPartResult> RealMultipartUploaderBackend::uploadPart(

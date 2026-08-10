@@ -45,7 +45,9 @@ CoTryTask<void> PermitRecovery::cancel(const meta::RecoverableCachePermit &item)
   co_return Void{};
 }
 
-CoTryTask<void> PermitRecovery::recoverLoading(const meta::RecoverableCachePermit &item, uint64_t nowNs) {
+CoTryTask<void> PermitRecovery::recoverLoading(const meta::RecoverableCachePermit &item,
+                                               uint64_t nowNs,
+                                               bool force) {
   if (!cleanupWorker_ || item.leaseExpiresAt.isZero() || item.cacheGeneration == cache::CacheGeneration{} ||
       !item.placement || *item.placement != item.permit.placement) {
     co_return makeError(CacheCode::kInvalidResponse, "loading recovery item is missing its phase four fence");
@@ -54,7 +56,7 @@ CoTryTask<void> PermitRecovery::recoverLoading(const meta::RecoverableCachePermi
   if (leaseUs <= 0 || static_cast<uint64_t>(leaseUs) > std::numeric_limits<uint64_t>::max() / 1000) {
     co_return makeError(CacheCode::kInvalidResponse, "invalid loading recovery lease deadline");
   }
-  if (static_cast<uint64_t>(leaseUs) * 1000 > nowNs) {
+  if (!force && static_cast<uint64_t>(leaseUs) * 1000 > nowNs) {
     cache::metrics::recordCount(cache::metrics::Event::MANAGER_LEASE_RECOVERY, 1, {.reason = "deferred"});
     co_return Void{};
   }
@@ -110,7 +112,7 @@ CoTryTask<void> PermitRecovery::recover(const meta::RecoverableCachePermit &item
   }
   if (queried.hasError() && !missingPermit(queried.error())) co_return makeError(queried.error());
   if (item.state == cache::CacheBlockState::LOADING) {
-    if (recoverLoading_) co_return co_await recoverLoading(item, nowNs);
+    if (recoverLoading_) co_return co_await recoverLoading(item, nowNs, true);
     co_return Void{};
   }
 

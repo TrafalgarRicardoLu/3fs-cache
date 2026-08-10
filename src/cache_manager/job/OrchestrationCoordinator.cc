@@ -1,5 +1,7 @@
 #include "cache_manager/job/OrchestrationCoordinator.h"
 
+#include <algorithm>
+
 #include "cache/metrics/CacheMetrics.h"
 
 namespace hf3fs::cache_manager {
@@ -47,6 +49,11 @@ std::vector<cache::PrefetchJobRecord> OrchestrationCoordinator::snapshot() const
   std::vector<cache::PrefetchJobRecord> result;
   result.reserve(jobs_.size());
   for (const auto &[_, job] : jobs_) result.push_back(job);
+  std::stable_sort(result.begin(), result.end(), [](const auto &left, const auto &right) {
+    if (left.spec.priority != right.spec.priority) return left.spec.priority > right.spec.priority;
+    if (left.createdAtMs != right.createdAtMs) return left.createdAtMs < right.createdAtMs;
+    return left.spec.jobId.toUnderType() < right.spec.jobId.toUnderType();
+  });
   return result;
 }
 

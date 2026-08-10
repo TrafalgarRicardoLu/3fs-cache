@@ -482,6 +482,41 @@ CoTryTask<RecoverExpiredWriteStagingRsp> MetaOperator::recoverExpiredWriteStagin
   co_return co_await runOp(&MetaStore::recoverExpiredWriteStaging, req);
 }
 
+CoTryTask<RecoverExpiredWriteStagingRsp> MetaOperator::recoverExpiredOpenUpload(RecoverExpiredOpenUploadReq req) {
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  RecoverExpiredWriteStagingReq recovery;
+  recovery.user = UserInfo(Uid(0), Gid(0));
+  recovery.jobId = req.jobId;
+  recovery.expectedStateVersion = req.expectedStateVersion;
+  recovery.expectedWriterLeaseId = req.expectedWriterLeaseId;
+  recovery.expectedWriterLeaseExpiresAtMs = req.expectedWriterLeaseExpiresAtMs;
+  recovery.cacheProtocolVersion = req.cacheProtocolVersion;
+  co_return co_await runOp(&MetaStore::recoverExpiredWriteStaging, recovery);
+}
+
+CoTryTask<ListExpiredOpenUploadsRsp> MetaOperator::listExpiredOpenUploads(ListExpiredOpenUploadsReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::listExpiredOpenUploads, req);
+}
+
+CoTryTask<FinalizeCancelledUploadRsp> MetaOperator::finalizeCancelledUpload(FinalizeCancelledUploadReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase4(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::finalizeCancelledUpload, req);
+}
+
+CoTryTask<RenewCachePinOwnerLeaseRsp> MetaOperator::renewCachePinOwnerLease(RenewCachePinOwnerLeaseReq req) {
+  CO_RETURN_ON_ERROR(req.valid());
+  CO_RETURN_ON_ERROR(checkCacheService(req.service));
+  CO_RETURN_ON_ERROR(checkCachePhase3(req.cacheProtocolVersion));
+  co_return co_await runOp(&MetaStore::renewCachePinOwnerLease, req);
+}
+
 CoTryTask<BeginMultipartUploadRsp> MetaOperator::beginMultipartUpload(BeginMultipartUploadReq req) {
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkCacheService(req.service));
@@ -909,9 +944,34 @@ CoTryTask<ListEvictingCacheBlocksRsp> MetaOperator::listEvictingCacheBlocks(List
   CO_RETURN_ON_ERROR(req.valid());
   CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));
   auto handler = [req](kv::IReadOnlyTransaction &transaction) -> CoTryTask<ListEvictingCacheBlocksRsp> {
+    ListEvictingCacheBlocksRsp response;
+    auto indexed = co_await CacheBlockStore::snapshotStateIndexReady(transaction);
+    CO_RETURN_ON_ERROR(indexed);
+    if (*indexed) {
+      auto after = req.beginInode == 0
+                       ? std::optional<cache::CacheBlockKey>{}
+                       : std::optional<cache::CacheBlockKey>{{req.beginInode, req.beginBlock}};
+      auto page = co_await CacheBlockStore::snapshotListState(transaction,
+                                                              cache::CacheBlockState::EVICTING,
+                                                              after,
+                                                              req.limit,
+                                                              true);
+      CO_RETURN_ON_ERROR(page);
+      response.more = page->more;
+      for (const auto &record : page->records) {
+        CacheEvictionIdentity item{record.key,
+                                   *record.ready,
+                                   *record.placement,
+                                   record.evictionEpoch,
+                                   record.retireOperationId,
+                                   record.evictionReason};
+        CO_RETURN_ON_ERROR(item.valid());
+        response.items.push_back(std::move(item));
+      }
+      co_return response;
+    }
     auto records = co_await CacheBlockStore::snapshotListAll(transaction);
     CO_RETURN_ON_ERROR(records);
-    ListEvictingCacheBlocksRsp response;
     for (const auto &record : *records) {
       if (record.state != cache::CacheBlockState::EVICTING) continue;
       if (record.key.inode < req.beginInode ||
@@ -942,12 +1002,38 @@ CoTryTask<ListReadyCacheBlocksRsp> MetaOperator::listReadyCacheBlocks(ListReadyC
   CO_RETURN_ON_ERROR(checkCacheService(req.service));
   CO_RETURN_ON_ERROR(checkCachePhase2(req.cacheProtocolVersion));
   auto handler = [req](kv::IReadOnlyTransaction &transaction) -> CoTryTask<ListReadyCacheBlocksRsp> {
-    auto records = co_await CacheBlockStore::snapshotListAll(transaction);
-    CO_RETURN_ON_ERROR(records);
     auto less = [](const cache::CacheBlockKey &lhs, const cache::CacheBlockKey &rhs) {
       return lhs.inode < rhs.inode || (lhs.inode == rhs.inode && lhs.block < rhs.block);
     };
     ListReadyCacheBlocksRsp response;
+    auto indexed = co_await CacheBlockStore::snapshotStateIndexReady(transaction);
+    CO_RETURN_ON_ERROR(indexed);
+    if (*indexed) {
+      auto page = co_await CacheBlockStore::snapshotListState(
+          transaction, cache::CacheBlockState::READY, req.after, req.limit);
+      CO_RETURN_ON_ERROR(page);
+      response.more = page->more;
+      for (const auto &record : page->records) {
+        if (!record.ready || !record.placement || !record.committedPermit) {
+          co_return makeError(CacheCode::kPlacementMismatch, "READY cache block has no immutable placement");
+        }
+        ReadyCacheBlockStatus item{record.key,
+                                   *record.ready,
+                                   record.chainId,
+                                   record.blockLength,
+                                   record.chargeKind,
+                                   record.chargedBytes,
+                                   *record.placement,
+                                   *record.committedPermit,
+                                   record.readyAt,
+                                   record.lastAccessAt};
+        CO_RETURN_ON_ERROR(item.valid());
+        response.items.push_back(std::move(item));
+      }
+      co_return response;
+    }
+    auto records = co_await CacheBlockStore::snapshotListAll(transaction);
+    CO_RETURN_ON_ERROR(records);
     for (const auto &record : *records) {
       if (record.state != cache::CacheBlockState::READY || record.chargeKind != cache::ChargeKind::COMMITTED) continue;
       if (req.after.has_value() && !less(*req.after, record.key)) continue;

@@ -82,6 +82,42 @@ TEST_F(TestPinStore, RenewalAndRemovalAreIdempotent) {
   }());
 }
 
+TEST_F(TestPinStore, OwnerLeaseRenewsAllPinsWithoutRewritingThem) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto pinOwner = owner(30);
+    auto record = pin(block(30, 0), pinOwner, 150);
+    auto txn = engine_.createReadWriteTransaction();
+    CO_ASSERT_OK(co_await PinStore::upsert(*txn, record));
+    auto created = co_await PinStore::renewOwnerLease(*txn, {pinOwner, 100, 300});
+    CO_ASSERT_OK(created);
+    CO_ASSERT_TRUE(created->created);
+    CO_ASSERT_OK(co_await txn->commit());
+
+    auto read = engine_.createReadonlyTransaction();
+    auto active = co_await PinStore::snapshotQueryActive(*read, record.key, 250);
+    CO_ASSERT_OK(active);
+    CO_ASSERT_EQ(active->size(), size_t{1});
+
+    txn = engine_.createReadWriteTransaction();
+    auto renewed = co_await PinStore::renewOwnerLease(*txn, {pinOwner, 100, 400});
+    CO_ASSERT_OK(renewed);
+    CO_ASSERT_FALSE(renewed->created);
+    CO_ASSERT_OK(co_await txn->commit());
+    read = engine_.createReadonlyTransaction();
+    active = co_await PinStore::snapshotQueryActive(*read, record.key, 350);
+    CO_ASSERT_OK(active);
+    CO_ASSERT_EQ(active->size(), size_t{1});
+
+    txn = engine_.createReadWriteTransaction();
+    CO_ASSERT_OK(co_await PinStore::removeByOwner(*txn, pinOwner));
+    CO_ASSERT_OK(co_await txn->commit());
+    read = engine_.createReadonlyTransaction();
+    active = co_await PinStore::snapshotQueryActive(*read, record.key, 350);
+    CO_ASSERT_OK(active);
+    CO_ASSERT_TRUE(active->empty());
+  }());
+}
+
 TEST_F(TestPinStore, OwnerPaginationAndRemoveAllUseStableBlockOrder) {
   folly::coro::blockingWait([&]() -> CoTask<void> {
     auto pinOwner = owner(4);

@@ -83,6 +83,7 @@ class IMetaServiceStub {
   IMETA_STUB_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
   IMETA_STUB_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
   IMETA_STUB_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+  IMETA_STUB_METHOD(recoverExpiredOpenUpload, RecoverExpiredOpenUploadReq, RecoverExpiredWriteStagingRsp);
   IMETA_STUB_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
   IMETA_STUB_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
   IMETA_STUB_METHOD(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
@@ -91,6 +92,9 @@ class IMetaServiceStub {
   IMETA_STUB_METHOD(getUploadJob, GetUploadJobReq, GetUploadJobRsp);
   IMETA_STUB_METHOD(adminListUploadJobs, AdminListUploadJobsReq, ListUploadJobsRsp);
   IMETA_STUB_METHOD(adminMutateUploadJob, AdminMutateUploadJobReq, AdminMutateUploadJobRsp);
+  IMETA_STUB_METHOD(listExpiredOpenUploads, ListExpiredOpenUploadsReq, ListExpiredOpenUploadsRsp);
+  IMETA_STUB_METHOD(finalizeCancelledUpload, FinalizeCancelledUploadReq, FinalizeCancelledUploadRsp);
+  IMETA_STUB_METHOD(renewCachePinOwnerLease, RenewCachePinOwnerLeaseReq, RenewCachePinOwnerLeaseRsp);
 
 #undef IMETA_STUB_METHOD
 };

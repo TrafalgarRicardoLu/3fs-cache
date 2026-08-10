@@ -60,6 +60,22 @@ CoTryTask<std::optional<cache::PinRecord>> loadPair(kv::IReadWriteTransaction &t
   co_return std::move(*first);
 }
 
+template <typename Transaction>
+CoTryTask<std::optional<cache::PinOwnerLease>> loadOwnerLease(Transaction &txn,
+                                                              const cache::PinOwner &owner,
+                                                              bool snapshot) {
+  auto key = OrchestrationKey::pinOwnerLease(owner);
+  auto value = snapshot ? co_await txn.snapshotGet(key) : co_await txn.get(key);
+  CO_RETURN_ON_ERROR(value);
+  if (!value->has_value()) co_return std::nullopt;
+  cache::PinOwnerLease lease;
+  auto decoded = serde::deserialize(lease, **value);
+  if (decoded.hasError() || lease.valid().hasError() || lease.owner != owner) {
+    co_return makeError(StatusCode::kDataCorruption, "invalid pin owner lease");
+  }
+  co_return lease;
+}
+
 CoTryTask<Void> validateSnapshotPair(kv::IReadOnlyTransaction &txn, const cache::PinRecord &pin) {
   auto counterpart = co_await txn.snapshotGet(OrchestrationKey::pinByBlock(pin.key, pin.owner));
   CO_RETURN_ON_ERROR(counterpart);
@@ -94,7 +110,9 @@ CoTryTask<Void> checkActiveLimit(kv::IReadWriteTransaction &txn,
     auto other = byBlock ? decodeByOwner(counterpartKey, **counterpart) : decodeByBlock(counterpartKey, **counterpart);
     CO_RETURN_ON_ERROR(other);
     if (*other != *pin) co_return makeError(StatusCode::kDataCorruption, "cache pin counterpart differs");
-    if (pin->expiresAtMs > nowMs && ++active >= limit) {
+    auto lease = co_await loadOwnerLease(txn, pin->owner, false);
+    CO_RETURN_ON_ERROR(lease);
+    if ((pin->expiresAtMs > nowMs || (lease->has_value() && (*lease)->expiresAtMs > nowMs)) && ++active >= limit) {
       co_return makeError(CacheCode::kRequestTooLarge, "cache pin ownership limit reached");
     }
   }
@@ -110,6 +128,20 @@ Result<Void> PinStoreLimits::valid() const {
     return makeError(StatusCode::kInvalidArg, "invalid cache pin store limits");
   }
   return Void{};
+}
+
+CoTryTask<PinStore::RenewOwnerLeaseResult> PinStore::renewOwnerLease(kv::IReadWriteTransaction &txn,
+                                                                     const cache::PinOwnerLease &lease) {
+  CO_RETURN_ON_ERROR(lease.valid());
+  auto existing = co_await loadOwnerLease(txn, lease.owner, false);
+  CO_RETURN_ON_ERROR(existing);
+  if (existing->has_value() &&
+      ((*existing)->createdAtMs != lease.createdAtMs || (*existing)->expiresAtMs > lease.expiresAtMs)) {
+    co_return makeError(CacheCode::kStateConflict, "pin owner lease moved backwards");
+  }
+  auto created = !existing->has_value();
+  CO_RETURN_ON_ERROR(co_await txn.set(OrchestrationKey::pinOwnerLease(lease.owner), serde::serialize(lease)));
+  co_return RenewOwnerLeaseResult{lease, created};
 }
 
 CoTryTask<cache::PinRecord> PinStore::upsert(kv::IReadWriteTransaction &txn,
@@ -183,6 +215,7 @@ CoTryTask<uint64_t> PinStore::removeByOwner(kv::IReadWriteTransaction &txn,
     CO_RETURN_ON_ERROR(result);
     removed += *result;
   }
+  if (keys.empty()) CO_RETURN_ON_ERROR(co_await txn.clear(OrchestrationKey::pinOwnerLease(owner)));
   co_return removed;
 }
 
@@ -235,7 +268,11 @@ CoTryTask<std::vector<cache::PinRecord>> PinStore::snapshotQueryActive(kv::IRead
     auto other = decodeByOwner(OrchestrationKey::pinByOwner(pin->owner, pin->key), **counterpart);
     CO_RETURN_ON_ERROR(other);
     if (*other != *pin) co_return makeError(StatusCode::kDataCorruption, "cache pin counterpart differs");
-    if (pin->expiresAtMs > nowMs) active.push_back(std::move(*pin));
+    auto lease = co_await loadOwnerLease(txn, pin->owner, true);
+    CO_RETURN_ON_ERROR(lease);
+    if (pin->expiresAtMs > nowMs || (lease->has_value() && (*lease)->expiresAtMs > nowMs)) {
+      active.push_back(std::move(*pin));
+    }
   }
   co_return active;
 }
@@ -261,7 +298,11 @@ CoTryTask<std::vector<cache::PinRecord>> PinStore::queryActive(kv::IReadWriteTra
     auto other = decodeByOwner(OrchestrationKey::pinByOwner(pin->owner, pin->key), **counterpart);
     CO_RETURN_ON_ERROR(other);
     if (*other != *pin) co_return makeError(StatusCode::kDataCorruption, "cache pin counterpart differs");
-    if (pin->expiresAtMs > nowMs) active.push_back(std::move(*pin));
+    auto lease = co_await loadOwnerLease(txn, pin->owner, false);
+    CO_RETURN_ON_ERROR(lease);
+    if (pin->expiresAtMs > nowMs || (lease->has_value() && (*lease)->expiresAtMs > nowMs)) {
+      active.push_back(std::move(*pin));
+    }
   }
   co_return active;
 }

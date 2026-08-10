@@ -47,7 +47,14 @@ struct WritePublishRunResult {
 class WritePublishControllerBackend {
  public:
   virtual ~WritePublishControllerBackend() = default;
-  virtual CoTryTask<UploadJobPage> list(std::optional<cache::UploadJobId> after, uint32_t limit) = 0;
+  virtual CoTryTask<UploadJobPage> list(std::optional<cache::UploadJobId> after,
+                                        uint32_t limit,
+                                        bool includeTerminal) = 0;
+  virtual CoTryTask<UploadJobPage> listExpiredOpen(std::optional<meta::UploadOpenLeaseCursor> after,
+                                                   uint64_t expiresBeforeMs,
+                                                   uint32_t limit) = 0;
+  virtual CoTryTask<cache::UploadJobRecord> recoverOpen(cache::UploadJobRecord job) = 0;
+  virtual CoTryTask<cache::UploadJobRecord> finalizeCancelled(cache::UploadJobRecord job) = 0;
   virtual CoTryTask<cache::UploadJobRecord> upload(cache::UploadJobRecord job) = 0;
   virtual CoTryTask<cache::UploadJobRecord> complete(cache::UploadJobRecord job) = 0;
   virtual CoTryTask<cache::UploadJobRecord> publish(cache::UploadJobRecord job) = 0;
@@ -65,7 +72,12 @@ class RealWritePublishControllerBackend final : public WritePublishControllerBac
                                     meta::CacheServiceIdentity service,
                                     WritePublishControllerConfig config);
 
-  CoTryTask<UploadJobPage> list(std::optional<cache::UploadJobId> after, uint32_t limit) final;
+  CoTryTask<UploadJobPage> list(std::optional<cache::UploadJobId> after, uint32_t limit, bool includeTerminal) final;
+  CoTryTask<UploadJobPage> listExpiredOpen(std::optional<meta::UploadOpenLeaseCursor> after,
+                                           uint64_t expiresBeforeMs,
+                                           uint32_t limit) final;
+  CoTryTask<cache::UploadJobRecord> recoverOpen(cache::UploadJobRecord job) final;
+  CoTryTask<cache::UploadJobRecord> finalizeCancelled(cache::UploadJobRecord job) final;
   CoTryTask<cache::UploadJobRecord> upload(cache::UploadJobRecord job) final;
   CoTryTask<cache::UploadJobRecord> complete(cache::UploadJobRecord job) final;
   CoTryTask<cache::UploadJobRecord> publish(cache::UploadJobRecord job) final;
@@ -98,7 +110,10 @@ class WritePublishController {
  private:
   static bool actionable(const cache::UploadJobRecord &job);
   static bool terminal(cache::UploadJobState state);
-  CoTryTask<std::vector<cache::UploadJobRecord>> scan();
+  CoTryTask<std::vector<cache::UploadJobRecord>> scan(bool includeTerminal);
+  CoTryTask<std::vector<cache::UploadJobRecord>> scanExpiredOpen();
+  CoTryTask<void> migrateActiveIndex();
+  CoTryTask<WritePublishRunResult> run(bool includeTerminal);
   std::vector<cache::UploadJobRecord> select(std::vector<cache::UploadJobRecord> jobs);
   CoTryTask<cache::UploadJobRecord> advance(cache::UploadJobRecord job);
 
@@ -106,6 +121,7 @@ class WritePublishController {
   WritePublishControllerConfig config_;
   std::atomic<bool> stopping_{false};
   size_t roundRobinOffset_{0};
+  std::optional<cache::UploadJobId> activeScanAfter_;
 };
 
 }  // namespace hf3fs::cache_manager

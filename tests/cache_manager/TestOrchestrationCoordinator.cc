@@ -199,5 +199,29 @@ TEST(TestOrchestrationCoordinator, StopPreventsNewSchedulingAndIsIdempotent) {
   EXPECT_THROW(folly::coro::blockingWait(coordinator.runPlannerOnce()), OperationCancelled);
 }
 
+TEST(TestOrchestrationCoordinator, SchedulesJobsByGlobalPriorityThenCreationOrder) {
+  auto backend = std::make_shared<FakeCoordinatorBackend>();
+  auto low = job(1, cache::PrefetchJobState::LOADING);
+  low.spec.priority = 1;
+  low.plannedBlocks = 1;
+  auto high = job(2, cache::PrefetchJobState::LOADING);
+  high.spec.priority = 10;
+  high.plannedBlocks = 1;
+  backend->jobs = {low, high};
+  std::vector<cache::PrefetchJobId> order;
+  OrchestrationCoordinator coordinator(
+      backend,
+      10,
+      {},
+      [&](const cache::PrefetchJobRecord &current,
+          std::optional<cache::CacheBlockKey>,
+          const CancellationToken &) -> CoTryTask<JobRunnerPageResult> {
+        order.push_back(current.spec.jobId);
+        co_return JobRunnerPageResult{};
+      });
+  ASSERT_OK(folly::coro::blockingWait(coordinator.runRunnerOnce()));
+  ASSERT_EQ(order, (std::vector<cache::PrefetchJobId>{high.spec.jobId, low.spec.jobId}));
+}
+
 }  // namespace
 }  // namespace hf3fs::cache_manager::test

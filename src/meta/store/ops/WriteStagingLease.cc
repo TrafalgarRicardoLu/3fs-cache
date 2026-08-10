@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 
 #include "meta/store/Inode.h"
+#include "meta/store/DirEntry.h"
 #include "meta/store/MetaStore.h"
 #include "meta/store/Operation.h"
 #include "meta/store/cache/UploadJobStore.h"
@@ -64,6 +65,36 @@ CoTryTask<Void> freeze(IReadWriteTransaction &txn,
 }
 
 }  // namespace
+
+template <typename Rsp>
+class WriteStagingOperation : public Operation<Rsp> {
+ public:
+  using Operation<Rsp>::Operation;
+
+ protected:
+  CoTryTask<void> cleanupStaging(IReadWriteTransaction &txn, const cache::UploadJobRecord &job) {
+    auto inode = co_await Inode::load(txn, InodeId{job.stagingInode});
+    CO_RETURN_ON_ERROR(inode);
+    if (!inode->has_value()) co_return Void{};
+    CO_RETURN_ON_ERROR(checkStagingInode(**inode, job, this->chainAlloc()));
+
+    auto path = PathAt(job.path);
+    auto resolved = co_await this->resolve(txn, UserInfo{}).path(path, AtFlags(AT_SYMLINK_NOFOLLOW));
+    CO_RETURN_ON_ERROR(resolved);
+    if (!resolved->dirEntry) {
+      if ((**inode).nlink == 0) co_return Void{};
+      co_return makeError(CacheCode::kStateConflict, "cancelled upload path no longer references staging inode");
+    }
+    if (resolved->dirEntry->id.u64() != job.stagingInode || !resolved->dirEntry->isFile()) {
+      co_return makeError(CacheCode::kStateConflict, "cancelled upload path changed before cleanup");
+    }
+    auto name = path.path->filename().native();
+    (**inode).acl.iflags = IFlags((**inode).acl.iflags & ~FS_IMMUTABLE_FL);
+    CO_RETURN_ON_ERROR(
+        co_await this->gcManager().removeEntry(txn, *resolved->dirEntry, **inode, GcInfo{job.ownerUid, name}));
+    co_return Void{};
+  }
+};
 
 class RenewWriteStagingLeaseOp : public Operation<RenewWriteStagingLeaseRsp> {
  public:
@@ -162,10 +193,10 @@ class SealWriteStagingOp : public Operation<SealWriteStagingRsp> {
   const SealWriteStagingReq &req_;
 };
 
-class RecoverExpiredWriteStagingOp : public Operation<RecoverExpiredWriteStagingRsp> {
+class RecoverExpiredWriteStagingOp : public WriteStagingOperation<RecoverExpiredWriteStagingRsp> {
  public:
   RecoverExpiredWriteStagingOp(MetaStore &meta, const RecoverExpiredWriteStagingReq &req)
-      : Operation<RecoverExpiredWriteStagingRsp>(meta),
+      : WriteStagingOperation<RecoverExpiredWriteStagingRsp>(meta),
         req_(req) {}
 
   OPERATION_TAGS(req_);
@@ -182,8 +213,13 @@ class RecoverExpiredWriteStagingOp : public Operation<RecoverExpiredWriteStaging
     CO_RETURN_ON_ERROR(inode);
     CO_RETURN_ON_ERROR(checkStagingInode(*inode, job, chainAlloc()));
 
-    if ((job.state == cache::UploadJobState::SEALED || job.state == cache::UploadJobState::CANCELLED) &&
-        job.stateVersion == req_.expectedStateVersion + 1 && (inode->acl.iflags & FS_IMMUTABLE_FL)) {
+    auto recoveredRetry =
+        (job.state == cache::UploadJobState::SEALED && (inode->acl.iflags & FS_IMMUTABLE_FL)) ||
+        (job.state == cache::UploadJobState::CANCELLED && inode->nlink == 0);
+    if (recoveredRetry && job.stateVersion == req_.expectedStateVersion + 1) {
+      if (job.state == cache::UploadJobState::CANCELLED) {
+        CO_RETURN_ON_ERROR(co_await cleanupStaging(txn, job));
+      }
       RecoverExpiredWriteStagingRsp response;
       response.inode = std::move(*inode);
       response.job = std::move(job);
@@ -206,6 +242,12 @@ class RecoverExpiredWriteStagingOp : public Operation<RecoverExpiredWriteStaging
     }
     auto expectedVersion = job.stateVersion;
     CO_RETURN_ON_ERROR(co_await freeze(txn, *inode, job, recoveredState, now));
+    if (recoveredState == cache::UploadJobState::CANCELLED) {
+      CO_RETURN_ON_ERROR(co_await cleanupStaging(txn, job));
+      auto cleaned = (co_await Inode::load(txn, inodeId)).then(checkMetaFound<Inode>);
+      CO_RETURN_ON_ERROR(cleaned);
+      inode = std::move(cleaned);
+    }
     auto updated = co_await UploadJobStore::update(txn, expectedVersion, job);
     CO_RETURN_ON_ERROR(updated);
     RecoverExpiredWriteStagingRsp response;
@@ -301,10 +343,10 @@ class CheckpointUploadPartOp : public Operation<CheckpointUploadPartRsp> {
   const CheckpointUploadPartReq &req_;
 };
 
-class MutateMultipartUploadOp : public Operation<MutateMultipartUploadRsp> {
+class MutateMultipartUploadOp : public WriteStagingOperation<MutateMultipartUploadRsp> {
  public:
   MutateMultipartUploadOp(MetaStore &meta, const MutateMultipartUploadReq &req)
-      : Operation<MutateMultipartUploadRsp>(meta),
+      : WriteStagingOperation<MutateMultipartUploadRsp>(meta),
         req_(req) {}
 
   OPERATION_TAGS(req_);
@@ -319,6 +361,9 @@ class MutateMultipartUploadOp : public Operation<MutateMultipartUploadRsp> {
       co_return makeError(CacheCode::kStateConflict, "multipart upload identity changed");
     }
     if (job.stateVersion == req_.expectedStateVersion + 1 && retryMatches(job)) {
+      if (req_.mutation == MultipartUploadMutation::FINISH_ABORT) {
+        CO_RETURN_ON_ERROR(co_await cleanupStaging(txn, job));
+      }
       MutateMultipartUploadRsp response;
       response.job = std::move(job);
       co_return response;
@@ -327,6 +372,9 @@ class MutateMultipartUploadOp : public Operation<MutateMultipartUploadRsp> {
       co_return makeError(CacheCode::kStateConflict, "multipart upload mutation fence changed");
     }
     CO_RETURN_ON_ERROR(apply(job));
+    if (req_.mutation == MultipartUploadMutation::FINISH_ABORT) {
+      CO_RETURN_ON_ERROR(co_await cleanupStaging(txn, job));
+    }
     auto now = nowMs();
     if (now == 0) co_return makeError(StatusCode::kDataCorruption, "invalid metadata clock");
     auto expectedVersion = job.stateVersion;
@@ -334,6 +382,9 @@ class MutateMultipartUploadOp : public Operation<MutateMultipartUploadRsp> {
     job.updatedAtMs = std::max(job.updatedAtMs, now);
     auto updated = co_await UploadJobStore::update(txn, expectedVersion, job);
     CO_RETURN_ON_ERROR(updated);
+    if (req_.mutation == MultipartUploadMutation::MARK_PREFETCH_SUBMITTED) {
+      CO_RETURN_ON_ERROR(co_await UploadJobStore::removeActive(txn, job.jobId));
+    }
     MutateMultipartUploadRsp response;
     response.job = std::move(*updated);
     co_return response;
@@ -350,6 +401,8 @@ class MutateMultipartUploadOp : public Operation<MutateMultipartUploadRsp> {
         return job.state == cache::UploadJobState::ABORTING && job.error == req_.error;
       case MultipartUploadMutation::FINISH_ABORT:
         return job.state == cache::UploadJobState::CANCELLED;
+      case MultipartUploadMutation::MARK_PREFETCH_SUBMITTED:
+        return job.state == cache::UploadJobState::PUBLISHED;
       default:
         return false;
     }
@@ -388,6 +441,11 @@ class MutateMultipartUploadOp : public Operation<MutateMultipartUploadRsp> {
         }
         job.state = cache::UploadJobState::CANCELLED;
         return Void{};
+      case MultipartUploadMutation::MARK_PREFETCH_SUBMITTED:
+        if (job.state != cache::UploadJobState::PUBLISHED) {
+          return makeError(CacheCode::kStateConflict, "upload is not published");
+        }
+        return Void{};
       default:
         return makeError(StatusCode::kInvalidArg, "invalid multipart upload mutation");
     }
@@ -396,10 +454,10 @@ class MutateMultipartUploadOp : public Operation<MutateMultipartUploadRsp> {
   const MutateMultipartUploadReq &req_;
 };
 
-class AdminMutateUploadJobOp : public Operation<AdminMutateUploadJobRsp> {
+class AdminMutateUploadJobOp : public WriteStagingOperation<AdminMutateUploadJobRsp> {
  public:
   AdminMutateUploadJobOp(MetaStore &meta, const AdminMutateUploadJobReq &req)
-      : Operation<AdminMutateUploadJobRsp>(meta),
+      : WriteStagingOperation<AdminMutateUploadJobRsp>(meta),
         req_(req) {}
 
   OPERATION_TAGS(req_);
@@ -414,6 +472,9 @@ class AdminMutateUploadJobOp : public Operation<AdminMutateUploadJobRsp> {
       co_return makeError(CacheCode::kStateConflict, "admin upload mutation fence changed");
     }
     CO_RETURN_ON_ERROR(apply(job));
+    if (job.state == cache::UploadJobState::CANCELLED) {
+      CO_RETURN_ON_ERROR(co_await cleanupStaging(txn, job));
+    }
     auto now = nowMs();
     if (now == 0) co_return makeError(StatusCode::kDataCorruption, "invalid metadata clock");
     auto expectedVersion = job.stateVersion++;
@@ -462,6 +523,33 @@ class AdminMutateUploadJobOp : public Operation<AdminMutateUploadJobRsp> {
   const AdminMutateUploadJobReq &req_;
 };
 
+class FinalizeCancelledUploadOp : public WriteStagingOperation<FinalizeCancelledUploadRsp> {
+ public:
+  FinalizeCancelledUploadOp(MetaStore &meta, const FinalizeCancelledUploadReq &req)
+      : WriteStagingOperation<FinalizeCancelledUploadRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<FinalizeCancelledUploadRsp> run(IReadWriteTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto loaded = co_await UploadJobStore::load(txn, req_.jobId);
+    CO_RETURN_ON_ERROR(loaded);
+    if (!loaded->has_value()) co_return makeError(CacheCode::kNotFound, "upload job not found");
+    auto job = std::move(**loaded);
+    if (job.state != cache::UploadJobState::CANCELLED || job.stateVersion != req_.expectedStateVersion) {
+      co_return makeError(CacheCode::kStateConflict, "cancelled upload cleanup fence changed");
+    }
+    CO_RETURN_ON_ERROR(co_await cleanupStaging(txn, job));
+    FinalizeCancelledUploadRsp response;
+    response.job = std::move(job);
+    co_return response;
+  }
+
+ private:
+  const FinalizeCancelledUploadReq &req_;
+};
+
 MetaStore::OpPtr<RenewWriteStagingLeaseRsp> MetaStore::renewWriteStagingLease(const RenewWriteStagingLeaseReq &req) {
   return std::make_unique<RenewWriteStagingLeaseOp>(*this, req);
 }
@@ -489,6 +577,11 @@ MetaStore::OpPtr<MutateMultipartUploadRsp> MetaStore::mutateMultipartUpload(cons
 
 MetaStore::OpPtr<AdminMutateUploadJobRsp> MetaStore::adminMutateUploadJob(const AdminMutateUploadJobReq &req) {
   return std::make_unique<AdminMutateUploadJobOp>(*this, req);
+}
+
+MetaStore::OpPtr<FinalizeCancelledUploadRsp> MetaStore::finalizeCancelledUpload(
+    const FinalizeCancelledUploadReq &req) {
+  return std::make_unique<FinalizeCancelledUploadOp>(*this, req);
 }
 
 }  // namespace hf3fs::meta::server

@@ -1021,6 +1021,7 @@ META_CACHE_CLIENT_METHOD(createWriteStaging, CreateWriteStagingReq, CreateWriteS
 META_CACHE_CLIENT_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
 META_CACHE_CLIENT_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
 META_CACHE_CLIENT_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+META_CACHE_CLIENT_METHOD(recoverExpiredOpenUpload, RecoverExpiredOpenUploadReq, RecoverExpiredWriteStagingRsp);
 META_CACHE_CLIENT_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
 META_CACHE_CLIENT_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
 META_CACHE_CLIENT_METHOD(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
@@ -1031,6 +1032,9 @@ META_CACHE_CLIENT_METHOD(listUploadJobs, ListUploadJobsReq, ListUploadJobsRsp);
 META_CACHE_CLIENT_METHOD(getUploadJob, GetUploadJobReq, GetUploadJobRsp);
 META_CACHE_CLIENT_METHOD(adminListUploadJobs, AdminListUploadJobsReq, ListUploadJobsRsp);
 META_CACHE_CLIENT_METHOD(adminMutateUploadJob, AdminMutateUploadJobReq, AdminMutateUploadJobRsp);
+META_CACHE_CLIENT_METHOD(listExpiredOpenUploads, ListExpiredOpenUploadsReq, ListExpiredOpenUploadsRsp);
+META_CACHE_CLIENT_METHOD(finalizeCancelledUpload, FinalizeCancelledUploadReq, FinalizeCancelledUploadRsp);
+META_CACHE_CLIENT_METHOD(renewCachePinOwnerLease, RenewCachePinOwnerLeaseReq, RenewCachePinOwnerLeaseRsp);
 #undef META_CACHE_CLIENT_METHOD
 
 }  // namespace hf3fs::meta::client

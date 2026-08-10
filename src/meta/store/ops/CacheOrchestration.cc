@@ -295,6 +295,28 @@ class RemoveCachePinsOp : public Operation<RemoveCachePinsRsp> {
   const RemoveCachePinsReq &req_;
 };
 
+class RenewCachePinOwnerLeaseOp : public Operation<RenewCachePinOwnerLeaseRsp> {
+ public:
+  RenewCachePinOwnerLeaseOp(MetaStore &meta, const RenewCachePinOwnerLeaseReq &req)
+      : Operation<RenewCachePinOwnerLeaseRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<RenewCachePinOwnerLeaseRsp> run(IReadWriteTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto renewed = co_await PinStore::renewOwnerLease(txn, req_.lease);
+    CO_RETURN_ON_ERROR(renewed);
+    RenewCachePinOwnerLeaseRsp response;
+    response.lease = std::move(renewed->lease);
+    response.created = renewed->created;
+    co_return response;
+  }
+
+ private:
+  const RenewCachePinOwnerLeaseReq &req_;
+};
+
 class ListCachePinsByOwnerOp : public ReadOnlyOperation<ListCachePinsByOwnerRsp> {
  public:
   ListCachePinsByOwnerOp(MetaStore &meta, const ListCachePinsByOwnerReq &req)
@@ -438,6 +460,11 @@ MetaStore::OpPtr<UpsertCachePinsRsp> MetaStore::upsertCachePins(const UpsertCach
 
 MetaStore::OpPtr<RemoveCachePinsRsp> MetaStore::removeCachePins(const RemoveCachePinsReq &req) {
   return std::make_unique<RemoveCachePinsOp>(*this, req);
+}
+
+MetaStore::OpPtr<RenewCachePinOwnerLeaseRsp> MetaStore::renewCachePinOwnerLease(
+    const RenewCachePinOwnerLeaseReq &req) {
+  return std::make_unique<RenewCachePinOwnerLeaseOp>(*this, req);
 }
 
 MetaStore::OpPtr<ListCachePinsByOwnerRsp> MetaStore::listCachePinsByOwner(const ListCachePinsByOwnerReq &req) {

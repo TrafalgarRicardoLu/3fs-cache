@@ -1,7 +1,9 @@
 #include "cache_manager/reconcile/CacheReconciler.h"
 
 #include <algorithm>
+#include <array>
 #include <folly/ScopeGuard.h>
+#include <folly/experimental/coro/Collect.h>
 #include <folly/logging/xlog.h>
 #include <limits>
 #include <set>
@@ -84,6 +86,50 @@ void recordMetrics(const cache::ReconcileProgress &progress) {
   }
 }
 
+void add(StorageToMetadataResult &total, const StorageToMetadataResult &page) {
+  total.scanned = addSaturated(total.scanned, page.scanned);
+  total.delegated = addSaturated(total.delegated, page.delegated);
+  total.orphans = addSaturated(total.orphans, page.orphans);
+  total.older = addSaturated(total.older, page.older);
+  total.newer = addSaturated(total.newer, page.newer);
+  total.retired = addSaturated(total.retired, page.retired);
+  total.conflicts = addSaturated(total.conflicts, page.conflicts);
+  total.retryable = addSaturated(total.retryable, page.retryable);
+  total.deferred = addSaturated(total.deferred, page.deferred);
+  total.stopped = total.stopped || page.stopped;
+}
+
+struct TargetStreamResult {
+  storage::TargetId targetId{};
+  Result<StorageToMetadataResult> result;
+  uint64_t restarts{0};
+};
+
+CoTask<TargetStreamResult> streamTarget(StorageInventoryReader &reader,
+                                        const std::shared_ptr<CacheManagerBackend> &backend,
+                                        uint32_t pageSize,
+                                        const std::shared_ptr<ReconcileRunControl> &control,
+                                        storage::TargetId targetId) {
+  StorageToMetadataResult targetTotal;
+  Result<Void> streamed = makeError(CacheCode::kUnavailable, "cache inventory was not scanned");
+  uint64_t restarts = 0;
+  for (uint32_t attempt = 0; attempt < 2; ++attempt) {
+    targetTotal = {};
+    streamed = co_await reader.readTargetPages(targetId, [&](TargetCacheInventory page) -> CoTryTask<void> {
+      StorageToMetadataChecker checker(backend, pageSize, control->dryRun(), control);
+      const std::array inventories{std::move(page)};
+      auto checked = co_await checker.run(inventories);
+      CO_RETURN_ON_ERROR(checked);
+      add(targetTotal, *checked);
+      co_return Void{};
+    });
+    if (streamed.hasValue() || streamed.error().code() != CacheCode::kInvalidResponse || attempt != 0) break;
+    ++restarts;
+  }
+  if (streamed.hasError()) co_return TargetStreamResult{targetId, makeError(streamed.error()), restarts};
+  co_return TargetStreamResult{targetId, std::move(targetTotal), restarts};
+}
+
 }  // namespace
 
 CacheReconciler::CacheReconciler(std::shared_ptr<CacheManagerBackend> backend,
@@ -126,30 +172,28 @@ CoTask<void> CacheReconciler::runStorage(std::span<const storage::TargetId> targ
   StorageInventoryReader reader(backend_, config_.pageSize, config_.maxTargetConcurrency, [control] {
     return control->shouldStop();
   });
-  auto loaded = co_await reader.readTargets(targetIds);
-  std::vector<TargetCacheInventory> inventories;
-  inventories.reserve(loaded.size());
-  for (size_t index = 0; index < loaded.size(); ++index) {
+  StorageToMetadataResult total;
+  for (size_t begin = 0; begin < targetIds.size(); begin += config_.maxTargetConcurrency) {
     if (control->shouldStop()) break;
-    if (loaded[index].hasError() && loaded[index].error().code() == CacheCode::kInvalidResponse) {
-      ++result.inventoryRestarts;
-      loaded[index] = co_await reader.readTarget(targetIds[index]);
+    auto end = std::min(targetIds.size(), begin + config_.maxTargetConcurrency);
+    std::vector<CoTask<TargetStreamResult>> tasks;
+    tasks.reserve(end - begin);
+    for (size_t index = begin; index < end; ++index) {
+      auto targetId = targetIds[index];
+      tasks.push_back(streamTarget(reader, backend_, config_.pageSize, control, targetId));
     }
-    if (loaded[index].hasError()) {
-      result.targetFailures.push_back({targetIds[index], loaded[index].error()});
-    } else {
-      ++result.targetsSucceeded;
-      inventories.push_back(std::move(*loaded[index]));
+    auto targets = co_await folly::coro::collectAllRange(std::move(tasks));
+    for (auto &target : targets) {
+      result.inventoryRestarts = addSaturated(result.inventoryRestarts, target.restarts);
+      if (target.result.hasError()) {
+        result.targetFailures.push_back({target.targetId, target.result.error()});
+      } else {
+        ++result.targetsSucceeded;
+        add(total, *target.result);
+      }
     }
   }
-  if (control->shouldStop() || inventories.empty()) co_return;
-  StorageToMetadataChecker checker(backend_, config_.pageSize, control->dryRun(), control);
-  auto checked = co_await checker.run(inventories);
-  if (checked.hasError()) {
-    result.storageError = checked.error();
-  } else {
-    result.storageToMetadata = std::move(*checked);
-  }
+  if (total.scanned != 0 || total.deferred != 0 || total.stopped) result.storageToMetadata = total;
 }
 
 CoTryTask<CacheReconcileRunResult> CacheReconciler::run(std::span<const storage::TargetId> targetIds,

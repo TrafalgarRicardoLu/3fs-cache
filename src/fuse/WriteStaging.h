@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -22,6 +24,18 @@ inline Result<Void> checkSequentialWrite(uint64_t nextOffset, int64_t offset, si
     return makeError(StatusCode::kInvalidArg, "write-through staging offset overflow");
   }
   return Void{};
+}
+
+inline bool shouldRenewWriterLease(uint64_t nowMs, uint64_t expiresAtMs, uint64_t leaseMs) {
+  if (leaseMs == 0 || expiresAtMs <= nowMs) return true;
+  return expiresAtMs - nowMs <= leaseMs / 3;
+}
+
+inline uint64_t nextWriterLeaseExpiry(uint64_t nowMs, uint64_t currentExpiresAtMs, uint64_t leaseMs) {
+  auto fromNow = nowMs + std::min(leaseMs, std::numeric_limits<uint64_t>::max() - nowMs);
+  auto afterCurrent = currentExpiresAtMs == std::numeric_limits<uint64_t>::max() ? currentExpiresAtMs
+                                                                                : currentExpiresAtMs + 1;
+  return std::max(fromNow, afterCurrent);
 }
 
 inline std::string writeStagingObjectKey(std::string_view prefix, const Path &namespacePath, const Uuid &jobId) {

@@ -47,6 +47,7 @@ class FakeBackend : public ActiveJobPinBackend {
   std::vector<cache::PinRecord> pins;
   std::vector<cache::PinOwner> removed;
   std::vector<std::pair<cache::PrefetchJobId, std::vector<cache::CacheBlockKey>>> converted;
+  std::map<Uuid, cache::PinOwnerLease> leases;
   bool failUpsert = false;
 
   CoTryTask<meta::ListPrefetchJobsRsp> listJobs(std::optional<cache::PrefetchJobId> after, uint32_t limit) override {
@@ -83,8 +84,16 @@ class FakeBackend : public ActiveJobPinBackend {
     co_return Void{};
   }
 
+  CoTryTask<bool> renew(cache::PinOwnerLease lease) override {
+    auto key = lease.owner.id.toUnderType();
+    auto [_, created] = leases.emplace(key, lease);
+    if (!created) leases[key] = lease;
+    co_return created;
+  }
+
   CoTryTask<void> remove(cache::PinOwner owner) override {
     removed.push_back(owner);
+    leases.erase(owner.id.toUnderType());
     co_return Void{};
   }
   CoTryTask<void> convert(cache::PrefetchJobId jobId, std::vector<cache::CacheBlockKey> keys) override {

@@ -80,6 +80,7 @@ IMPL_META_STUB_METHOD(createWriteStaging, CreateWriteStagingReq, CreateWriteStag
 IMPL_META_STUB_METHOD(renewWriteStagingLease, RenewWriteStagingLeaseReq, RenewWriteStagingLeaseRsp);
 IMPL_META_STUB_METHOD(sealWriteStaging, SealWriteStagingReq, SealWriteStagingRsp);
 IMPL_META_STUB_METHOD(recoverExpiredWriteStaging, RecoverExpiredWriteStagingReq, RecoverExpiredWriteStagingRsp);
+IMPL_META_STUB_METHOD(recoverExpiredOpenUpload, RecoverExpiredOpenUploadReq, RecoverExpiredWriteStagingRsp);
 IMPL_META_STUB_METHOD(beginMultipartUpload, BeginMultipartUploadReq, BeginMultipartUploadRsp);
 IMPL_META_STUB_METHOD(checkpointUploadPart, CheckpointUploadPartReq, CheckpointUploadPartRsp);
 IMPL_META_STUB_METHOD(mutateMultipartUpload, MutateMultipartUploadReq, MutateMultipartUploadRsp);
@@ -88,6 +89,9 @@ IMPL_META_STUB_METHOD(listUploadJobs, ListUploadJobsReq, ListUploadJobsRsp);
 IMPL_META_STUB_METHOD(getUploadJob, GetUploadJobReq, GetUploadJobRsp);
 IMPL_META_STUB_METHOD(adminListUploadJobs, AdminListUploadJobsReq, ListUploadJobsRsp);
 IMPL_META_STUB_METHOD(adminMutateUploadJob, AdminMutateUploadJobReq, AdminMutateUploadJobRsp);
+IMPL_META_STUB_METHOD(listExpiredOpenUploads, ListExpiredOpenUploadsReq, ListExpiredOpenUploadsRsp);
+IMPL_META_STUB_METHOD(finalizeCancelledUpload, FinalizeCancelledUploadReq, FinalizeCancelledUploadRsp);
+IMPL_META_STUB_METHOD(renewCachePinOwnerLease, RenewCachePinOwnerLeaseReq, RenewCachePinOwnerLeaseRsp);
 
 template class MetaServiceStub<serde::ClientContext>;
 template class MetaServiceStub<serde::ClientMockContext>;

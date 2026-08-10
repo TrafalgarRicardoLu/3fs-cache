@@ -73,6 +73,9 @@ class Config : public ConfigBase<Config> {
       if (origin.origin_id() == 0) {
         return makeError(StatusCode::kInvalidConfig, "invalid origin mapping");
       }
+      if (origin.max_inflight_bytes() < range_size()) {
+        return makeError(StatusCode::kInvalidConfig, "origin inflight byte limit is smaller than one read range");
+      }
       if (!ids.emplace(origin.origin_id()).second) {
         return makeError(StatusCode::kInvalidConfig, "duplicate origin id");
       }

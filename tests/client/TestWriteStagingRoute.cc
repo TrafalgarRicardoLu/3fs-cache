@@ -26,6 +26,14 @@ TEST(WriteStagingRoute, BuildsDeterministicNormalizedObjectKey) {
   EXPECT_EQ(writeStagingObjectKey("", Path("/file"), jobId), "file/01000000-0000-0000-0200-000000000000");
 }
 
+TEST(WriteStagingRoute, RenewsLeaseOnlyNearExpiryAndSaturatesOverflow) {
+  EXPECT_FALSE(shouldRenewWriterLease(1000, 1800, 900));
+  EXPECT_TRUE(shouldRenewWriterLease(1000, 1300, 900));
+  EXPECT_TRUE(shouldRenewWriterLease(1000, 999, 900));
+  EXPECT_EQ(nextWriterLeaseExpiry(1000, 1300, 900), 1900);
+  EXPECT_EQ(nextWriterLeaseExpiry(UINT64_MAX - 5, UINT64_MAX - 2, 10), UINT64_MAX);
+}
+
 TEST(WriteStagingRoute, IdentifiesOnlyConfiguredRegularStagingFiles) {
   auto staging = meta::server::Inode::newFile(meta::InodeId{10},
                                               meta::Acl{},

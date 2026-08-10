@@ -390,14 +390,21 @@ TEST_F(TestWriteStaging, ExpiredLeaseRecoversOrCancelsWithExactFence) {
     auto cancelCreated = co_await cancelMeta.createWriteStaging(cancelReq);
     CO_ASSERT_OK(cancelCreated);
     co_await folly::coro::sleep(std::chrono::milliseconds(110));
-    recover.jobId = cancelCreated->job.jobId;
-    recover.expectedStateVersion = cancelCreated->job.stateVersion;
-    recover.expectedWriterLeaseId = cancelCreated->job.writerLeaseId;
-    recover.expectedWriterLeaseExpiresAtMs = cancelCreated->job.writerLeaseExpiresAtMs;
-    auto cancelled = co_await cancelMeta.recoverExpiredWriteStaging(recover);
+    RecoverExpiredOpenUploadReq cancelRecover;
+    cancelRecover.service = CacheServiceIdentity{std::string{kServiceName}, std::string{kServiceToken}};
+    cancelRecover.jobId = cancelCreated->job.jobId;
+    cancelRecover.expectedStateVersion = cancelCreated->job.stateVersion;
+    cancelRecover.expectedWriterLeaseId = cancelCreated->job.writerLeaseId;
+    cancelRecover.expectedWriterLeaseExpiresAtMs = cancelCreated->job.writerLeaseExpiresAtMs;
+    cancelRecover.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto cancelled = co_await cancelMeta.recoverExpiredOpenUpload(cancelRecover);
     CO_ASSERT_OK(cancelled);
     CO_ASSERT_EQ(cancelled->job.state, cache::UploadJobState::CANCELLED);
-    CO_ASSERT_TRUE(cancelled->inode.acl.iflags & FS_IMMUTABLE_FL);
+    CO_ASSERT_EQ(cancelled->inode.nlink, 0);
+    CO_ASSERT_FALSE(cancelled->inode.acl.iflags & FS_IMMUTABLE_FL);
+    auto cancelledRetry = co_await cancelMeta.recoverExpiredOpenUpload(cancelRecover);
+    CO_ASSERT_OK(cancelledRetry);
+    CO_ASSERT_EQ(cancelledRetry->inode.nlink, 0);
   }());
 }
 
@@ -593,6 +600,14 @@ TEST_F(TestWriteStaging, PublishesOriginAndUploadJobAtomicallyAndRetriesSameInod
     CO_ASSERT_OK(queried);
     CO_ASSERT_EQ(queried->prefetchJobId, warm.spec.jobId);
     CO_ASSERT_EQ(queried->warmState, cache::UploadWarmState::SUBMITTED);
+    MutateMultipartUploadReq markWarm;
+    markWarm.service = {std::string{kServiceName}, std::string{kServiceToken}};
+    markWarm.jobId = queried->job.jobId;
+    markWarm.expectedStateVersion = queried->job.stateVersion;
+    markWarm.multipartId = queried->job.multipartId;
+    markWarm.mutation = MultipartUploadMutation::MARK_PREFETCH_SUBMITTED;
+    markWarm.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    CO_ASSERT_OK(co_await meta.mutateMultipartUpload(markWarm));
 
     auto closeTxn = this->kvEngine()->createReadWriteTransaction();
     CO_ASSERT_OK(co_await FileSession::removeAll(*closeTxn, request->expectedStagingInode));
@@ -607,6 +622,9 @@ TEST_F(TestWriteStaging, PublishesOriginAndUploadJobAtomicallyAndRetriesSameInod
     active.includeTerminal = false;
     active.limit = 10;
     active.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+    auto recovery = active;
+    recovery.includeTerminal = true;
+    CO_ASSERT_OK(co_await meta.listUploadJobs(recovery));
     auto activeJobs = co_await meta.listUploadJobs(active);
     CO_ASSERT_OK(activeJobs);
     CO_ASSERT_TRUE(activeJobs->jobs.empty());

@@ -37,6 +37,7 @@ class OrchestrationKey {
   static std::string pinByOwnerPrefix(const cache::PinOwner &owner);
   static std::string pinByOwner(const cache::PinOwner &owner, const cache::CacheBlockKey &block);
   static Result<PinIndexKey> unpackPinByOwner(std::string_view key);
+  static std::string pinOwnerLease(const cache::PinOwner &owner);
 };
 
 }  // namespace hf3fs::meta::server

@@ -60,6 +60,12 @@ TEST(TestCacheManagerConfig, RejectsInvalidAndDuplicateOrigins) {
   duplicate.origins(1).set_origin_id(1);
   duplicate.origins(1).set_endpoint("b");
   ASSERT_ERROR(duplicate.validateRuntime(), StatusCode::kInvalidConfig);
+
+  auto undersized = makeConfig();
+  undersized.set_origins_length(1);
+  undersized.origins(0).set_origin_id(1);
+  undersized.origins(0).set_max_inflight_bytes(undersized.range_size() - 1);
+  ASSERT_ERROR(undersized.validateRuntime(), StatusCode::kInvalidConfig);
 }
 
 TEST(TestCacheManagerConfig, PhaseThreeRequiresPhaseTwoAndDefaultsOff) {

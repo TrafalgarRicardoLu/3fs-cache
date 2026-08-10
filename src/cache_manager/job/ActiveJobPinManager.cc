@@ -42,6 +42,16 @@ CoTryTask<void> MetaActiveJobPinBackend::upsert(std::vector<cache::PinRecord> pi
   co_return Void{};
 }
 
+CoTryTask<bool> MetaActiveJobPinBackend::renew(cache::PinOwnerLease lease) {
+  meta::RenewCachePinOwnerLeaseReq request;
+  request.service = service_;
+  request.lease = std::move(lease);
+  request.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
+  auto response = co_await metaClient_->renewCachePinOwnerLease(std::move(request));
+  CO_RETURN_ON_ERROR(response);
+  co_return response->created;
+}
+
 CoTryTask<void> MetaActiveJobPinBackend::remove(cache::PinOwner owner) {
   meta::RemoveCachePinsReq request;
   request.service = service_;
@@ -100,6 +110,11 @@ CoTryTask<void> ActiveJobPinManager::reconcile(const cache::PrefetchJobRecord &j
     CO_RETURN_ON_ERROR(co_await backend_->remove(pinOwner));
     co_return Void{};
   }
+  if (job.state != cache::PrefetchJobState::READY) {
+    auto renewed = co_await backend_->renew({pinOwner, job.createdAtMs, expiresAtMs});
+    CO_RETURN_ON_ERROR(renewed);
+    if (!*renewed) co_return Void{};
+  }
   std::optional<cache::CacheBlockKey> after;
   do {
     auto page = co_await backend_->listPlan(job.spec.jobId, after, planPageLimit_);
@@ -118,10 +133,15 @@ CoTryTask<void> ActiveJobPinManager::reconcile(const cache::PrefetchJobRecord &j
       else
         pins.push_back({entry.key, pinOwner, job.createdAtMs, expiresAtMs, {}});
     }
+    Result<Void> updated = Void{};
     if (!keys.empty())
-      CO_RETURN_ON_ERROR(co_await backend_->convert(job.spec.jobId, std::move(keys)));
+      updated = co_await backend_->convert(job.spec.jobId, std::move(keys));
     else if (!pins.empty())
-      CO_RETURN_ON_ERROR(co_await backend_->upsert(std::move(pins)));
+      updated = co_await backend_->upsert(std::move(pins));
+    if (updated.hasError()) {
+      if (job.state != cache::PrefetchJobState::READY) (void)co_await backend_->remove(pinOwner);
+      co_return makeError(updated.error());
+    }
     if (!page->more) break;
     after = page->entries.back().key;
   } while (true);

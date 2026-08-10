@@ -39,6 +39,8 @@ class MultipartUploaderBackend {
 
   virtual CoTryTask<std::vector<uint8_t>> readStaging(uint64_t inode, cache::ByteRange range) = 0;
   virtual CoTryTask<cache::origin::MultipartUpload> createMultipartUpload(const cache::ObjectRef &destination) = 0;
+  virtual CoTryTask<Void> abortMultipartUpload(cache::origin::AbortMultipartUploadRequest request) = 0;
+  virtual CoTryTask<cache::UploadJobRecord> getUploadJob(cache::UploadJobId jobId) = 0;
   virtual CoTryTask<cache::origin::UploadPartResult> uploadPart(cache::origin::UploadPartRequest request) = 0;
   virtual CoTryTask<cache::UploadJobRecord> beginMultipartUpload(cache::UploadJobId jobId,
                                                                  uint64_t expectedStateVersion,
@@ -84,6 +86,8 @@ class RealMultipartUploaderBackend final : public MultipartUploaderBackend {
 
   CoTryTask<std::vector<uint8_t>> readStaging(uint64_t inode, cache::ByteRange range) final;
   CoTryTask<cache::origin::MultipartUpload> createMultipartUpload(const cache::ObjectRef &destination) final;
+  CoTryTask<Void> abortMultipartUpload(cache::origin::AbortMultipartUploadRequest request) final;
+  CoTryTask<cache::UploadJobRecord> getUploadJob(cache::UploadJobId jobId) final;
   CoTryTask<cache::origin::UploadPartResult> uploadPart(cache::origin::UploadPartRequest request) final;
   CoTryTask<cache::UploadJobRecord> beginMultipartUpload(cache::UploadJobId jobId,
                                                          uint64_t expectedStateVersion,

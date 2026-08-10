@@ -16,6 +16,7 @@ struct TargetCacheInventory {
 class StorageInventoryReader {
  public:
   using ShouldStop = std::function<bool()>;
+  using PageHandler = std::function<CoTryTask<void>(TargetCacheInventory)>;
 
   StorageInventoryReader(std::shared_ptr<CacheManagerBackend> backend,
                          uint32_t pageSize,
@@ -27,6 +28,7 @@ class StorageInventoryReader {
         shouldStop_(std::move(shouldStop)) {}
 
   CoTryTask<TargetCacheInventory> readTarget(storage::TargetId targetId);
+  CoTryTask<void> readTargetPages(storage::TargetId targetId, PageHandler handler);
   CoTask<std::vector<Result<TargetCacheInventory>>> readTargets(std::span<const storage::TargetId> targetIds);
 
  private:

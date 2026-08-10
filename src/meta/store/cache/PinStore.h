@@ -24,6 +24,12 @@ struct PinPage {
 
 class PinStore {
  public:
+  struct RenewOwnerLeaseResult {
+    cache::PinOwnerLease lease;
+    bool created{false};
+  };
+  static CoTryTask<RenewOwnerLeaseResult> renewOwnerLease(kv::IReadWriteTransaction &txn,
+                                                          const cache::PinOwnerLease &lease);
   static CoTryTask<cache::PinRecord> upsert(kv::IReadWriteTransaction &txn,
                                             const cache::PinRecord &pin,
                                             const PinStoreLimits &limits = {});

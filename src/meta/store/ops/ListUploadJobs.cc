@@ -10,21 +10,41 @@
 
 namespace hf3fs::meta::server {
 
-class ListUploadJobsOp : public ReadOnlyOperation<ListUploadJobsRsp> {
+class ListUploadJobsOp : public Operation<ListUploadJobsRsp> {
  public:
   ListUploadJobsOp(MetaStore &meta, const ListUploadJobsReq &req)
-      : ReadOnlyOperation<ListUploadJobsRsp>(meta),
+      : Operation<ListUploadJobsRsp>(meta),
         req_(req) {}
 
   OPERATION_TAGS(req_);
 
-  CoTryTask<ListUploadJobsRsp> run(IReadOnlyTransaction &txn) override {
+  CoTryTask<ListUploadJobsRsp> run(IReadWriteTransaction &txn) override {
     CHECK_REQUEST(req_);
     auto page = co_await UploadJobStore::snapshotList(txn, req_.ownerUid, req_.after, req_.limit, req_.includeTerminal);
     CO_RETURN_ON_ERROR(page);
     ListUploadJobsRsp response;
     response.jobs = std::move(page->jobs);
     response.more = page->more;
+    if (req_.includeTerminal) {
+      // The startup recovery scan also migrates jobs created before the
+      // active-index rollout. Periodic scans can then stay history-bounded.
+      for (const auto &listed : response.jobs) {
+        auto loaded = co_await UploadJobStore::load(txn, listed.jobId);
+        CO_RETURN_ON_ERROR(loaded);
+        if (!loaded->has_value()) co_return makeError(CacheCode::kNotFound, "upload job disappeared during migration");
+        const auto &job = **loaded;
+        CO_RETURN_ON_ERROR(co_await UploadJobStore::indexActive(txn, job));
+        if (job.state == cache::UploadJobState::PUBLISHED) {
+          auto prefetch = co_await PrefetchJobStore::snapshotLoad(txn, cache::publishedPrefetchJobId(job.jobId));
+          CO_RETURN_ON_ERROR(prefetch);
+          if (prefetch->has_value()) {
+            CO_RETURN_ON_ERROR(co_await UploadJobStore::removeActive(txn, job.jobId));
+            continue;
+          }
+        }
+      }
+      if (!response.more) CO_RETURN_ON_ERROR(co_await UploadJobStore::finishStateIndexMigration(txn));
+    }
     co_return response;
   }
 
@@ -34,6 +54,36 @@ class ListUploadJobsOp : public ReadOnlyOperation<ListUploadJobsRsp> {
 
 MetaStore::OpPtr<ListUploadJobsRsp> MetaStore::listUploadJobs(const ListUploadJobsReq &req) {
   return std::make_unique<ListUploadJobsOp>(*this, req);
+}
+
+class ListExpiredOpenUploadsOp : public ReadOnlyOperation<ListExpiredOpenUploadsRsp> {
+ public:
+  ListExpiredOpenUploadsOp(MetaStore &meta, const ListExpiredOpenUploadsReq &req)
+      : ReadOnlyOperation<ListExpiredOpenUploadsRsp>(meta),
+        req_(req) {}
+
+  OPERATION_TAGS(req_);
+
+  CoTryTask<ListExpiredOpenUploadsRsp> run(IReadOnlyTransaction &txn) override {
+    CHECK_REQUEST(req_);
+    auto page = co_await UploadJobStore::snapshotListExpiredOpen(txn,
+                                                                 req_.expiresBeforeMs,
+                                                                 req_.after,
+                                                                 req_.limit);
+    CO_RETURN_ON_ERROR(page);
+    ListExpiredOpenUploadsRsp response;
+    response.jobs = std::move(page->jobs);
+    response.more = page->more;
+    co_return response;
+  }
+
+ private:
+  const ListExpiredOpenUploadsReq &req_;
+};
+
+MetaStore::OpPtr<ListExpiredOpenUploadsRsp> MetaStore::listExpiredOpenUploads(
+    const ListExpiredOpenUploadsReq &req) {
+  return std::make_unique<ListExpiredOpenUploadsOp>(*this, req);
 }
 
 class AdminListUploadJobsOp : public ReadOnlyOperation<ListUploadJobsRsp> {
@@ -97,12 +147,15 @@ class GetUploadJobOp : public ReadOnlyOperation<GetUploadJobRsp> {
       response.stagingCleanupState = cache::StagingCleanupState::COMPLETE;
     } else if (session->has_value()) {
       response.stagingCleanupState = cache::StagingCleanupState::WAITING_FOR_HANDLES;
-    } else if (response.job.state == cache::UploadJobState::PUBLISHED && (**inode).nlink == 0) {
+    } else if ((response.job.state == cache::UploadJobState::PUBLISHED ||
+                response.job.state == cache::UploadJobState::CANCELLED) &&
+               (**inode).nlink == 0) {
       response.stagingCleanupState = cache::StagingCleanupState::QUEUED;
     } else {
       response.stagingCleanupState = cache::StagingCleanupState::RETAINED;
     }
-    if (response.job.state == cache::UploadJobState::PUBLISHED) {
+    if (response.job.state == cache::UploadJobState::PUBLISHED ||
+        response.job.state == cache::UploadJobState::CANCELLED) {
       response.cleanupPolicy = cache::UploadCleanupPolicy::DELETE_STAGING_AFTER_LAST_HANDLE;
     } else if (response.job.completedObject) {
       response.cleanupPolicy = cache::UploadCleanupPolicy::RETAIN_ORPHAN_FOR_OPERATOR;

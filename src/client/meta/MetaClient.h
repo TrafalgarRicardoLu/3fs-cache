@@ -263,6 +263,7 @@ class MetaClient {
   CoTryTask<RenewWriteStagingLeaseRsp> renewWriteStagingLease(RenewWriteStagingLeaseReq req);
   CoTryTask<SealWriteStagingRsp> sealWriteStaging(SealWriteStagingReq req);
   CoTryTask<RecoverExpiredWriteStagingRsp> recoverExpiredWriteStaging(RecoverExpiredWriteStagingReq req);
+  CoTryTask<RecoverExpiredWriteStagingRsp> recoverExpiredOpenUpload(RecoverExpiredOpenUploadReq req);
   CoTryTask<BeginMultipartUploadRsp> beginMultipartUpload(BeginMultipartUploadReq req);
   CoTryTask<CheckpointUploadPartRsp> checkpointUploadPart(CheckpointUploadPartReq req);
   CoTryTask<MutateMultipartUploadRsp> mutateMultipartUpload(MutateMultipartUploadReq req);
@@ -271,6 +272,9 @@ class MetaClient {
   CoTryTask<GetUploadJobRsp> getUploadJob(GetUploadJobReq req);
   CoTryTask<ListUploadJobsRsp> adminListUploadJobs(AdminListUploadJobsReq req);
   CoTryTask<AdminMutateUploadJobRsp> adminMutateUploadJob(AdminMutateUploadJobReq req);
+  CoTryTask<ListExpiredOpenUploadsRsp> listExpiredOpenUploads(ListExpiredOpenUploadsReq req);
+  CoTryTask<FinalizeCancelledUploadRsp> finalizeCancelledUpload(FinalizeCancelledUploadReq req);
+  CoTryTask<RenewCachePinOwnerLeaseRsp> renewCachePinOwnerLease(RenewCachePinOwnerLeaseReq req);
 
   CoTryTask<Inode> extendStripe(const UserInfo &userInfo, InodeId inodeId, uint32_t stripe);
 

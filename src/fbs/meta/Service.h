@@ -888,16 +888,87 @@ struct RecoverExpiredWriteStagingReq : ReqBase {
 
  public:
   Result<Void> valid() const {
-    if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || expectedWriterLeaseId == Uuid::zero() ||
-        expectedWriterLeaseExpiresAtMs == 0) {
-      return INVALID("invalid expired write staging fence");
-    }
+    if (jobId == cache::UploadJobId{}) return INVALID("invalid expired write staging job id");
+    if (expectedStateVersion == 0) return INVALID("invalid expired write staging state version");
+    if (expectedWriterLeaseId == Uuid::zero()) return INVALID("invalid expired write staging lease id");
+    if (expectedWriterLeaseExpiresAtMs == 0) return INVALID("invalid expired write staging lease expiry");
     return VALID;
   }
 };
 
 struct RecoverExpiredWriteStagingRsp : RspBase {
   SERDE_STRUCT_FIELD(inode, Inode{});
+  SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
+};
+
+struct RecoverExpiredOpenUploadReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(expectedStateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(expectedWriterLeaseId, Uuid::zero());
+  SERDE_STRUCT_FIELD(expectedWriterLeaseExpiresAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || expectedWriterLeaseId == Uuid::zero() ||
+        expectedWriterLeaseExpiresAtMs == 0) {
+      return INVALID("invalid expired open upload fence");
+    }
+    return VALID;
+  }
+};
+
+struct UploadOpenLeaseCursor {
+  SERDE_STRUCT_FIELD(expiresAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+
+ public:
+  Result<Void> valid() const {
+    if (expiresAtMs == 0 || jobId == cache::UploadJobId{}) return INVALID("invalid open upload lease cursor");
+    return VALID;
+  }
+};
+
+struct ListExpiredOpenUploadsReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(expiresBeforeMs, uint64_t{});
+  SERDE_STRUCT_FIELD(after, std::optional<UploadOpenLeaseCursor>{});
+  SERDE_STRUCT_FIELD(limit, uint32_t{100});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (after) RETURN_ON_ERROR(after->valid());
+    if (expiresBeforeMs == 0 || limit == 0 || limit > cache::kMaxPhase2BatchItems) {
+      return INVALID("invalid expired open upload page");
+    }
+    return VALID;
+  }
+};
+
+struct ListExpiredOpenUploadsRsp : RspBase {
+  SERDE_STRUCT_FIELD(jobs, std::vector<cache::UploadJobRecord>{});
+  SERDE_STRUCT_FIELD(more, false);
+};
+
+struct FinalizeCancelledUploadReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(jobId, cache::UploadJobId{});
+  SERDE_STRUCT_FIELD(expectedStateVersion, uint64_t{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    if (jobId == cache::UploadJobId{} || expectedStateVersion == 0) return INVALID("invalid cancelled upload fence");
+    return VALID;
+  }
+};
+
+struct FinalizeCancelledUploadRsp : RspBase {
   SERDE_STRUCT_FIELD(job, cache::UploadJobRecord{});
 };
 
@@ -952,6 +1023,7 @@ enum class MultipartUploadMutation : uint8_t {
   SAVE_COMPLETED = 2,
   BEGIN_ABORT = 3,
   FINISH_ABORT = 4,
+  MARK_PREFETCH_SUBMITTED = 5,
 };
 
 struct MutateMultipartUploadReq : ReqBase {
@@ -970,7 +1042,7 @@ struct MutateMultipartUploadReq : ReqBase {
     if (jobId == cache::UploadJobId{} || expectedStateVersion == 0 || multipartId.empty() ||
         multipartId.size() > cache::kMaxMultipartUploadIdBytes || multipartId.find('\0') != std::string::npos ||
         error.size() > cache::kMaxUploadErrorBytes || error.find('\0') != std::string::npos ||
-        mutation > MultipartUploadMutation::FINISH_ABORT) {
+        mutation > MultipartUploadMutation::MARK_PREFETCH_SUBMITTED) {
       return INVALID("invalid multipart upload mutation fence");
     }
     if (mutation == MultipartUploadMutation::SAVE_COMPLETED) {
@@ -1939,6 +2011,22 @@ struct UpsertCachePinsRsp : RspBase {
   SERDE_STRUCT_FIELD(results, std::vector<Result<cache::PinRecord>>{});
 };
 
+struct RenewCachePinOwnerLeaseReq : ReqBase {
+  SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
+  SERDE_STRUCT_FIELD(lease, cache::PinOwnerLease{});
+  SERDE_STRUCT_FIELD(cacheProtocolVersion, uint32_t{0});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(service.valid());
+    return lease.valid();
+  }
+};
+struct RenewCachePinOwnerLeaseRsp : RspBase {
+  SERDE_STRUCT_FIELD(lease, cache::PinOwnerLease{});
+  SERDE_STRUCT_FIELD(created, false);
+};
+
 struct RemoveCachePinsReq : ReqBase {
   SERDE_STRUCT_FIELD(service, CacheServiceIdentity{});
   SERDE_STRUCT_FIELD(owner, cache::PinOwner{});
@@ -2269,6 +2357,10 @@ SERDE_SERVICE(MetaSerde, 4) {
   META_SERVICE_METHOD(getUploadJob, 70, GetUploadJobReq, GetUploadJobRsp);
   META_SERVICE_METHOD(adminListUploadJobs, 71, AdminListUploadJobsReq, ListUploadJobsRsp);
   META_SERVICE_METHOD(adminMutateUploadJob, 72, AdminMutateUploadJobReq, AdminMutateUploadJobRsp);
+  META_SERVICE_METHOD(listExpiredOpenUploads, 73, ListExpiredOpenUploadsReq, ListExpiredOpenUploadsRsp);
+  META_SERVICE_METHOD(finalizeCancelledUpload, 74, FinalizeCancelledUploadReq, FinalizeCancelledUploadRsp);
+  META_SERVICE_METHOD(renewCachePinOwnerLease, 75, RenewCachePinOwnerLeaseReq, RenewCachePinOwnerLeaseRsp);
+  META_SERVICE_METHOD(recoverExpiredOpenUpload, 76, RecoverExpiredOpenUploadReq, RecoverExpiredWriteStagingRsp);
 
   META_SERVICE_METHOD(testRpc, 50, TestRpcReq, TestRpcRsp);
 

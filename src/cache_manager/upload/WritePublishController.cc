@@ -12,8 +12,10 @@
 
 namespace hf3fs::cache_manager {
 Result<Void> WritePublishControllerConfig::valid() const {
-  if (pageSize == 0 || pageSize > cache::kMaxPhase2BatchItems || globalConcurrency == 0 || perOwnerConcurrency == 0 ||
-      perOriginConcurrency == 0 || !cacheTableId || cacheBlockSize == 0 || cacheStripeSize == 0 ||
+  if (pageSize == 0 || pageSize > cache::kMaxPhase2BatchItems || globalConcurrency == 0 ||
+      globalConcurrency > cache::kMaxPhase2BatchItems || perOwnerConcurrency == 0 ||
+      perOwnerConcurrency > globalConcurrency || perOriginConcurrency == 0 || perOriginConcurrency > globalConcurrency ||
+      !cacheTableId || cacheBlockSize == 0 || cacheStripeSize == 0 ||
       publishedPrefetchPriority > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {
     return makeError(StatusCode::kInvalidConfig, "invalid write publish controller limits or layout");
   }
@@ -36,20 +38,64 @@ RealWritePublishControllerBackend::RealWritePublishControllerBackend(
       config_(config) {}
 
 CoTryTask<UploadJobPage> RealWritePublishControllerBackend::list(std::optional<cache::UploadJobId> after,
-                                                                 uint32_t limit) {
+                                                                 uint32_t limit,
+                                                                 bool includeTerminal) {
   if (stopping_.load(std::memory_order_acquire)) {
     co_return makeError(MetaCode::kRequestCanceled, "write publish controller stopped");
   }
   if (!metaClient_) co_return makeError(StatusCode::kInvalidConfig, "upload metadata client is missing");
   meta::ListUploadJobsReq request;
   request.service = service_;
-  request.includeTerminal = true;
+  request.includeTerminal = includeTerminal;
   request.after = after;
   request.limit = limit;
   request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
   auto response = co_await metaClient_->listUploadJobs(std::move(request));
   CO_RETURN_ON_ERROR(response);
   co_return UploadJobPage{std::move(response->jobs), response->more};
+}
+
+CoTryTask<UploadJobPage> RealWritePublishControllerBackend::listExpiredOpen(
+    std::optional<meta::UploadOpenLeaseCursor> after,
+    uint64_t expiresBeforeMs,
+    uint32_t limit) {
+  if (stopping_.load(std::memory_order_acquire)) {
+    co_return makeError(MetaCode::kRequestCanceled, "write publish controller stopped");
+  }
+  meta::ListExpiredOpenUploadsReq request;
+  request.service = service_;
+  request.expiresBeforeMs = expiresBeforeMs;
+  request.after = after;
+  request.limit = limit;
+  request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto response = co_await metaClient_->listExpiredOpenUploads(std::move(request));
+  CO_RETURN_ON_ERROR(response);
+  co_return UploadJobPage{std::move(response->jobs), response->more};
+}
+
+CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::recoverOpen(cache::UploadJobRecord job) {
+  meta::RecoverExpiredOpenUploadReq request;
+  request.service = service_;
+  request.jobId = job.jobId;
+  request.expectedStateVersion = job.stateVersion;
+  request.expectedWriterLeaseId = job.writerLeaseId;
+  request.expectedWriterLeaseExpiresAtMs = job.writerLeaseExpiresAtMs;
+  request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto response = co_await metaClient_->recoverExpiredOpenUpload(std::move(request));
+  CO_RETURN_ON_ERROR(response);
+  co_return std::move(response->job);
+}
+
+CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::finalizeCancelled(
+    cache::UploadJobRecord job) {
+  meta::FinalizeCancelledUploadReq request;
+  request.service = service_;
+  request.jobId = job.jobId;
+  request.expectedStateVersion = job.stateVersion;
+  request.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto response = co_await metaClient_->finalizeCancelledUpload(std::move(request));
+  CO_RETURN_ON_ERROR(response);
+  co_return std::move(response->job);
 }
 
 CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::upload(cache::UploadJobRecord job) {
@@ -165,7 +211,16 @@ CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::warm(cache:
   create.job = std::move(prefetch);
   create.cacheProtocolVersion = cache::kCachePhase3ProtocolVersion;
   CO_RETURN_ON_ERROR(co_await metaClient_->createPrefetchJob(std::move(create)));
-  co_return job;
+  meta::MutateMultipartUploadReq mark;
+  mark.service = service_;
+  mark.jobId = job.jobId;
+  mark.expectedStateVersion = job.stateVersion;
+  mark.multipartId = job.multipartId;
+  mark.mutation = meta::MultipartUploadMutation::MARK_PREFETCH_SUBMITTED;
+  mark.cacheProtocolVersion = cache::kCachePhase4ProtocolVersion;
+  auto marked = co_await metaClient_->mutateMultipartUpload(std::move(mark));
+  CO_RETURN_ON_ERROR(marked);
+  co_return std::move(marked->job);
 }
 
 CoTryTask<cache::UploadJobRecord> RealWritePublishControllerBackend::abort(cache::UploadJobRecord job) {
@@ -203,9 +258,36 @@ WritePublishController::WritePublishController(std::shared_ptr<WritePublishContr
 WritePublishController::~WritePublishController() { stop(); }
 
 bool WritePublishController::actionable(const cache::UploadJobRecord &job) {
-  return job.state == cache::UploadJobState::SEALED || job.state == cache::UploadJobState::UPLOADING ||
+  return job.state == cache::UploadJobState::OPEN || job.state == cache::UploadJobState::SEALED ||
+         job.state == cache::UploadJobState::UPLOADING ||
          job.state == cache::UploadJobState::COMPLETING || job.state == cache::UploadJobState::PUBLISHING ||
          job.state == cache::UploadJobState::ABORTING || job.state == cache::UploadJobState::PUBLISHED;
+}
+
+CoTryTask<std::vector<cache::UploadJobRecord>> WritePublishController::scanExpiredOpen() {
+  std::vector<cache::UploadJobRecord> jobs;
+  std::optional<meta::UploadOpenLeaseCursor> after;
+  auto nowUs = UtcClock::now().toMicroseconds();
+  if (nowUs <= 0) co_return makeError(StatusCode::kDataCorruption, "cache manager clock is invalid");
+  auto expiresBeforeMs = static_cast<uint64_t>(nowUs / 1000);
+  while (true) {
+    auto page = co_await backend_->listExpiredOpen(after, expiresBeforeMs, config_.pageSize);
+    CO_RETURN_ON_ERROR(page);
+    if (page->jobs.size() > config_.pageSize || (page->more && page->jobs.empty())) {
+      co_return makeError(CacheCode::kInvalidResponse, "invalid expired open upload page");
+    }
+    for (auto &job : page->jobs) {
+      CO_RETURN_ON_ERROR(job.valid());
+      if (job.state != cache::UploadJobState::OPEN || job.writerLeaseExpiresAtMs > expiresBeforeMs) {
+        co_return makeError(CacheCode::kInvalidResponse, "invalid expired open upload record");
+      }
+      jobs.push_back(std::move(job));
+    }
+    if (!page->more) break;
+    const auto &last = jobs.back();
+    after = meta::UploadOpenLeaseCursor{last.writerLeaseExpiresAtMs, last.jobId};
+  }
+  co_return jobs;
 }
 
 bool WritePublishController::terminal(cache::UploadJobState state) {
@@ -213,12 +295,14 @@ bool WritePublishController::terminal(cache::UploadJobState state) {
          state == cache::UploadJobState::CANCELLED;
 }
 
-CoTryTask<std::vector<cache::UploadJobRecord>> WritePublishController::scan() {
+CoTryTask<std::vector<cache::UploadJobRecord>> WritePublishController::scan(bool includeTerminal) {
   std::vector<cache::UploadJobRecord> jobs;
-  std::optional<cache::UploadJobId> after;
+  auto after = includeTerminal ? std::optional<cache::UploadJobId>{} : activeScanAfter_;
+  auto window = static_cast<size_t>(config_.pageSize) +
+                static_cast<size_t>(config_.globalConcurrency) * config_.globalConcurrency;
   while (true) {
     if (stopping_.load(std::memory_order_acquire)) co_return jobs;
-    auto page = co_await backend_->list(after, config_.pageSize);
+    auto page = co_await backend_->list(after, config_.pageSize, includeTerminal);
     CO_RETURN_ON_ERROR(page);
     if (page->jobs.size() > config_.pageSize || (page->more && page->jobs.empty())) {
       co_return makeError(CacheCode::kInvalidResponse, "invalid upload recovery page");
@@ -226,14 +310,45 @@ CoTryTask<std::vector<cache::UploadJobRecord>> WritePublishController::scan() {
     for (auto &job : page->jobs) {
       CO_RETURN_ON_ERROR(job.valid());
       jobs.push_back(std::move(job));
+      if (!includeTerminal && jobs.size() >= window) {
+        activeScanAfter_ = jobs.back().jobId;
+        co_return jobs;
+      }
     }
-    if (!page->more) break;
+    if (!page->more) {
+      if (!includeTerminal) activeScanAfter_.reset();
+      break;
+    }
     auto next = jobs.back().jobId;
     if (after && next == *after)
       co_return makeError(CacheCode::kInvalidResponse, "upload recovery page did not advance");
     after = next;
   }
   co_return jobs;
+}
+
+CoTryTask<void> WritePublishController::migrateActiveIndex() {
+  std::optional<cache::UploadJobId> after;
+  while (true) {
+    if (stopping_.load(std::memory_order_acquire)) co_return Void{};
+    auto page = co_await backend_->list(after, config_.pageSize, true);
+    CO_RETURN_ON_ERROR(page);
+    if (page->jobs.size() > config_.pageSize || (page->more && page->jobs.empty())) {
+      co_return makeError(CacheCode::kInvalidResponse, "invalid upload migration page");
+    }
+    auto next = page->jobs.empty() ? std::optional<cache::UploadJobId>{}
+                                   : std::optional<cache::UploadJobId>{page->jobs.back().jobId};
+    for (auto &job : page->jobs) {
+      if (job.state == cache::UploadJobState::CANCELLED) {
+        CO_RETURN_ON_ERROR(co_await backend_->finalizeCancelled(std::move(job)));
+      }
+    }
+    if (!page->more) co_return Void{};
+    if (!next || (after && *next == *after)) {
+      co_return makeError(CacheCode::kInvalidResponse, "upload migration page did not advance");
+    }
+    after = *next;
+  }
 }
 
 std::vector<cache::UploadJobRecord> WritePublishController::select(std::vector<cache::UploadJobRecord> jobs) {
@@ -282,6 +397,11 @@ CoTryTask<cache::UploadJobRecord> WritePublishController::advance(cache::UploadJ
   if (stopping_.load(std::memory_order_acquire)) {
     co_return makeError(MetaCode::kRequestCanceled, "write publish controller stopped");
   }
+  if (job.state == cache::UploadJobState::OPEN) {
+    auto recovered = co_await backend_->recoverOpen(std::move(job));
+    CO_RETURN_ON_ERROR(recovered);
+    job = std::move(*recovered);
+  }
   if (job.state == cache::UploadJobState::SEALED || job.state == cache::UploadJobState::UPLOADING) {
     auto uploaded = co_await backend_->upload(std::move(job));
     CO_RETURN_ON_ERROR(uploaded);
@@ -311,7 +431,7 @@ CoTryTask<cache::UploadJobRecord> WritePublishController::advance(cache::UploadJ
   co_return job;
 }
 
-CoTryTask<WritePublishRunResult> WritePublishController::runOnce() {
+CoTryTask<WritePublishRunResult> WritePublishController::run(bool includeTerminal) {
   CO_RETURN_ON_ERROR(config_.valid());
   if (!backend_) co_return makeError(StatusCode::kInvalidConfig, "write publish controller backend is missing");
   WritePublishRunResult result;
@@ -319,8 +439,14 @@ CoTryTask<WritePublishRunResult> WritePublishController::runOnce() {
     result.stopped = true;
     co_return result;
   }
-  auto scanned = co_await scan();
+  auto scanned = co_await scan(includeTerminal);
   CO_RETURN_ON_ERROR(scanned);
+  std::erase_if(*scanned, [](const auto &job) { return job.state == cache::UploadJobState::OPEN; });
+  auto expiredOpen = co_await scanExpiredOpen();
+  CO_RETURN_ON_ERROR(expiredOpen);
+  scanned->insert(scanned->end(),
+                  std::make_move_iterator(expiredOpen->begin()),
+                  std::make_move_iterator(expiredOpen->end()));
   result.scanned = static_cast<uint32_t>(scanned->size());
   auto selected = select(std::move(*scanned));
   result.scheduled = static_cast<uint32_t>(selected.size());
@@ -348,7 +474,14 @@ CoTryTask<WritePublishRunResult> WritePublishController::runOnce() {
   co_return result;
 }
 
-CoTryTask<WritePublishRunResult> WritePublishController::recover() { co_return co_await runOnce(); }
+CoTryTask<WritePublishRunResult> WritePublishController::runOnce() { co_return co_await run(false); }
+
+CoTryTask<WritePublishRunResult> WritePublishController::recover() {
+  CO_RETURN_ON_ERROR(config_.valid());
+  if (!backend_) co_return makeError(StatusCode::kInvalidConfig, "write publish controller backend is missing");
+  CO_RETURN_ON_ERROR(co_await migrateActiveIndex());
+  co_return co_await run(false);
+}
 
 void WritePublishController::stop() {
   if (!stopping_.exchange(true, std::memory_order_acq_rel) && backend_) backend_->stop();

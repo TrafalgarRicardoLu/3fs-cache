@@ -58,15 +58,15 @@ class ReconcileCacheBlocksOp : public ReadOnlyOperation<ReconcileCacheBlocksRsp>
   const ReconcileCacheBlocksReq &req_;
 };
 
-class ListReconcileCacheBlocksOp : public ReadOnlyOperation<ListReconcileCacheBlocksRsp> {
+class ListReconcileCacheBlocksOp : public Operation<ListReconcileCacheBlocksRsp> {
  public:
   ListReconcileCacheBlocksOp(MetaStore &meta, const ListReconcileCacheBlocksReq &req)
-      : ReadOnlyOperation<ListReconcileCacheBlocksRsp>(meta),
+      : Operation<ListReconcileCacheBlocksRsp>(meta),
         req_(req) {}
 
   OPERATION_TAGS(req_);
 
-  CoTryTask<ListReconcileCacheBlocksRsp> run(IReadOnlyTransaction &txn) override {
+  CoTryTask<ListReconcileCacheBlocksRsp> run(IReadWriteTransaction &txn) override {
     CHECK_REQUEST(req_);
     auto page = co_await CacheBlockStore::snapshotListReconcile(txn, req_.after, req_.limit);
     CO_RETURN_ON_ERROR(page);

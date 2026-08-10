@@ -29,9 +29,15 @@ class CacheBlockStore {
   static CoTryTask<CacheBlockPage> snapshotListRecoverable(kv::IReadOnlyTransaction &txn,
                                                            std::optional<cache::CacheBlockKey> after,
                                                            uint32_t limit);
-  static CoTryTask<CacheBlockPage> snapshotListReconcile(kv::IReadOnlyTransaction &txn,
+  static CoTryTask<CacheBlockPage> snapshotListReconcile(kv::IReadWriteTransaction &txn,
                                                          std::optional<cache::CacheBlockKey> after,
                                                          uint32_t limit);
+  static CoTryTask<CacheBlockPage> snapshotListState(kv::IReadOnlyTransaction &txn,
+                                                     cache::CacheBlockState state,
+                                                     std::optional<cache::CacheBlockKey> after,
+                                                     uint32_t limit,
+                                                     bool inclusive = false);
+  static CoTryTask<bool> snapshotStateIndexReady(kv::IReadOnlyTransaction &txn);
   static CoTryTask<std::vector<CacheBlockRecord>> snapshotListAll(kv::IReadOnlyTransaction &txn,
                                                                   std::optional<uint64_t> inode = std::nullopt);
   static CoTryTask<std::optional<CacheBlockRecord>> load(kv::IReadWriteTransaction &txn,

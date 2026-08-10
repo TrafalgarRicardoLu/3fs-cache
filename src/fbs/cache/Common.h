@@ -420,6 +420,22 @@ struct PinRecord {
   bool operator==(const PinRecord &) const = default;
 };
 
+struct PinOwnerLease {
+  SERDE_STRUCT_FIELD(owner, PinOwner{});
+  SERDE_STRUCT_FIELD(createdAtMs, uint64_t{});
+  SERDE_STRUCT_FIELD(expiresAtMs, uint64_t{});
+
+ public:
+  Result<Void> valid() const {
+    RETURN_ON_ERROR(owner.valid());
+    if (createdAtMs == 0 || expiresAtMs <= createdAtMs) {
+      return makeError(StatusCode::kInvalidArg, "invalid pin owner lease");
+    }
+    return Void{};
+  }
+  bool operator==(const PinOwnerLease &) const = default;
+};
+
 struct ByteRange {
   SERDE_STRUCT_FIELD(offset, uint64_t{});
   SERDE_STRUCT_FIELD(length, uint64_t{});

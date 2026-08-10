@@ -123,6 +123,33 @@ TEST_F(TestUploadJobStore, ListsWithStableCursorAndOwnerFilter) {
   }());
 }
 
+TEST_F(TestUploadJobStore, ListsExpiredOpenLeasesAndRemovesIndexOnSeal) {
+  folly::coro::blockingWait([&]() -> CoTask<void> {
+    auto early = openJob(21);
+    early.writerLeaseExpiresAtMs = 150;
+    auto late = openJob(22);
+    late.writerLeaseExpiresAtMs = 250;
+    auto txn = engine_.createReadWriteTransaction();
+    CO_ASSERT_OK(co_await UploadJobStore::create(*txn, late));
+    CO_ASSERT_OK(co_await UploadJobStore::create(*txn, early));
+    CO_ASSERT_OK(co_await txn->commit());
+
+    auto read = engine_.createReadonlyTransaction();
+    auto first = co_await UploadJobStore::snapshotListExpiredOpen(*read, 200, std::nullopt, 1);
+    CO_ASSERT_OK(first);
+    CO_ASSERT_EQ(first->jobs, std::vector<cache::UploadJobRecord>{early});
+    CO_ASSERT_FALSE(first->more);
+
+    txn = engine_.createReadWriteTransaction();
+    CO_ASSERT_OK(co_await UploadJobStore::update(*txn, early.stateVersion, seal(early)));
+    CO_ASSERT_OK(co_await txn->commit());
+    read = engine_.createReadonlyTransaction();
+    auto empty = co_await UploadJobStore::snapshotListExpiredOpen(*read, 200, std::nullopt, 1);
+    CO_ASSERT_OK(empty);
+    CO_ASSERT_TRUE(empty->jobs.empty());
+  }());
+}
+
 TEST_F(TestUploadJobStore, RejectsPartBoundsOversizedValuesAndProgressRollback) {
   folly::coro::blockingWait([&]() -> CoTask<void> {
     auto initial = openJob(3);
