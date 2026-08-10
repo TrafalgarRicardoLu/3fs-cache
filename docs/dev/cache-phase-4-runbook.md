@@ -18,13 +18,31 @@ output, archived status tables, or this runbook.
 The checked-in examples in `configs/cache_manager_main.toml`, `configs/meta_main.toml`, and
 `configs/hf3fs_fuse_main.toml` contain all Phase 4 fields with the feature gates off.
 
+## Online index migration
+
+The hardened Metadata binary introduces rebuildable Cache Block state indexes (`CBST`/`CMIG`), upload active/lease/state
+indexes (`UPAJ`/`UPOL`/`UPSJ`/`UPMG`), and owner-level pin leases (`PNOL`). Deploy Metadata before Cache Manager so no
+new worker depends on an index that the serving Metadata binary does not understand.
+
+Do not create migration markers or copy FDB keys manually. Before `CMIG` exists, the first repairing or dry-run
+reconcile pages through canonical `CBLK` records and backfills the state index transactionally. Upload startup recovery
+similarly pages through canonical `UPJB` records and writes `UPMG` after the final page. Mutations maintain canonical
+records and indexes in the same transaction, so interrupted migration is safely repeatable.
+
+Keep admission and FUSE write-through disabled until one complete startup recovery and `cache-reconcile dry-run` have
+succeeded. A missing marker means migration is incomplete, not corrupt; a present marker with a missing or mismatched
+index entry is data corruption and must fail closed. Preserve the canonical records and all index prefixes during
+rollback. Older binaries ignore the new prefixes, while a later hardened binary can resume or rebuild them.
+
 ## Upgrade and enable
 
-1. Deploy Storage inventory/schema support, then Metadata operations, then Cache Manager workers, and finally FUSE.
+1. Deploy Storage inventory/schema support, then the hardened Metadata operations, then Cache Manager workers, and
+   finally FUSE.
 2. Enable the Phase 2 and Phase 3 capabilities first. Confirm their rollout status is healthy.
 3. Enable Phase 4 in Metadata and Cache Manager configuration, but leave FUSE write routing disabled.
-4. Run `cache-reconcile dry-run --timeout-ms 300000`. Then run `cache-reconcile status`; require `HEALTHY`, zero
-   conflicts and retryable items, and `DryRun=true`. Investigate rather than suppressing unknown/newer generations.
+4. Allow startup upload recovery to finish, then run `cache-reconcile dry-run --timeout-ms 300000`. Run
+   `cache-reconcile status`; require `HEALTHY`, zero conflicts and retryable items, and `DryRun=true`. Investigate rather
+   than suppressing unknown/newer generations.
 5. Run `cache-phase4-rollout enable`. Only after that succeeds, enable FUSE `[write_through]` on a canary and perform a
    create, sequential write, `fsync`, close, reopen, and read verification.
 6. Expand the FUSE rollout while monitoring the metrics below and `cache-upload status --active-only --limit 100`.

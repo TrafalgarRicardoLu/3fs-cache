@@ -1,6 +1,6 @@
 # Cache Phase 4 acceptance
 
-Record date: 2026-08-08
+Record date: 2026-08-10
 
 ## Result
 
@@ -67,3 +67,39 @@ This record qualifies the repository-native and local real-MinIO paths. Producti
 runbook's dry-run reconcile, staged rollout, drain and rollback checks with its actual FoundationDB cluster, RDMA and
 io_uring devices, service identities, object-store credentials, and monitoring backend. External AWS S3 qualification
 is separate from the MinIO compatibility run and was not claimed here.
+
+## Post-acceptance recovery hardening
+
+Commit `6206384` closes the review findings discovered after T35 without changing the default-off rollout boundary. It
+adds durable Cache Block and Upload Job state indexes with restart-safe migration markers, an OPEN writer-lease index,
+service-authenticated expired-OPEN recovery, terminal staging cleanup, owner-level pin leases, immediate recovery when
+a LOADING permit is missing, global priority scheduling, and bounded upload/reconcile scans. Recovery policy remains
+physical-capacity based; the logical counters are query and audit data rather than an admission limit.
+
+The hardened wire contract appends Metadata RPC IDs 73 through 76. Existing user-authenticated
+`recoverExpiredWriteStaging` retains its original request layout and method ID; Cache Manager uses the separate
+service-authenticated `recoverExpiredOpenUpload` method so mixed-version deployments do not reinterpret an old payload.
+
+The 2026-08-10 qualification also found and fixed a migration-page boundary before release: a canonical `CBLK` range
+larger than the reconcile response page could otherwise publish `CMIG` before every fetched record had been indexed.
+Migration now indexes the complete fetched range before writing the completion marker, and the regression test uses a
+response limit smaller than the legacy range.
+
+The post-hardening matrix passed:
+
+| Area | Selection | Result |
+| --- | --- | ---: |
+| Cache common/origin/contracts/metrics | complete `test_cache` | 51/51 |
+| Cache Manager | complete `test_cache_manager` | 174/174 |
+| Metadata | complete `test_meta` using MemKV | 211 passed |
+| Metadata FoundationDB variants | complete `test_meta` | 94 skipped: `FDB_UNITTEST_CLUSTER` unavailable |
+| Storage service | `*Cache*:*Inventory*:*Retire*:*Staging*` | 40/40 |
+| Storage store | `*Cache*:*Inventory*:*Retire*:*LocalSafety*:*Staging*` | 18/18 |
+| Client/FUSE | `WriteStagingRoute.*:UploadJobWaiter.*:*Cache*` | 15/15 |
+| Management rollout | `*Cache*:*Phase4*:*Rollout*` | 15/15 |
+| Admin CLI | complete `test_admin_cli` | 9/9 |
+| Real MinIO | complete credentialed `test_cache_minio` | 4/4 |
+
+The MinIO rerun used the same pinned `RELEASE.2025-09-07T16-13-09Z` binary. Its official SHA-256 manifest verified,
+and the isolated server, process-scoped bucket, and temporary data directory were removed after the run. The 94 skipped
+FoundationDB variants remain deployment-environment qualification work and are not reported as passes.
